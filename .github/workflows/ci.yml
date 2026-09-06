@@ -17,40 +17,45 @@ concurrency:
 
 jobs:
   ci:
-    name: ${{ matrix.name }}
+    name: Check (${{ matrix.name }})
     strategy:
       fail-fast: false
       matrix:
         include:
-          - name: Ubuntu x64
+          - name: Linux x64
             os: ubuntu-latest
           - name: Windows x64
             os: windows-latest
-          - name: macOS Apple Silicon
+          - name: macOS arm64
             os: macos-15
-          - name: macOS Intel
+          - name: macOS x64
             os: macos-15-intel
     runs-on: ${{ matrix.os }}
     env:
       TAURI_CONFIG: '{"bundle":{"externalBin":[]}}'
     steps:
-      - uses: actions/checkout@v7
-      - uses: pnpm/action-setup@v6
-      - uses: actions/setup-node@v7
+      - name: Checkout
+        uses: actions/checkout@v7
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v6
+      - name: Set up Node
+        uses: actions/setup-node@v7
         with:
           node-version: 24
           cache: pnpm
-      - uses: astral-sh/setup-uv@v9.0.0
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v10.0.1
         with:
           enable-cache: true
           cache-dependency-glob: core/uv.lock
-      - uses: dtolnay/rust-toolchain@stable
+      - name: Set up Rust
+        uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
-          components: clippy,rustfmt
-      - uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: app/src-tauri -> target
-      - name: Install system dependencies
+          toolchain: stable
+          components: rustfmt,clippy
+          rustflags: ""
+          cache-workspaces: app/src-tauri -> target
+      - name: Install Linux dependencies
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
@@ -67,7 +72,7 @@ jobs:
         run: pnpm test
       - name: Build frontend
         run: pnpm build:frontend
-      - name: Package the core
+      - name: Package core
         run: pnpm build:core
       - name: Check release build
         working-directory: app/src-tauri

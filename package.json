@@ -3,7 +3,7 @@
   "private": true,
   "version": "0.0.0",
   "description": "Run your own organization of agents.",
-  "packageManager": "pnpm@11.16.0",
+  "packageManager": "pnpm@12.3.4",
   "type": "module",
   "scripts": {
     "build:app": "node scripts/run-app.mjs build",

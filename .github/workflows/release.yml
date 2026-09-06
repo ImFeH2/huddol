@@ -14,41 +14,51 @@ concurrency:
 
 jobs:
   ci:
-    name: CI
+    name: Run CI
     uses: ./.github/workflows/ci.yml
     permissions:
       contents: read
 
   build:
-    name: Build (${{ matrix.os }})
+    name: Build release (${{ matrix.name }})
     needs: ci
     permissions:
       contents: write
     strategy:
       fail-fast: false
       matrix:
-        os:
-          - ubuntu-latest
-          - windows-latest
-          - macos-15
-          - macos-15-intel
+        include:
+          - name: Linux x64
+            os: ubuntu-latest
+          - name: Windows x64
+            os: windows-latest
+          - name: macOS arm64
+            os: macos-15
+          - name: macOS x64
+            os: macos-15-intel
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v7
-      - uses: pnpm/action-setup@v6
-      - uses: actions/setup-node@v7
+      - name: Checkout
+        uses: actions/checkout@v7
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v6
+      - name: Set up Node
+        uses: actions/setup-node@v7
         with:
           node-version: 24
           cache: pnpm
-      - uses: astral-sh/setup-uv@v9.0.0
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v10.0.1
         with:
           enable-cache: true
           cache-dependency-glob: core/uv.lock
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
+      - name: Set up Rust
+        uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
-          workspaces: app/src-tauri -> target
-      - name: Install system dependencies
+          toolchain: stable
+          rustflags: ""
+          cache-workspaces: app/src-tauri -> target
+      - name: Install Linux dependencies
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
@@ -59,7 +69,7 @@ jobs:
           LEFTHOOK: 0
       - name: Install Python dependencies
         run: uv sync --project core --all-groups --frozen
-      - name: Build release
+      - name: Build and upload release
         uses: tauri-apps/tauri-action@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -71,7 +81,7 @@ jobs:
           prerelease: ${{ contains(github.ref_name, '-') }}
 
   publish:
-    name: Publish
+    name: Publish release
     needs: build
     permissions:
       contents: write
