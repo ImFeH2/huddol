@@ -1,4 +1,4 @@
-import { AlertTriangle, Plus, Trash2 } from "lucide-react";
+import { AlertTriangle } from "lucide-react";
 import { useCallback, useEffect, useId, useState } from "react";
 import {
   Page,
@@ -9,8 +9,6 @@ import {
 import { Banner, Button, Chip, Field, Input } from "../../components/ui/index";
 import { backend } from "../../lib/backend";
 import "./settings.css";
-
-type Unusable = { path: string; reason: string };
 
 function useSaver(load: () => Promise<void>) {
   const [status, setStatus] = useState<string | null>(null);
@@ -216,141 +214,6 @@ export function ModelPage() {
               </div>
             </fieldset>
           </form>
-        </Section>
-      </PageBody>
-    </Page>
-  );
-}
-
-export function ExecutionPage() {
-  const pathId = useId();
-  const [directories, setDirectories] = useState<string[]>([]);
-  const [unusable, setUnusable] = useState<Unusable[]>([]);
-  const [draft, setDraft] = useState("");
-
-  const load = useCallback(async () => {
-    const values = await backend.settings("execution");
-    setDirectories((values.write_directories as string[]) ?? []);
-  }, []);
-
-  useEffect(() => {
-    void load();
-  }, [load]);
-
-  useEffect(() => {
-    return backend.onEvent((event) => {
-      if (event.type !== "ready") return;
-      setUnusable((event.unusable_write_directories as Unusable[]) ?? []);
-    });
-  }, []);
-
-  const { status, failed, save, dismiss } = useSaver(load);
-
-  return (
-    <Page>
-      <PageHeader
-        title="Execution"
-        lede="Agents can read anything you can read. Writing is confined to the directories listed here, enforced by the operating system rather than by the Agent's own restraint."
-      />
-      <PageBody>
-        {status ? (
-          <Banner
-            tone={failed ? "danger" : "success"}
-            icon={failed ? <AlertTriangle size={16} /> : undefined}
-            onDismiss={dismiss}
-          >
-            {status}
-          </Banner>
-        ) : null}
-        {unusable.length > 0 ? (
-          <Banner tone="warning" icon={<AlertTriangle size={16} />}>
-            These directories could not be used when Huddol started. They stay
-            configured so you can fix or remove them.
-            <ul className="unusable-list">
-              {unusable.map((item) => (
-                <li key={item.path}>
-                  <span className="directory-path">{item.path}</span>
-                  <Chip tone="warning">{item.reason}</Chip>
-                </li>
-              ))}
-            </ul>
-          </Banner>
-        ) : null}
-        <Section
-          title="Writable directories"
-          description="A change takes effect for the very next command an Agent runs."
-        >
-          <div className="settings-form">
-            {directories.length === 0 ? (
-              <p className="muted">
-                None configured. Agents can read, but every write will be
-                refused.
-              </p>
-            ) : (
-              <ul className="directory-list">
-                {directories.map((path) => {
-                  const problem = unusable.find((item) => item.path === path);
-                  return (
-                    <li
-                      className="directory"
-                      key={path}
-                      data-unusable={problem !== undefined}
-                    >
-                      <span className="directory-path">{path}</span>
-                      {problem ? (
-                        <Chip tone="warning">{problem.reason}</Chip>
-                      ) : null}
-                      <Button
-                        variant="danger"
-                        onClick={() =>
-                          save("execution", {
-                            write_directories: directories.filter(
-                              (item) => item !== path,
-                            ),
-                          })
-                        }
-                      >
-                        <Trash2 size={15} />
-                        Remove
-                      </Button>
-                    </li>
-                  );
-                })}
-              </ul>
-            )}
-            <Field
-              label="Add a directory"
-              htmlFor={pathId}
-              hint="Absolute path. It may not exist yet."
-            >
-              <div className="add-directory">
-                <Input
-                  id={pathId}
-                  value={draft}
-                  placeholder="/home/you/work"
-                  onChange={(event) => setDraft(event.target.value)}
-                  onKeyDown={(event) => {
-                    if (event.key !== "Enter" || !draft.trim()) return;
-                    void save("execution", {
-                      write_directories: [...directories, draft.trim()],
-                    }).then(() => setDraft(""));
-                  }}
-                />
-                <Button
-                  disabled={!draft.trim()}
-                  onClick={async () => {
-                    await save("execution", {
-                      write_directories: [...directories, draft.trim()],
-                    });
-                    setDraft("");
-                  }}
-                >
-                  <Plus size={16} />
-                  Add
-                </Button>
-              </div>
-            </Field>
-          </div>
         </Section>
       </PageBody>
     </Page>

@@ -4,10 +4,7 @@ import os
 import sys
 from io import TextIOWrapper
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, cast
-
-if TYPE_CHECKING:
-    from huddol.ports.sandbox import Sandbox
+from typing import cast
 
 DATA_DIRECTORY_ENV = "HUDDOL_DATA_DIR"
 
@@ -19,26 +16,20 @@ def data_directory() -> Path:
     return Path.home() / ".huddol"
 
 
-def _build_sandbox(agent_store: Any, root: Path) -> Sandbox:
-    from huddol.adapters.sandbox.native import NativeSandbox
-
-    return NativeSandbox(root, agent_store.write_directories(), tolerant=True)
-
-
 def main(argv: list[str] | None = None) -> int:
     args = list(sys.argv[1:] if argv is None else argv)
 
-    if args and args[0] == "--windows-write-sandbox":
-        from huddol.adapters.sandbox.windows import run_restricted_command
+    if args:
+        from huddol.adapters.execution.worker import auxiliary_main
 
-        separator = args.index("--")
-        return run_restricted_command(args[1], args[separator + 1 :], os.getcwd())
+        return auxiliary_main(args)
 
     cast(TextIOWrapper, sys.stdin).reconfigure(encoding="utf-8", errors="strict")
     cast(TextIOWrapper, sys.stdout).reconfigure(
         encoding="utf-8", errors="strict", newline="\n"
     )
 
+    from huddol.adapters.execution.manager import ExecutionManager
     from huddol.adapters.files.tree import MarkdownTree
     from huddol.adapters.jsonl.api import HUMAN_ID, Api
     from huddol.adapters.jsonl.protocol import Dispatcher, JsonLineWriter, serve
@@ -62,13 +53,18 @@ def main(argv: list[str] | None = None) -> int:
         if member.is_agent and member.state == "running":
             store.set_agent_state(member.id, "idle")
 
-    sandbox = _build_sandbox(agent_store, workspace)
+    execution = ExecutionManager(
+        workspace,
+        agent_store.write_directories(),
+        environment=(agent_store.get_settings("execution") or {}).get("environment"),
+        tolerant=True,
+    )
     deps = Dependencies(
         store=store,
         todos=agent_store,
         history=agent_store,
         settings=agent_store,
-        sandbox=sandbox,
+        execution=execution,
         library_tree=MarkdownTree(directory / "library"),
         memory_tree_for=lambda member_id: MarkdownTree(
             directory / "agents" / str(member_id) / "memory"
@@ -108,19 +104,22 @@ def main(argv: list[str] | None = None) -> int:
 
     scheduler.start()
 
+    execution_status = execution.status()
     dispatcher.emit(
         "ready",
         {
-            "working_directory": sandbox.root,
+            "working_directory": execution_status["working_directory"],
             "data_directory": str(directory),
             "human_id": HUMAN_ID,
             "model_configured": config is not None,
             "tracing_enabled": bool(
                 ObservabilityConfig.restore(agent_store.get_settings("observability"))
             ),
-            "write_directories": list(sandbox.write_directories),
-            "unusable_write_directories": [
-                {"path": path, "reason": reason} for path, reason in sandbox.skipped
+            "write_directories": list(execution.snapshot().write_directories)
+            if execution_status["error"] is None
+            else [],
+            "unusable_write_directories": execution_status[
+                "unusable_write_directories"
             ],
             "methods": list(dispatcher.methods()),
         },

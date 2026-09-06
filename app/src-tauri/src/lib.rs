@@ -1,13 +1,11 @@
-mod backend;
 mod bridge_diagnostics;
 mod huddol;
 mod single_instance;
+mod startup;
 
-use backend::BackendSettings;
 use huddol::HuddolProcess;
 use serde_json::Value;
 use single_instance::{ActivationState, activate_main_window};
-use std::sync::Arc;
 use tauri::{Manager, ipc::Channel};
 
 fn validate_frontend_message(message: &Value) -> Result<(), String> {
@@ -35,25 +33,6 @@ fn subscribe(
     huddol.subscribe(channel)
 }
 
-#[tauri::command]
-async fn backend_status(settings: tauri::State<'_, Arc<BackendSettings>>) -> Result<Value, String> {
-    let settings = Arc::clone(&settings);
-    tauri::async_runtime::spawn_blocking(move || settings.status())
-        .await
-        .map_err(|error| error.to_string())
-}
-
-#[tauri::command]
-async fn set_backend(
-    settings: tauri::State<'_, Arc<BackendSettings>>,
-    target: Value,
-) -> Result<Value, String> {
-    let settings = Arc::clone(&settings);
-    tauri::async_runtime::spawn_blocking(move || settings.save(&target))
-        .await
-        .map_err(|error| error.to_string())?
-}
-
 pub fn run() {
     let builder = tauri::Builder::default()
         .manage(ActivationState::default())
@@ -63,22 +42,11 @@ pub fn run() {
     let app = builder
         .plugin(tauri_plugin_shell::init())
         .manage(HuddolProcess::default())
-        .invoke_handler(tauri::generate_handler![
-            send,
-            subscribe,
-            backend_status,
-            set_backend
-        ])
+        .invoke_handler(tauri::generate_handler![send, subscribe])
         .setup(|app| {
-            app.manage(Arc::new(BackendSettings::new(
-                app.path().app_config_dir()?.join("backend.json"),
-            )));
             if let Err(error) = app.state::<HuddolProcess>().start(app.handle()) {
-                *app.state::<Arc<BackendSettings>>()
-                    .startup_error
-                    .lock()
-                    .map_err(|_| std::io::Error::other("Backend configuration lock poisoned"))? =
-                    Some(error.to_string());
+                app.state::<HuddolProcess>()
+                    .set_startup_error(error.to_string());
             }
 
             // Create the window hidden so the first show can preserve the existing foreground

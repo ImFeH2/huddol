@@ -242,10 +242,7 @@ class Api:
                     if key not in ("secret_key", "public_key")
                 } | {"keys_set": bool(values.get("secret_key"))}
             if section == "execution":
-                return {
-                    **{key: value for key, value in values.items() if key != "backend"},
-                    "write_directories": list(settings.write_directories()),
-                }
+                return self._scheduler.execution.status()
             return values
 
         def settings_update(params: dict[str, Any]) -> Any:
@@ -259,17 +256,11 @@ class Api:
                         "Compaction threshold must be a positive integer in bytes",
                     )
             if section == "execution":
-                if "backend" in values:
-                    raise DomainError(
-                        "app_setting",
-                        "Choose the backend in App settings; changes apply after restart",
-                    )
-                directories = values.pop("write_directories", None)
-                if directories is not None:
-                    self._scheduler.reconfigure_sandbox(list(directories))
-                    settings.set_write_directories(
-                        list(self._scheduler.sandbox.write_directories)
-                    )
+                result = self._scheduler.execution.configure(
+                    values, settings.set_execution_settings
+                )
+                self._dispatcher.emit("settings.updated", {"section": section})
+                return result
             merged = {**(settings.get_settings(section) or {}), **values}
             settings.set_settings(section, merged)
             self._dispatcher.emit("settings.updated", {"section": section})

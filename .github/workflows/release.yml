@@ -59,11 +59,6 @@ jobs:
           LEFTHOOK: 0
       - name: Install Python dependencies
         run: uv sync --project core --all-groups --frozen
-      - uses: actions/download-artifact@v5
-        if: runner.os == 'Windows'
-        with:
-          name: wsl-core
-          path: artifacts
       - name: Build release
         uses: tauri-apps/tauri-action@v1
         env:

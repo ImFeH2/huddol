@@ -16,33 +16,8 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  wsl_core:
-    name: Linux backend component
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-node@v7
-        with:
-          node-version: 24
-      - uses: astral-sh/setup-uv@v9.0.0
-        with:
-          enable-cache: true
-          cache-dependency-glob: core/uv.lock
-      - name: Install sandbox
-        run: sudo apt-get update && sudo apt-get install -y bubblewrap
-      - name: Install Python dependencies
-        run: uv sync --project core --all-groups --frozen
-      - name: Build Linux backend
-        run: node scripts/build-core.mjs
-      - uses: actions/upload-artifact@v4
-        with:
-          name: wsl-core
-          path: artifacts/wsl-core.tar
-          if-no-files-found: error
-
   ci:
     name: ${{ matrix.name }}
-    needs: wsl_core
     strategy:
       fail-fast: false
       matrix:
@@ -92,11 +67,6 @@ jobs:
         run: pnpm test
       - name: Build frontend
         run: pnpm build:frontend
-      - uses: actions/download-artifact@v5
-        if: runner.os == 'Windows'
-        with:
-          name: wsl-core
-          path: artifacts
       - name: Package the core
         run: pnpm build:core
       - name: Check release build

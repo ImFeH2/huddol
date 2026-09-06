@@ -6,13 +6,13 @@ from pathlib import Path, PurePosixPath
 
 import pytest
 
+from huddol.adapters.execution.local import LocalExecution
 from huddol.adapters.sandbox.commands import (
     linux_command,
     macos_command,
     macos_profile,
     windows_command,
 )
-from huddol.adapters.sandbox.native import NativeSandbox
 from huddol.adapters.sandbox.paths import bind_order, is_within, normalize_directories
 from huddol.core.errors import DomainError
 
@@ -58,7 +58,7 @@ def test_linux_command_carries_the_required_isolation_flags() -> None:
         bwrap="/usr/bin/bwrap",
     )
     assert command[:1] == ["/usr/bin/bwrap"]
-    for flag in ("--new-session", "--die-with-parent", "--unshare-user"):
+    for flag in ("--die-with-parent", "--unshare-user"):
         assert flag in command
     assert command[command.index("--ro-bind") + 1 : command.index("--ro-bind") + 3] == [
         "/",
@@ -85,8 +85,11 @@ def test_macos_command_passes_roots_as_parameters(tmp_path: Path) -> None:
     assert command[-2:] == ["--", "ls"]
 
 
-def test_windows_command_reenters_this_program() -> None:
-    command = windows_command("S-1-5-21-1-2-3", ["cmd", "/c", "echo"])
+def test_windows_command_reenters_the_execution_component() -> None:
+    command = windows_command(
+        "S-1-5-21-1-2-3", ["cmd", "/c", "echo"], [sys.executable, "-I", "execution.pyz"]
+    )
+    assert command[:3] == [sys.executable, "-I", "execution.pyz"]
     assert "--windows-write-sandbox" in command
     assert command[command.index("--windows-write-sandbox") + 1] == "S-1-5-21-1-2-3"
     assert command[-3:] == ["--", "cmd", "/c"] or command[-4:] == [
@@ -100,7 +103,7 @@ def test_windows_command_reenters_this_program() -> None:
 def test_edit_replaces_once_and_reports_a_diff(tmp_path: Path) -> None:
     target = tmp_path / "file.txt"
     target.write_text("alpha\nbeta\n", encoding="utf-8")
-    sandbox = NativeSandbox(tmp_path, [str(tmp_path)], enforce=False)
+    sandbox = LocalExecution(tmp_path, [str(tmp_path)], enforce=False)
     result = sandbox.edit(str(target), "beta", "gamma")
     assert target.read_text(encoding="utf-8") == "alpha\ngamma\n"
     assert result.replacements == 1
@@ -110,7 +113,7 @@ def test_edit_replaces_once_and_reports_a_diff(tmp_path: Path) -> None:
 def test_edit_refuses_ambiguous_matches_unless_replace_all(tmp_path: Path) -> None:
     target = tmp_path / "file.txt"
     target.write_text("x\nx\n", encoding="utf-8")
-    sandbox = NativeSandbox(tmp_path, [str(tmp_path)], enforce=False)
+    sandbox = LocalExecution(tmp_path, [str(tmp_path)], enforce=False)
     with pytest.raises(DomainError) as error:
         sandbox.edit(str(target), "x", "y")
     assert error.value.code == "ambiguous_match"
@@ -122,7 +125,7 @@ def test_edit_rejects_paths_outside_the_writable_roots(tmp_path: Path) -> None:
     allowed.mkdir()
     outside = tmp_path / "outside.txt"
     outside.write_text("secret", encoding="utf-8")
-    sandbox = NativeSandbox(tmp_path, [str(allowed)])
+    sandbox = LocalExecution(tmp_path, [str(allowed)])
     with pytest.raises(DomainError) as error:
         sandbox.edit(str(outside), "secret", "leaked")
     assert error.value.code == "not_writable"
@@ -132,19 +135,19 @@ def test_edit_rejects_paths_outside_the_writable_roots(tmp_path: Path) -> None:
 def test_edit_leaves_no_temporary_files(tmp_path: Path) -> None:
     target = tmp_path / "file.txt"
     target.write_text("a", encoding="utf-8")
-    sandbox = NativeSandbox(tmp_path, [str(tmp_path)], enforce=False)
+    sandbox = LocalExecution(tmp_path, [str(tmp_path)], enforce=False)
     sandbox.edit(str(target), "a", "b")
     assert list(tmp_path.glob("*.huddol-tmp")) == []
 
 
 def test_run_rejects_malformed_argv(tmp_path: Path) -> None:
-    sandbox = NativeSandbox(tmp_path, enforce=False)
+    sandbox = LocalExecution(tmp_path, enforce=False)
     with pytest.raises(DomainError):
         sandbox.run([])
 
 
 def test_describe_environment_names_the_writable_roots(tmp_path: Path) -> None:
-    sandbox = NativeSandbox(tmp_path, [str(tmp_path)], enforce=False)
+    sandbox = LocalExecution(tmp_path, [str(tmp_path)], enforce=False)
     description = sandbox.describe_environment()
     assert str(tmp_path.resolve()) in description
     assert "read any path" in description
@@ -153,7 +156,7 @@ def test_describe_environment_names_the_writable_roots(tmp_path: Path) -> None:
 
 @LINUX_ONLY
 def test_unsandboxed_run_executes_and_captures_output(tmp_path: Path) -> None:
-    sandbox = NativeSandbox(tmp_path, enforce=False)
+    sandbox = LocalExecution(tmp_path, enforce=False)
     result = sandbox.run(["echo", "hello"])
     assert result.exit_code == 0
     assert result.stdout.strip() == "hello"
@@ -170,7 +173,7 @@ def test_sandboxed_run_allows_writes_inside_and_blocks_them_outside(
     protected.mkdir()
     (protected / "keep.txt").write_text("original", encoding="utf-8")
 
-    sandbox = NativeSandbox(tmp_path, [str(writable)])
+    sandbox = LocalExecution(tmp_path, [str(writable)])
 
     inside = sandbox.run(["sh", "-c", f"echo ok > {writable}/probe.txt"])
     assert inside.exit_code == 0
@@ -205,14 +208,14 @@ def test_tolerant_mode_keeps_the_usable_directories(tmp_path: Path) -> None:
 
 
 def test_a_sandbox_with_unusable_configuration_still_constructs(tmp_path: Path) -> None:
-    sandbox = NativeSandbox(tmp_path, ["not-absolute"], enforce=False, tolerant=True)
+    sandbox = LocalExecution(tmp_path, ["not-absolute"], enforce=False, tolerant=True)
     assert sandbox.write_directories == ()
     assert sandbox.skipped == (("not-absolute", "invalid_directory"),)
 
 
 def test_strict_mode_still_rejects_bad_input(tmp_path: Path) -> None:
     with pytest.raises(DomainError):
-        NativeSandbox(tmp_path, ["not-absolute"], enforce=False)
+        LocalExecution(tmp_path, ["not-absolute"], enforce=False)
 
 
 def test_linux_command_renders_posix_paths_on_every_host() -> None:

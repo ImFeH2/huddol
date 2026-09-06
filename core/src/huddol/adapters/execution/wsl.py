@@ -1,0 +1,262 @@
+from __future__ import annotations
+
+import json
+import os
+import subprocess
+import threading
+from collections.abc import Sequence
+from pathlib import Path
+from typing import IO, Any
+
+from huddol.adapters.execution.bundle import component
+from huddol.adapters.execution.worker import result_value
+from huddol.core.errors import DomainError
+from huddol.ports.execution import EditResult, RunResult
+
+
+def wsl_output(arguments: Sequence[str]) -> bytes:
+    if os.name != "nt":
+        raise DomainError("wsl_unavailable", "WSL execution requires Windows")
+    try:
+        result = subprocess.run(
+            ["wsl.exe", *arguments],
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            timeout=10,
+            creationflags=0x08000000,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired) as error:
+        raise DomainError(
+            "wsl_unavailable", "WSL is unavailable or did not respond"
+        ) from error
+    if result.returncode:
+        raise DomainError("wsl_unavailable", "WSL command failed")
+    return result.stdout
+
+
+def distributions() -> list[str]:
+    output = wsl_output(["--list", "--quiet"])
+    try:
+        text = output.decode("utf-16-le" if b"\0" in output else "utf-8")
+    except UnicodeError as error:
+        raise DomainError(
+            "wsl_unavailable", "Cannot read WSL distribution names"
+        ) from error
+    return [
+        line.strip().lstrip("\ufeff")
+        for line in text.splitlines()
+        if line.strip().lstrip("\ufeff")
+    ]
+
+
+class WslConnection:
+    def __init__(
+        self,
+        distribution: str,
+        root: Path,
+        directories: Sequence[str],
+        *,
+        tolerant: bool = False,
+    ) -> None:
+        self.distribution = distribution
+        self._host_root = str(root)
+        self._root = ""
+        self._roots = tuple(directories)
+        self._configured_directories = tuple(directories)
+        self.skipped: tuple[tuple[str, str], ...] = ()
+        self._description = ""
+        self._tolerant = tolerant
+        self._worker: list[str] | None = None
+        self._lock = threading.Lock()
+        self._processes: dict[subprocess.Popen[bytes], IO[bytes]] = {}
+        self._sending: set[subprocess.Popen[bytes]] = set()
+        self._closed = False
+
+    def _command(self) -> list[str]:
+        with self._lock:
+            if self._worker is not None:
+                return self._worker
+        archive = component()
+        if not archive.is_file():
+            raise DomainError("execution_unavailable", "Execution component is missing")
+        translated = (
+            wsl_output(
+                ["-d", self.distribution, "--exec", "wslpath", "-u", str(archive)]
+            )
+            .decode("utf-8")
+            .strip()
+        )
+        if not translated.startswith("/"):
+            raise DomainError(
+                "execution_unavailable",
+                "Cannot locate the execution component in WSL",
+            )
+        worker = [
+            "wsl.exe",
+            "-d",
+            self.distribution,
+            "--exec",
+            "python3",
+            "-I",
+            translated,
+        ]
+        with self._lock:
+            self._worker = worker
+        return worker
+
+    def _request(
+        self,
+        operation: str,
+        params: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        command = self._command()
+        payload = {
+            "operation": operation,
+            "root": self._host_root,
+            "directories": list(
+                self._configured_directories if operation == "inspect" else self._roots
+            ),
+            "tolerant": self._tolerant if operation == "inspect" else False,
+            "params": params or {},
+        }
+        timeout = (params or {}).get("timeout")
+        deadline = (
+            20
+            if operation == "inspect"
+            else (timeout + 15 if type(timeout) is int and timeout > 0 else 135)
+        )
+        pipe = None
+        process = None
+        sender: threading.Thread | None = None
+        write_errors: list[Exception] = []
+        try:
+            with self._lock:
+                if self._closed:
+                    raise DomainError(
+                        "execution_closed", "Execution environment is closed"
+                    )
+                process = subprocess.Popen(
+                    command,
+                    stdin=subprocess.PIPE,
+                    bufsize=0,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    creationflags=0x08000000 if os.name == "nt" else 0,
+                )
+                pipe = process.stdin
+                assert pipe is not None
+                process.stdin = None
+                self._processes[process] = pipe
+                self._sending.add(process)
+            encoded = json.dumps(payload, ensure_ascii=False).encode("utf-8") + b"\n"
+
+            def send() -> None:
+                assert pipe is not None
+                try:
+                    offset = 0
+                    while offset < len(encoded):
+                        written = pipe.write(encoded[offset:])
+                        if not written:
+                            raise BrokenPipeError("Execution input was closed")
+                        offset += written
+                except (OSError, ValueError) as error:
+                    write_errors.append(error)
+                finally:
+                    with self._lock:
+                        self._sending.discard(process)
+
+            sender = threading.Thread(target=send, daemon=True)
+            sender.start()
+            output, _ = process.communicate(timeout=deadline)
+            if write_errors:
+                raise DomainError(
+                    "execution_unavailable", "The WSL execution connection failed"
+                ) from write_errors[0]
+            if process.returncode:
+                raise DomainError(
+                    "execution_unavailable",
+                    "WSL execution failed. Python 3.10 or newer and bubblewrap are required.",
+                )
+            return result_value(output)
+        except subprocess.TimeoutExpired as error:
+            raise DomainError(
+                "execution_timeout", "The WSL execution connection did not respond"
+            ) from error
+        except OSError as error:
+            raise DomainError(
+                "execution_unavailable", "The WSL execution connection failed"
+            ) from error
+        finally:
+            if process is not None and sender is not None and sender.is_alive():
+                process.kill()
+                sender.join(timeout=5)
+            if pipe is not None:
+                pipe.close()
+            if process is not None:
+                try:
+                    process.communicate(timeout=5)
+                except subprocess.TimeoutExpired:
+                    process.kill()
+                    process.communicate()
+                if sender is not None:
+                    sender.join(timeout=5)
+                with self._lock:
+                    self._processes.pop(process, None)
+
+    def inspect(self) -> None:
+        info = self._request("inspect")
+        self._root = info["root"]
+        self._roots = tuple(info["write_directories"])
+        self.skipped = tuple(tuple(item) for item in info["skipped"])
+        self._description = info["description"]
+
+    @property
+    def root(self) -> str:
+        return self._root
+
+    @property
+    def write_directories(self) -> tuple[str, ...]:
+        return self._roots
+
+    def apply_configuration(self, candidate: WslConnection) -> None:
+        self._root = candidate._root
+        self._roots = candidate._roots
+        self._configured_directories = candidate._configured_directories
+        self.skipped = candidate.skipped
+        self._description = candidate._description
+        self._tolerant = candidate._tolerant
+
+    def describe_environment(self) -> str:
+        self.inspect()
+        return f"Execution environment: WSL ({self.distribution}).\n{self._description}"
+
+    def run(
+        self, argv: Sequence[str], *, cwd: str | None = None, timeout: int | None = None
+    ) -> RunResult:
+        return RunResult(
+            **self._request("run", {"argv": list(argv), "cwd": cwd, "timeout": timeout})
+        )
+
+    def edit(
+        self, path: str, old_text: str, new_text: str, *, replace_all: bool = False
+    ) -> EditResult:
+        return EditResult(
+            **self._request(
+                "edit",
+                {
+                    "path": path,
+                    "old_text": old_text,
+                    "new_text": new_text,
+                    "replace_all": replace_all,
+                },
+            )
+        )
+
+    def close(self) -> None:
+        with self._lock:
+            self._closed = True
+            for process, pipe in self._processes.items():
+                if process in self._sending and process.poll() is None:
+                    process.kill()
+                pipe.close()

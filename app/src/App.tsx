@@ -20,6 +20,9 @@ import {
   Nav,
   NavItem,
   NavSection,
+  Page,
+  PageBody,
+  PageHeader,
   Shell,
   Sidebar,
   SidebarFooter,
@@ -32,12 +35,8 @@ import { DocumentPage } from "./features/library/document";
 import { LibraryPage } from "./features/library/list";
 import { MemberPage } from "./features/members/detail";
 import { MembersPage } from "./features/members/list";
-import { BackendPage } from "./features/settings/backend";
-import {
-  ExecutionPage,
-  LimitsPage,
-  ModelPage,
-} from "./features/settings/index";
+import { ExecutionPage } from "./features/settings/execution";
+import { LimitsPage, ModelPage } from "./features/settings/index";
 import { LangfusePage } from "./features/settings/langfuse";
 import { type BackendError, backend, type Member } from "./lib/backend";
 import { plural } from "./lib/format";
@@ -71,8 +70,6 @@ function View({ route, tokenLimit }: { route: Route; tokenLimit: number }) {
       return <LimitsPage />;
     case "langfuse":
       return <LangfusePage />;
-    case "backend":
-      return <BackendPage />;
   }
 }
 
@@ -137,12 +134,6 @@ function Chrome({
               />
             </NavSection>
             <NavSection label="Settings">
-              <NavItem
-                icon={<Server size={16} />}
-                label="Backend"
-                active={active === "backend"}
-                onSelect={() => navigate({ name: "backend" })}
-              />
               <NavItem
                 icon={<Server size={16} />}
                 label="Model"
@@ -232,7 +223,15 @@ export default function App() {
     });
   }, [refresh]);
 
-  if (failure && !loaded) return <BackendPage startupError={failure} />;
+  if (failure && !loaded)
+    return (
+      <Page>
+        <PageHeader title="Unable to start Huddol" />
+        <PageBody>
+          <Banner tone="danger">{failure}</Banner>
+        </PageBody>
+      </Page>
+    );
 
   if (!loaded) {
     return (

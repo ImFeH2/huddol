@@ -9,8 +9,8 @@ from huddol.core.discussion import Discussion, validate_body, validate_topic
 from huddol.core.errors import DomainError
 from huddol.core.member import validate_name
 from huddol.ports.agent import HistoryStore, SettingsStore, TodoStore
+from huddol.ports.execution import ExecutionControl, ExecutionEnvironment
 from huddol.ports.files import ConflictError, FileTree
-from huddol.ports.sandbox import Sandbox
 from huddol.ports.store import OrganizationStore
 from huddol.services.history import History
 from huddol.services.library import Library
@@ -25,7 +25,7 @@ class Dependencies:
     todos: TodoStore
     history: HistoryStore
     settings: SettingsStore
-    sandbox: Sandbox
+    execution: ExecutionControl
     library_tree: FileTree
     memory_tree_for: Any
 
@@ -45,8 +45,12 @@ class AgentTools:
         turn: TurnBinding | None = None,
         *,
         on_change: Callable[[str, dict[str, Any]], None] | None = None,
+        environment: ExecutionEnvironment | None = None,
     ) -> None:
         self._deps = deps
+        self._environment = (
+            environment if environment is not None else deps.execution.snapshot()
+        )
         self._actor = actor
         self._auth = authorizer or Authorizer()
         self._turn = turn
@@ -419,7 +423,7 @@ class AgentTools:
         timeout: int | None = None,
     ) -> dict[str, Any]:
         self._check("run")
-        result = self._deps.sandbox.run(list(argv), cwd=cwd, timeout=timeout)
+        result = self._environment.run(list(argv), cwd=cwd, timeout=timeout)
         self._record("run", f"{' '.join(argv)} exited {result.exit_code}")
         return {
             "exit_code": result.exit_code,
@@ -436,7 +440,7 @@ class AgentTools:
         replace_all: bool = False,
     ) -> dict[str, Any]:
         self._check("edit", path)
-        result = self._deps.sandbox.edit(
+        result = self._environment.edit(
             path, old_text, new_text, replace_all=replace_all
         )
         self._record("edit", f"{result.path} ({result.replacements} replaced)")

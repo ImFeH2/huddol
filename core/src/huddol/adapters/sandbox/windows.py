@@ -244,7 +244,9 @@ def _updated_acl(
     return new_acl
 
 
-def _change_ace(path: Path, sid: ctypes.c_void_p, mode: int) -> None:
+def _change_ace(
+    path: Path, sid: ctypes.c_void_p, mode: int, permissions: int = MODIFY_ACCESS
+) -> None:
     old_acl = ctypes.c_void_p()
     descriptor = ctypes.c_void_p()
     new_acl = ctypes.c_void_p()
@@ -265,7 +267,7 @@ def _change_ace(path: Path, sid: ctypes.c_void_p, mode: int) -> None:
             old_acl,
             sid,
             mode,
-            MODIFY_ACCESS,
+            permissions,
             SUB_CONTAINERS_AND_OBJECTS_INHERIT,
         )
         _raise_if_error(
@@ -284,6 +286,14 @@ def _change_ace(path: Path, sid: ctypes.c_void_p, mode: int) -> None:
             _kernel.LocalFree(new_acl)
         if descriptor:
             _kernel.LocalFree(descriptor)
+
+
+def allow_component_read(path: Path) -> None:
+    sid = _sid_pointer("S-1-1-0")
+    try:
+        _change_ace(path, sid, SET_ACCESS, 0x120089 | 0x1200A0)
+    finally:
+        _kernel.LocalFree(sid)
 
 
 def _change_user_object_ace(

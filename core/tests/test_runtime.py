@@ -5,8 +5,8 @@ from pathlib import Path
 
 import pytest
 
+from huddol.adapters.execution.manager import ExecutionManager
 from huddol.adapters.files.tree import MarkdownTree
-from huddol.adapters.sandbox.native import NativeSandbox
 from huddol.adapters.sqlite.agent import SqliteAgentStore
 from huddol.adapters.sqlite.store import SqliteStore
 from huddol.runtime.reminder import TurnOutcome, TurnRequest, build_reminder
@@ -42,7 +42,7 @@ def world(tmp_path: Path):
         todos=agent_store,
         history=agent_store,
         settings=agent_store,
-        sandbox=NativeSandbox(tmp_path, [str(tmp_path)], enforce=False),
+        execution=ExecutionManager(tmp_path, [str(tmp_path)], enforce=False),
         library_tree=MarkdownTree(tmp_path / "library"),
         memory_tree_for=lambda member_id: MarkdownTree(
             tmp_path / "agents" / str(member_id) / "memory"
@@ -56,6 +56,32 @@ def mention(deps: Dependencies, body: str = "@Main please help") -> int:
     room = deps.store.create_discussion("work", [HUMAN, MAIN])
     deps.store.append_message(room.id, HUMAN, body)
     return room.id
+
+
+def test_unavailable_execution_does_not_disable_business_tools(
+    world, tmp_path: Path
+) -> None:
+    from huddol.core.errors import DomainError
+
+    room = mention(world)
+    world.execution.close()
+    world.execution = ExecutionManager(tmp_path, environment={"kind": "invalid"})
+
+    def respond(request, tools):
+        assert "Commands and file editing are unavailable" in request.runtime_context
+        assert tools.list_members()
+        tools.send_message(room, "Business tools still work")
+        with pytest.raises(DomainError):
+            tools.run(["must-not-run"])
+        return TurnOutcome(messages_json="[]")
+
+    scheduler = Scheduler(world, RecordingRunner(respond))
+    try:
+        result = scheduler.run_turn(MAIN)
+        assert result is not None and result.status == "completed"
+        assert world.store.messages(room)[-1].body == "Business tools still work"
+    finally:
+        scheduler.stop()
 
 
 def test_reminder_never_contains_the_message_body(world) -> None:

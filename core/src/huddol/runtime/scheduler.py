@@ -3,11 +3,11 @@ from __future__ import annotations
 import logging
 import threading
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from huddol.core.errors import DomainError
 from huddol.ports.agent import HistoryStore, SettingsStore, TodoStore
-from huddol.ports.sandbox import Sandbox
+from huddol.ports.execution import ExecutionControl, ExecutionEnvironment
 from huddol.ports.store import OrganizationStore
 from huddol.runtime.reminder import (
     ModelRunner,
@@ -104,6 +104,7 @@ class Scheduler:
             loop.join(timeout=5)
         with self._lock:
             running = list(self._threads.values())
+        self._deps.execution.close()
         for thread in running:
             if thread.ident is None:
                 continue
@@ -144,23 +145,40 @@ class Scheduler:
         return self.tools_for_actor(Actor(agent_id, member.is_agent))
 
     def tools_for_actor(
-        self, actor: Actor, turn: TurnBinding | None = None
+        self,
+        actor: Actor,
+        turn: TurnBinding | None = None,
+        *,
+        environment: ExecutionEnvironment | None = None,
     ) -> AgentTools:
         return AgentTools(
-            self._deps, actor, self._authorizer, turn, on_change=self._changed
+            self._deps,
+            actor,
+            self._authorizer,
+            turn,
+            on_change=self._changed,
+            environment=environment,
         )
 
     @property
-    def sandbox(self) -> Sandbox:
-        return self._deps.sandbox
-
-    def reconfigure_sandbox(self, write_directories: list[str]) -> None:
-        self._deps.sandbox.configure(write_directories)
+    def execution(self) -> ExecutionControl:
+        return self._deps.execution
 
     def runtime_context(
-        self, agent_id: int, discussion_ids: tuple[int, ...] = ()
+        self,
+        agent_id: int,
+        discussion_ids: tuple[int, ...] = (),
+        *,
+        environment: ExecutionEnvironment | None = None,
     ) -> str:
-        parts = [self._deps.sandbox.describe_environment()]
+        selected = (
+            environment if environment is not None else self._deps.execution.snapshot()
+        )
+        try:
+            description = selected.describe_environment()
+        except DomainError as error:
+            description = f"Commands and file editing are unavailable: {error}. Business tools remain available."
+        parts = [description]
         nudge = exchange_nudge(self.store, agent_id, discussion_ids)
         if nudge:
             parts.append(nudge)
@@ -182,6 +200,7 @@ class Scheduler:
         return self._execute(reminder)
 
     def _execute(self, reminder: Reminder) -> TurnRecord:
+        environment = self._deps.execution.snapshot()
         agent_id = reminder.agent_id
         self.store.set_agent_state(agent_id, "running")
         run = self.history.start_run(
@@ -199,17 +218,25 @@ class Scheduler:
         request = TurnRequest(
             reminder=reminder,
             history_json=self.history.latest_messages(agent_id),
-            runtime_context=self.runtime_context(
-                agent_id, tuple(item.discussion_id for item in reminder.items)
-            ),
+            runtime_context="",
         )
         status = "completed"
         error: str | None = None
         try:
+            request = replace(
+                request,
+                runtime_context=self.runtime_context(
+                    agent_id,
+                    tuple(item.discussion_id for item in reminder.items),
+                    environment=environment,
+                ),
+            )
             outcome = self._runner.run(
                 request,
                 self.tools_for_actor(
-                    Actor(agent_id, True), TurnBinding(agent_id, run.sequence)
+                    Actor(agent_id, True),
+                    TurnBinding(agent_id, run.sequence),
+                    environment=environment,
                 ),
             )
             if outcome.error:

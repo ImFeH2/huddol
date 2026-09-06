@@ -19,6 +19,7 @@ export function Choices({
   return (
     <RadioGroup.Root
       className="choice-list"
+      name={id}
       aria-label={label}
       value={value}
       onValueChange={onChange}

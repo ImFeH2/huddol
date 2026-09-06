@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
-from typing import Protocol
+from typing import Any, Protocol
 
 
 @dataclass(frozen=True)
@@ -20,16 +20,15 @@ class EditResult:
     replacements: int
 
 
-class Sandbox(Protocol):
-    skipped: tuple[tuple[str, str], ...]
+class ExecutionEnvironment(Protocol):
+    @property
+    def skipped(self) -> tuple[tuple[str, str], ...]: ...
 
     @property
     def root(self) -> str: ...
 
     @property
     def write_directories(self) -> tuple[str, ...]: ...
-
-    def configure(self, write_directories: Sequence[str]) -> None: ...
 
     def describe_environment(self) -> str: ...
 
@@ -40,3 +39,15 @@ class Sandbox(Protocol):
     def edit(
         self, path: str, old_text: str, new_text: str, *, replace_all: bool = False
     ) -> EditResult: ...
+
+
+class ExecutionControl(Protocol):
+    def snapshot(self) -> ExecutionEnvironment: ...
+
+    def status(self) -> dict[str, Any]: ...
+
+    def configure(
+        self, values: dict[str, Any], persist: Callable[[dict[str, object]], None]
+    ) -> dict[str, Any]: ...
+
+    def close(self) -> None: ...

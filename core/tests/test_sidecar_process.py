@@ -855,7 +855,66 @@ def test_observability_settings_preserve_keys_across_restarts(tmp_path: Path) ->
         store.close()
 
 
-def test_backend_selection_is_not_a_business_setting(tmp_path: Path) -> None:
+def test_unknown_mode_does_not_initialize_business_data(tmp_path: Path) -> None:
+    directory = tmp_path / "must-not-exist"
+    completed = subprocess.run(
+        [sys.executable, "-m", "huddol", "--unknown-mode"],
+        cwd=tmp_path,
+        env={
+            **os.environ,
+            "HUDDOL_DATA_DIR": str(directory),
+            "PYTHONPATH": str(Path(__file__).resolve().parents[1] / "src"),
+        },
+        capture_output=True,
+        timeout=10,
+        check=False,
+    )
+    assert completed.returncode != 0
+    assert not directory.exists()
+
+
+def test_invalid_execution_configuration_keeps_the_original_organization_available(
+    tmp_path: Path,
+) -> None:
+    from huddol.adapters.sqlite.agent import SqliteAgentStore
+    from huddol.adapters.sqlite.store import SqliteStore
+
+    data = tmp_path / "data"
+    store = SqliteStore(data / "huddol.sqlite3")
+    store.create_member("human", "Existing organization")
+    SqliteAgentStore(store._db).set_settings(
+        "execution", {"environment": {"kind": "invalid"}}
+    )
+    store.close()
+    frames, code, stderr = drive(
+        data,
+        [
+            {"id": 1, "method": "organization.get"},
+            {"id": 2, "method": "settings.get", "params": {"section": "execution"}},
+            {
+                "id": 3,
+                "method": "settings.update",
+                "params": {
+                    "section": "execution",
+                    "values": {
+                        "environment": {"kind": "native"},
+                        "write_directories": [],
+                    },
+                },
+            },
+        ],
+    )
+    assert code == 0, stderr
+    assert (
+        response(frames, 1)["result"]["members"][0]["name"] == "Existing organization"
+    )
+    assert response(frames, 2)["result"]["error"]
+    assert response(frames, 3)["result"]["error"] is None
+
+
+def test_legacy_backend_field_does_not_select_the_execution_environment(
+    tmp_path: Path,
+) -> None:
     from huddol.adapters.sqlite.agent import SqliteAgentStore
     from huddol.adapters.sqlite.store import SqliteStore
 
@@ -883,7 +942,7 @@ def test_backend_selection_is_not_a_business_setting(tmp_path: Path) -> None:
     assert code == 0, stderr
     assert events(frames, "ready")[0]["working_directory"] == str(data / "workspace")
     assert "backend" not in response(frames, 1)["result"]
-    assert response(frames, 2)["error"]["code"] == "app_setting"
+    assert response(frames, 2)["error"]["code"] == "invalid_setting"
     store = SqliteStore(data / "huddol.sqlite3")
     try:
         assert SqliteAgentStore(store._db).get_settings("execution") == {

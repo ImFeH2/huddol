@@ -1,30 +1,4 @@
-import type { AppBackend, BackendStatus, BackendTarget } from "./app-backend";
 import type { Backend, BackendEvent, Member } from "./backend";
-
-export function createAppBackendMock(Base: typeof AppBackend): AppBackend {
-  let configured: BackendTarget = { kind: "native" };
-  return new (class extends Base {
-    override async status(): Promise<BackendStatus> {
-      return {
-        platform: "windows",
-        active: { kind: "native" },
-        configured,
-        restart_required: configured.kind !== "native",
-        error: null,
-        distributions: ["Debian"],
-        probe_error: null,
-      };
-    }
-
-    override async save(target: BackendTarget): Promise<BackendStatus> {
-      if (target.kind === "wsl" && target.distribution !== "Debian") {
-        throw new Error("WSL distribution is unavailable");
-      }
-      configured = target;
-      return this.status();
-    }
-  })();
-}
 
 type MockMessage = {
   id: number;
@@ -245,7 +219,13 @@ const settings: Record<string, Record<string, unknown>> = {
     api_key_set: true,
   },
   execution: {
+    environment: { kind: "native" },
     write_directories: ["/home/you/work", "/home/you/scratch"],
+    distributions: [],
+    error: null,
+    probe_error: null,
+    warning: null,
+    unusable_write_directories: [],
   },
   limits: { agent_token_limit: 200_000 },
 };
@@ -783,10 +763,13 @@ export function createMockBackend(Base: typeof Backend): Backend {
         case "settings.update": {
           const section = String(params.section);
           const values = params.values as Record<string, unknown>;
-          if (section === "execution" && "backend" in values) {
-            throw new Error(
-              "Choose the backend in App settings; changes apply after restart",
-            );
+          if (
+            section === "execution" &&
+            Object.keys(values).some(
+              (key) => !["environment", "write_directories"].includes(key),
+            )
+          ) {
+            throw new Error("Unknown execution setting");
           }
           if (
             section === "model" &&

@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import shutil
-import sys
 from collections.abc import Sequence
 from pathlib import Path, PurePath
 
@@ -34,7 +33,6 @@ def linux_command(
 ) -> list[str]:
     command = [
         bwrap or bubblewrap_executable(),
-        "--new-session",
         "--die-with-parent",
         "--ro-bind",
         "/",
@@ -85,10 +83,7 @@ def macos_command(argv: Sequence[str], write_directories: Sequence[Path]) -> lis
     return [SANDBOX_EXEC, "-p", macos_profile(len(roots)), *parameters, "--", *argv]
 
 
-def windows_command(sid: str, argv: Sequence[str]) -> list[str]:
-    prefix = (
-        [sys.executable]
-        if getattr(sys, "frozen", False)
-        else [sys.executable, "-m", "huddol"]
-    )
-    return [*prefix, "--windows-write-sandbox", sid, "--", *argv]
+def windows_command(
+    sid: str, argv: Sequence[str], entrypoint: Sequence[str]
+) -> list[str]:
+    return [*entrypoint, "--windows-write-sandbox", sid, "--", *argv]

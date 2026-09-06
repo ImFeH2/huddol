@@ -144,11 +144,13 @@ export class Backend {
           this.#rejectConnection = null;
           resolve();
         },
-        () =>
+        (error: unknown) =>
           this.#disconnect(
             new BackendError(
               "connection_failed",
-              "Could not connect to Huddol. Restart Huddol.",
+              typeof error === "string"
+                ? error
+                : "Could not connect to Huddol. Restart Huddol.",
               true,
             ),
           ),

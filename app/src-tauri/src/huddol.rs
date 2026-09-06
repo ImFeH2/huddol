@@ -7,8 +7,8 @@ use std::{
     time::{Duration, Instant},
 };
 
-use crate::backend::{BackendSettings, launcher};
 use crate::bridge_diagnostics::{BridgeDiagnostics, os_error_code};
+use crate::startup::{check_legacy_configuration, launcher};
 use anyhow::{Context, Result};
 use serde_json::{Value, json};
 use tauri::{AppHandle, Manager, ipc::Channel};
@@ -63,6 +63,7 @@ impl BridgeCounters {
 }
 
 pub struct HuddolProcess {
+    startup_error: Mutex<Option<String>>,
     child: SharedChild,
     subscriber: SharedSubscriber,
     diagnostics: SharedDiagnostics,
@@ -72,6 +73,7 @@ pub struct HuddolProcess {
 impl Default for HuddolProcess {
     fn default() -> Self {
         Self {
+            startup_error: Mutex::new(None),
             child: Arc::new(Mutex::new(None)),
             subscriber: Arc::new(Mutex::new(None)),
             diagnostics: Arc::new(BridgeDiagnostics::default()),
@@ -88,19 +90,10 @@ impl HuddolProcess {
             json!({"development": tauri::is_dev()}),
         );
         let shell = app.shell();
-        let settings = app.state::<Arc<BackendSettings>>();
-        let target = settings
-            .active
-            .as_ref()
-            .map_err(|error| anyhow::anyhow!(error.clone()))?;
+        check_legacy_configuration(&app.path().app_config_dir()?.join("backend.json"))
+            .map_err(anyhow::Error::msg)?;
         let project = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../core");
-        let plan = launcher(
-            target,
-            tauri::is_dev(),
-            &project,
-            &app.path().resource_dir()?,
-        )
-        .map_err(anyhow::Error::msg)?;
+        let plan = launcher(tauri::is_dev(), &project, &app.path().resource_dir()?);
         let executable_kind = plan.kind;
         let command = shell.command(plan.program).args(plan.args);
         let command = command.env_clear().envs(std::env::vars_os());
@@ -347,6 +340,12 @@ impl HuddolProcess {
         }
     }
 
+    pub fn set_startup_error(&self, error: String) {
+        if let Ok(mut failure) = self.startup_error.lock() {
+            *failure = Some(error);
+        }
+    }
+
     pub fn subscribe(&self, channel: Channel<Value>) -> Result<(), String> {
         let child = self.child.lock().map_err(|_| {
             self.diagnostics.record(
@@ -362,7 +361,12 @@ impl HuddolProcess {
                 "bridge.subscription.failed",
                 json!({"reason": "not_running"}),
             );
-            return Err("Huddol is not running".to_string());
+            return Err(self
+                .startup_error
+                .lock()
+                .ok()
+                .and_then(|failure| failure.clone())
+                .unwrap_or_else(|| "Huddol is not running".to_string()));
         }
         *self.subscriber.lock().map_err(|_| {
             self.diagnostics.record(

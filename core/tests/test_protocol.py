@@ -7,11 +7,11 @@ from typing import Any
 
 import pytest
 
+from huddol.adapters.execution.manager import ExecutionManager
 from huddol.adapters.files.tree import MarkdownTree
 from huddol.adapters.jsonl.api import HUMAN_ID, Api
 from huddol.adapters.jsonl.protocol import Dispatcher, JsonLineWriter, parse, serve
 from huddol.adapters.model.unavailable import UnavailableRunner
-from huddol.adapters.sandbox.native import NativeSandbox
 from huddol.adapters.sqlite.agent import SqliteAgentStore
 from huddol.adapters.sqlite.store import SqliteStore
 from huddol.runtime.scheduler import Scheduler
@@ -33,7 +33,7 @@ def server(tmp_path: Path):
         todos=agent_store,
         history=agent_store,
         settings=agent_store,
-        sandbox=NativeSandbox(tmp_path, [str(tmp_path)], enforce=False),
+        execution=ExecutionManager(tmp_path, [str(tmp_path)], enforce=False),
         library_tree=MarkdownTree(tmp_path / "library"),
         memory_tree_for=lambda member_id: MarkdownTree(
             tmp_path / "agents" / str(member_id) / "memory"
@@ -248,7 +248,7 @@ def test_execution_settings_update_the_live_sandbox(server, tmp_path: Path) -> N
         section="execution",
         values={"write_directories": [str(target)]},
     )
-    assert deps.sandbox.write_directories == (str(target.resolve()),)
+    assert deps.execution.snapshot().write_directories == (str(target.resolve()),)
 
 
 def test_agent_detail_reports_todos_and_runs(server) -> None:
@@ -336,7 +336,7 @@ def test_rejected_write_directories_are_not_persisted(server, tmp_path: Path) ->
 
     result = call(dispatcher, output, "settings.get", section="execution")["result"]
     assert result["write_directories"] == [str(good.resolve())]
-    assert deps.sandbox.write_directories == (str(good.resolve()),)
+    assert deps.execution.snapshot().write_directories == (str(good.resolve()),)
 
 
 def test_accepted_write_directories_are_stored_canonically(
