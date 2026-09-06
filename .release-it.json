@@ -17,7 +17,7 @@
     "publish": false
   },
   "hooks": {
-    "before:init": "pnpm verify",
+    "before:init": ["pnpm check", "pnpm test"],
     "after:bump": ["uv lock --project core", "node scripts/cargo.mjs check"]
   },
   "plugins": {
