@@ -21,7 +21,6 @@ export type ExecutionSettings = {
   distributions: string[];
   error: string | null;
   probe_error: string | null;
-  warning: string | null;
   unusable_write_directories: { path: string; reason: string }[];
 };
 
@@ -129,7 +128,6 @@ export function ExecutionForm({
       {info.probe_error ? (
         <Banner tone="warning">{info.probe_error}</Banner>
       ) : null}
-      {info.warning ? <Banner tone="warning">{info.warning}</Banner> : null}
       {saved ? (
         <Banner tone="success">
           Saved. Environment changes apply to new Turns.

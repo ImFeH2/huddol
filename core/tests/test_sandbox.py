@@ -146,12 +146,19 @@ def test_run_rejects_malformed_argv(tmp_path: Path) -> None:
         sandbox.run([])
 
 
-def test_describe_environment_names_the_writable_roots(tmp_path: Path) -> None:
-    sandbox = LocalExecution(tmp_path, [str(tmp_path)], enforce=False)
-    description = sandbox.describe_environment()
-    assert str(tmp_path.resolve()) in description
-    assert "read any path" in description
-    assert "absolute form" in description
+@pytest.mark.parametrize("writable", [False, True])
+def test_describe_environment_names_the_writable_roots(
+    tmp_path: Path, writable: bool
+) -> None:
+    directories = [str(tmp_path)] if writable else []
+    sandbox = LocalExecution(tmp_path, directories, enforce=False)
+    listing = f"- {tmp_path.resolve()}" if writable else "- none"
+    assert sandbox.describe_environment() == (
+        f"Commands and file editing run on {sys.platform}. Always give paths in absolute form. "
+        f"Relative paths resolve against {tmp_path.resolve()}, which is not a project directory and is not writable.\n"
+        "You can read any path the host user can read.\n"
+        f"Configured writable directories:\n{listing}"
+    )
 
 
 @LINUX_ONLY

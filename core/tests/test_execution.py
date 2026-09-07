@@ -44,6 +44,10 @@ def test_worker_reuses_linux_run_edit_and_sandbox_without_business_services(
     try:
         connection.inspect()
         assert connection.root == str(tmp_path)
+        expected = LocalExecution(tmp_path, [str(allowed)]).describe_environment()
+        assert connection.describe_environment() == (
+            f"Execution environment: WSL (test).\n{expected}"
+        )
         path = allowed / "中文 😀.txt"
         result = connection.run(
             [
@@ -324,17 +328,28 @@ def test_reconfiguration_reuses_the_same_execution_instance(tmp_path: Path) -> N
         manager.close()
 
 
-@pytest.mark.skipif(not sys.platform.startswith("linux"), reason="Linux environment")
-def test_native_wsl_reports_the_same_interop_limitation(
-    tmp_path: Path, monkeypatch
-) -> None:
-    from huddol.adapters.execution.local import WSL_WARNING
-
-    monkeypatch.setattr("platform.release", lambda: "6.18-microsoft-standard-WSL2")
-    manager = ExecutionManager(tmp_path, enforce=False)
+def test_execution_status_reports_configuration_and_diagnostics(tmp_path: Path) -> None:
+    manager = ExecutionManager(
+        tmp_path, [str(tmp_path), "relative/bad"], enforce=False, tolerant=True
+    )
     try:
-        assert manager.status()["warning"] == WSL_WARNING
-        assert WSL_WARNING in manager.snapshot().describe_environment()
+        status = manager.status()
+        assert set(status) == {
+            "environment",
+            "write_directories",
+            "working_directory",
+            "unusable_write_directories",
+            "error",
+            "distributions",
+            "probe_error",
+        }
+        assert status["environment"] == {"kind": "native"}
+        assert status["working_directory"] == str(tmp_path.resolve())
+        assert status["write_directories"] == [str(tmp_path), "relative/bad"]
+        assert status["unusable_write_directories"] == [
+            {"path": "relative/bad", "reason": "invalid_directory"}
+        ]
+        assert status["error"] is None
     finally:
         manager.close()
 

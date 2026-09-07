@@ -12,7 +12,6 @@ const initial: ExecutionSettings = {
   distributions: ["Debian"],
   error: null,
   probe_error: null,
-  warning: null,
   unusable_write_directories: [],
 };
 
@@ -48,14 +47,18 @@ describe("Execution settings", () => {
       environment: { kind: "wsl", distribution: "Missing" },
       distributions: [],
       error: "WSL is unavailable",
-      warning:
-        "Windows programs launched through WSL are not restricted by the Linux filesystem sandbox.",
+      probe_error: "WSL command failed",
+      unusable_write_directories: [
+        { path: "/missing", reason: "invalid_directory" },
+      ],
     };
     const html = renderToStaticMarkup(
       <ExecutionForm initial={failed} onSave={async () => failed} />,
     );
     expect(html).toContain("WSL · Missing");
     expect(html).toContain("WSL is unavailable");
-    expect(html).toContain("not restricted");
+    expect(html).toContain("WSL command failed");
+    expect(html).toContain("/missing");
+    expect(html).toContain("invalid_directory");
   });
 });

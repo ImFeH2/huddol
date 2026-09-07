@@ -6,7 +6,7 @@ from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import Any
 
-from huddol.adapters.execution.local import WSL_WARNING, LocalExecution, local_warning
+from huddol.adapters.execution.local import LocalExecution
 from huddol.adapters.execution.wsl import WslConnection, distributions
 from huddol.core.errors import DomainError
 from huddol.ports.execution import EditResult, ExecutionEnvironment, RunResult
@@ -144,7 +144,6 @@ class ExecutionManager:
                 probe_error = str(error)
         with self._lock:
             selected = self._environments.get(self._key(self._target))
-            warning = WSL_WARNING if self._target["kind"] == "wsl" else local_warning()
             return {
                 "environment": self._target,
                 "write_directories": list(self._directories),
@@ -158,7 +157,6 @@ class ExecutionManager:
                 "error": self._error,
                 "distributions": names,
                 "probe_error": probe_error,
-                "warning": warning,
             }
 
     def configure(

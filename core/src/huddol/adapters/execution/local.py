@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 import os
-import platform
 import signal
 import subprocess
 import sys
@@ -27,18 +26,6 @@ from huddol.ports.execution import EditResult, RunResult
 
 MAX_OUTPUT = 200_000
 DEFAULT_TIMEOUT = 120
-WINDOWS_WARNING = (
-    "Locations writable by Everyone remain writable in the Windows sandbox."
-)
-WSL_WARNING = "Windows programs launched through WSL are not restricted by the Linux filesystem sandbox."
-
-
-def local_warning() -> str | None:
-    if os.name == "nt":
-        return WINDOWS_WARNING
-    if sys.platform.startswith("linux") and "microsoft" in platform.release().lower():
-        return WSL_WARNING
-    return None
 
 
 def entrypoint() -> list[str]:
@@ -109,8 +96,8 @@ class LocalExecution:
             f"Commands and file editing run on {sys.platform}. Always give paths in absolute form. "
             f"Relative paths resolve against {self._root}, which is not a project directory and is not writable.\n"
             "You can read any path the host user can read.\n"
-            f"You can only write inside the configured directories, subject to platform sandbox limitations:\n{listing}"
-        ) + (f"\n{local_warning()}" if local_warning() else "")
+            f"Configured writable directories:\n{listing}"
+        )
 
     def _wrap(self, argv: Sequence[str], cwd: Path) -> list[str]:
         if not self._enforce:

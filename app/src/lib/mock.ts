@@ -224,7 +224,6 @@ const settings: Record<string, Record<string, unknown>> = {
     distributions: [],
     error: null,
     probe_error: null,
-    warning: null,
     unusable_write_directories: [],
   },
   limits: { agent_token_limit: 200_000 },
