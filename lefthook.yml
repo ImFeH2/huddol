@@ -6,6 +6,8 @@ commit-msg:
 pre-commit:
   parallel: true
   jobs:
+    - name: config
+      run: pnpm check:config
     - name: web
       run: pnpm check:web && pnpm test:web
     - name: core
