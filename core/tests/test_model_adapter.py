@@ -13,13 +13,19 @@ def test_config_needs_model_key_and_url() -> None:
     assert ModelConfig.restore({"model": "m", "base_url": "u"}) is None
 
 
-def test_config_defaults_to_openai_and_reads_legacy_context_window() -> None:
+@pytest.mark.parametrize(
+    ("values", "expected"),
+    [({}, DEFAULT_COMPACTION), ({"compaction_threshold": 128000}, 128000)],
+)
+def test_config_defaults_to_openai_and_reads_compaction_threshold(
+    values: dict[str, object], expected: int
+) -> None:
     config = ModelConfig.restore(
-        {"model": "m", "api_key": "k", "base_url": "u", "context_window": 128000}
+        {"model": "m", "api_key": "k", "base_url": "u", **values}
     )
     assert config is not None
     assert config.api_type == "openai"
-    assert config.compaction_threshold == 128000
+    assert config.compaction_threshold == expected
 
 
 def test_config_rejects_unknown_api_types() -> None:

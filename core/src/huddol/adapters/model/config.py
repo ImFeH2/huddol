@@ -9,7 +9,7 @@ DEFAULT_COMPACTION = 400_000
 
 
 def compaction_threshold(values: dict[str, Any]) -> int:
-    threshold = values.get("compaction_threshold") or values.get("context_window")
+    threshold = values.get("compaction_threshold")
     return int(threshold) if threshold else DEFAULT_COMPACTION
 
 

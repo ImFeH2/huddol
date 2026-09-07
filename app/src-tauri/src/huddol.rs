@@ -8,7 +8,7 @@ use std::{
 };
 
 use crate::bridge_diagnostics::{BridgeDiagnostics, os_error_code};
-use crate::startup::{check_legacy_configuration, launcher};
+use crate::startup::launcher;
 use anyhow::{Context, Result};
 use serde_json::{Value, json};
 use tauri::{AppHandle, Manager, ipc::Channel};
@@ -90,8 +90,6 @@ impl HuddolProcess {
             json!({"development": tauri::is_dev()}),
         );
         let shell = app.shell();
-        check_legacy_configuration(&app.path().app_config_dir()?.join("backend.json"))
-            .map_err(anyhow::Error::msg)?;
         let project = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../core");
         let plan = launcher(tauri::is_dev(), &project, &app.path().resource_dir()?);
         let executable_kind = plan.kind;

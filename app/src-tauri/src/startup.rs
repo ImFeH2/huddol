@@ -1,24 +1,4 @@
-use std::{
-    fs,
-    path::{Path, PathBuf},
-};
-
-pub fn check_legacy_configuration(path: &Path) -> Result<(), String> {
-    let bytes = match fs::read(path) {
-        Ok(bytes) => bytes,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
-        Err(_) => return Err("Cannot read legacy App configuration".to_owned()),
-    };
-    let value: serde_json::Value = serde_json::from_slice(&bytes)
-        .map_err(|_| "Cannot read legacy App configuration".to_owned())?;
-    if value.get("kind").and_then(serde_json::Value::as_str) != Some("native") {
-        return Err(format!(
-            "Legacy backend selection requires attention. Remove {} to use this system's data. Existing WSL data will not be moved.",
-            path.display()
-        ));
-    }
-    Ok(())
-}
+use std::path::{Path, PathBuf};
 
 pub struct Launcher {
     pub program: PathBuf,
@@ -67,21 +47,5 @@ mod tests {
         let bundled = launcher(false, project, resources);
         assert!(bundled.program.starts_with(resources.join("core")));
         assert!(bundled.args.is_empty());
-    }
-
-    #[test]
-    fn does_not_silently_replace_legacy_wsl_data() {
-        let directory = std::env::temp_dir().join(format!("huddol-startup-{}", std::process::id()));
-        fs::create_dir(&directory).unwrap();
-        let path = directory.join("backend.json");
-        fs::write(&path, r#"{"kind":"wsl","distribution":"Debian"}"#).unwrap();
-        assert!(
-            check_legacy_configuration(&path)
-                .unwrap_err()
-                .contains("Existing WSL data will not be moved")
-        );
-        fs::write(&path, r#"{"kind":"native"}"#).unwrap();
-        assert!(check_legacy_configuration(&path).is_ok());
-        fs::remove_dir_all(directory).unwrap();
     }
 }
