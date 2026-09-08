@@ -8,12 +8,12 @@
   "scripts": {
     "build:app": "node scripts/run-app.mjs build",
     "build:core": "node scripts/build-core.mjs",
-    "build:frontend": "pnpm --dir app build:frontend",
+    "build:frontend": "pnpm --dir web build:frontend",
     "check": "pnpm check:config && pnpm check:web && pnpm check:core && pnpm check:rust",
-    "check:config": "actionlint && pnpm exec lefthook validate",
+    "check:config": "actionlint && pnpm exec lefthook validate && node --test scripts/paths.test.mjs",
     "check:core": "uv run --directory core ruff check . && uv run --directory core ruff format --check . && uv run --directory core mypy src/huddol && uv run --directory core lint-imports",
     "check:rust": "cargo fmt --check && node scripts/cargo.mjs check && node scripts/cargo.mjs clippy --all-targets -- -D warnings",
-    "check:web": "pnpm exec biome check . && pnpm --dir app typecheck",
+    "check:web": "pnpm exec biome check . && pnpm --dir web typecheck",
     "dev": "node scripts/run-app.mjs dev",
     "dev:release": "node scripts/run-app.mjs dev --release",
     "format": "pnpm exec biome format --write . && uv run --directory core ruff format . && cargo fmt",
@@ -22,7 +22,7 @@
     "test": "pnpm test:web && pnpm test:core && pnpm test:rust",
     "test:core": "uv run --directory core pytest -W error",
     "test:rust": "node scripts/cargo.mjs test",
-    "test:web": "pnpm --dir app test"
+    "test:web": "pnpm --dir web test"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.5.6",

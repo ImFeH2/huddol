@@ -90,7 +90,7 @@ impl HuddolProcess {
             json!({"development": tauri::is_dev()}),
         );
         let shell = app.shell();
-        let project = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../core");
+        let project = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../core");
         let plan = launcher(tauri::is_dev(), &project, &app.path().resource_dir()?);
         let executable_kind = plan.kind;
         let command = shell.command(plan.program).args(plan.args);

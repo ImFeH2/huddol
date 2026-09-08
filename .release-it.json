@@ -28,6 +28,10 @@
           "path": "version"
         },
         {
+          "file": "web/package.json",
+          "path": "version"
+        },
+        {
           "file": "Cargo.toml",
           "path": "workspace.package.version"
         },

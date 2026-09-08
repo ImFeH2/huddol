@@ -5,7 +5,7 @@ import { join, resolve } from "node:path";
 import { root } from "./process.mjs";
 
 const core = resolve(root, "core");
-const bundled = resolve(root, "app", "src-tauri", "core");
+const bundled = resolve(root, "app", "core");
 const dist = resolve(core, "dist");
 const work = resolve(core, "build");
 

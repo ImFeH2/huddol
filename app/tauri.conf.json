@@ -1,13 +1,13 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "Huddol",
-  "version": "../package.json",
+  "version": "package.json",
   "identifier": "im.feh2.huddol",
   "build": {
-    "beforeDevCommand": "pnpm dev",
+    "beforeDevCommand": "pnpm --dir ../web dev",
     "devUrl": "http://localhost:1420",
-    "beforeBuildCommand": "pnpm build:frontend && pnpm --workspace-root build:core",
-    "frontendDist": "../dist"
+    "beforeBuildCommand": "pnpm --dir ../web build:frontend && pnpm --workspace-root build:core",
+    "frontendDist": "../web/dist"
   },
   "app": {
     "windows": [

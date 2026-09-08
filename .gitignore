@@ -24,6 +24,9 @@ __pycache__/
 /core/build/
 /core/dist/
 /app/src-tauri/core/
+/app/src-tauri/target/
+/app/src-tauri/gen/schemas/
+/app/core/
 
 # Editor directories and files
 .vscode/*
@@ -39,3 +42,5 @@ __pycache__/
 # tauri icon also emits mobile icons this desktop app never bundles
 app/src-tauri/icons/android/
 app/src-tauri/icons/ios/
+app/icons/android/
+app/icons/ios/
