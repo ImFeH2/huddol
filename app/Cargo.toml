@@ -5,6 +5,10 @@ description.workspace = true
 authors.workspace = true
 edition.workspace = true
 
+[package.metadata.release]
+release = true
+pre-release-hook = ["node", "../scripts/release-hook.mjs"]
+
 [lib]
 name = "huddol_app_lib"
 crate-type = ["rlib"]

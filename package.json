@@ -18,7 +18,7 @@
     "dev:release": "node scripts/run-app.mjs dev --release",
     "format": "pnpm exec biome format --write . && uv run --directory core ruff format . && cargo fmt",
     "icon": "pnpm --dir app exec tauri icon ../assets/icon.json",
-    "release": "release-it",
+    "release": "cargo release",
     "test": "pnpm test:web && pnpm test:core && pnpm test:rust",
     "test:core": "uv run --directory core pytest -W error",
     "test:rust": "node scripts/cargo.mjs test",
@@ -28,8 +28,6 @@
     "@biomejs/biome": "^2.5.6",
     "@commitlint/cli": "^21.2.1",
     "@commitlint/config-conventional": "^21.2.0",
-    "@release-it/bumper": "^8.0.0",
-    "lefthook": "^2.1.10",
-    "release-it": "^21.0.0"
+    "lefthook": "^2.1.10"
   }
 }

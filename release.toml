@@ -1,0 +1,18 @@
+allow-branch = ["main"]
+release = false
+shared-version = true
+consolidate-commits = true
+publish = false
+
+pre-release-commit-message = "chore: release v{{version}}"
+sign-commit = true
+
+tag-name = "v{{version}}"
+tag-message = "Release v{{version}}"
+
+pre-release-replacements = [
+  { file = "../package.json", search = '"version": "[^"]+"', replace = '"version": "{{version}}"', exactly = 1, prerelease = true },
+  { file = "../app/package.json", search = '"version": "[^"]+"', replace = '"version": "{{version}}"', exactly = 1, prerelease = true },
+  { file = "../web/package.json", search = '"version": "[^"]+"', replace = '"version": "{{version}}"', exactly = 1, prerelease = true },
+  { file = "../core/pyproject.toml", search = '(?m)^version = "[^"]+"', replace = 'version = "{{version}}"', exactly = 1, prerelease = true },
+]
