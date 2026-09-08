@@ -9,6 +9,7 @@ sign-commit = true
 
 tag-name = "v{{version}}"
 tag-message = "Release v{{version}}"
+sign-tag = true
 
 pre-release-replacements = [
   { file = "../package.json", search = '"version": "[^"]+"', replace = '"version": "{{version}}"', exactly = 1, prerelease = true },

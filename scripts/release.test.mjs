@@ -168,7 +168,7 @@ test("cargo-release synchronizes versions and stops before commit on failed chec
         git("rev-parse", `v${version}^{}`),
         git("rev-parse", "HEAD"),
       );
-      assert.doesNotMatch(git("cat-file", "-p", `v${version}`), /SIGNATURE/);
+      git("verify-tag", `v${version}`);
       for (const path of [
         "package.json",
         "app/package.json",
@@ -198,6 +198,10 @@ test("cargo-release synchronizes versions and stops before commit on failed chec
       assert.equal(
         run("git", ["--git-dir", remote, "rev-parse", `v${version}^{}`]),
         git("rev-parse", "HEAD"),
+      );
+      assert.equal(
+        run("git", ["--git-dir", remote, "rev-parse", `v${version}`]),
+        git("rev-parse", `v${version}`),
       );
     }
     assert.equal(read(".git/checks"), "check\ntest\n".repeat(4));
