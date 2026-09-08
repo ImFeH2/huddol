@@ -1,10 +1,10 @@
 {
   "name": "huddol-workspace",
-  "private": true,
   "version": "0.0.0",
   "description": "Run your own organization of agents.",
-  "packageManager": "pnpm@12.3.4",
+  "private": true,
   "type": "module",
+  "packageManager": "pnpm@12.3.4",
   "scripts": {
     "build:app": "node scripts/run-app.mjs build",
     "build:core": "node scripts/build-core.mjs",

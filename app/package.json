@@ -1,12 +1,12 @@
 {
   "name": "huddol-app",
-  "private": true,
   "version": "0.0.0",
   "description": "Huddol desktop app.",
+  "private": true,
   "type": "module",
   "scripts": {
-    "dev": "vite",
     "build:frontend": "tsc && vite build",
+    "dev": "vite",
     "test": "vitest run",
     "typecheck": "tsc --noEmit"
   },
