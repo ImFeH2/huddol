@@ -28,8 +28,8 @@
           "path": "version"
         },
         {
-          "file": "app/src-tauri/Cargo.toml",
-          "path": "package.version"
+          "file": "Cargo.toml",
+          "path": "workspace.package.version"
         },
         {
           "file": "core/pyproject.toml",

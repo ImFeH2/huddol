@@ -1,9 +1,9 @@
 [package]
 name = "huddol-app"
-version = "0.0.0"
-description = "Run your own organization of agents."
-authors = ["ImFeH2 <i@feh2.im>"]
-edition = "2024"
+version.workspace = true
+description.workspace = true
+authors.workspace = true
+edition.workspace = true
 
 [lib]
 name = "huddol_app_lib"

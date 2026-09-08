@@ -1,7 +1,7 @@
 import { resolve } from "node:path";
 import { binary, root, run } from "./process.mjs";
 
-const manifest = resolve(root, "app", "src-tauri", "Cargo.toml");
+const manifest = resolve(root, "Cargo.toml");
 const args = process.argv.slice(2);
 if (args.length === 0) {
   throw new Error("Expected a Cargo command");

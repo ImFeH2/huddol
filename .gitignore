@@ -13,6 +13,7 @@ dist-debug
 dist-ssr
 /artifacts/
 /target
+/cli/target/
 *.local
 
 __pycache__/

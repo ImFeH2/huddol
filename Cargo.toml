@@ -1,0 +1,9 @@
+[workspace]
+members = ["app/src-tauri", "cli"]
+resolver = "3"
+
+[workspace.package]
+version = "0.0.0"
+authors = ["ImFeH2 <i@feh2.im>"]
+description = "Run your own organization of agents."
+edition = "2024"

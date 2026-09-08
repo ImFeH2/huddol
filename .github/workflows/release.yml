@@ -57,7 +57,7 @@ jobs:
         with:
           toolchain: stable
           rustflags: ""
-          cache-workspaces: app/src-tauri -> target
+          cache-workspaces: . -> target
       - name: Install Linux dependencies
         if: runner.os == 'Linux'
         run: |

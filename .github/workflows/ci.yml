@@ -54,7 +54,7 @@ jobs:
           toolchain: stable
           components: rustfmt,clippy
           rustflags: ""
-          cache-workspaces: app/src-tauri -> target
+          cache-workspaces: . -> target
       - name: Install Linux dependencies
         if: runner.os == 'Linux'
         run: |
@@ -82,5 +82,4 @@ jobs:
       - name: Package core
         run: pnpm build:core
       - name: Check release build
-        working-directory: app/src-tauri
         run: cargo check --release
