@@ -88,8 +88,9 @@ export function LangfusePage() {
           }}
         >
           <fieldset className="settings-form" disabled={busy || !values}>
-            <label className="settings-toggle">
+            <label className="settings-toggle" htmlFor={`${id}-enabled`}>
               <Input
+                id={`${id}-enabled`}
                 type="checkbox"
                 checked={enabled}
                 onChange={(event) =>

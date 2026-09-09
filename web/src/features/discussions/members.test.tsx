@@ -26,6 +26,28 @@ describe("discussion member picker", () => {
     expect(html.match(/class="checkbox"/g)).toHaveLength(2);
   });
 
+  it("links labels to unique controls across picker instances", () => {
+    const html = renderToStaticMarkup(
+      [0, 1].map((key) => (
+        <MemberPicker
+          key={key}
+          members={[{ id: 1, name: "You", type: "human", state: "idle" }]}
+          selected={[]}
+          onChange={() => {}}
+        />
+      )),
+    );
+    const ids = [...html.matchAll(/<input[^>]*\bid="([^"]+)"/g)].map(
+      (match) => match[1],
+    );
+    const labels = [...html.matchAll(/<label[^>]*\bfor="([^"]+)"/g)].map(
+      (match) => match[1],
+    );
+    expect(ids).toHaveLength(2);
+    expect(new Set(ids).size).toBe(2);
+    expect(labels).toEqual(ids);
+  });
+
   it("disables the selection while saving", () => {
     expect(render(true)).toContain(
       '<fieldset class="member-picker" disabled="">',

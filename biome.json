@@ -5,25 +5,8 @@
     "clientKind": "git",
     "useIgnoreFile": true
   },
-  "files": {
-    "ignoreUnknown": true,
-    "includes": ["**", "!!**/dist"]
-  },
   "formatter": {
     "indentStyle": "space"
-  },
-  "linter": {
-    "rules": {
-      "preset": "recommended",
-      "a11y": {
-        "noLabelWithoutControl": {
-          "level": "error",
-          "options": {
-            "inputComponents": ["Input", "Textarea"]
-          }
-        }
-      }
-    }
   },
   "css": {
     "parser": {

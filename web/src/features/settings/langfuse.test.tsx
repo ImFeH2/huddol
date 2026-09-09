@@ -38,6 +38,9 @@ describe("Langfuse settings", () => {
     expect(html.match(/type="password"/g)).toHaveLength(2);
     expect(html).toContain('<fieldset class="settings-form" disabled="">');
     expect(html).toContain('type="submit"');
+    const enabledId = html.match(/<input[^>]*id="([^"]+-enabled)"/)?.[1];
+    expect(enabledId).toBeDefined();
+    expect(html).toContain(`for="${enabledId}"`);
   });
 
   it("keeps mock responses redacted across updates without credentials", async () => {

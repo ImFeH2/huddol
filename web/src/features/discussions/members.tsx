@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useId, useState } from "react";
 import { useOrganization } from "../../app/organization";
 import { Modal } from "../../components/ui/dialog";
 import { Avatar, Banner, Button, Chip, Input } from "../../components/ui/index";
@@ -15,14 +15,17 @@ export function MemberPicker({
   onChange: (selected: number[]) => void;
   disabled?: boolean;
 }) {
+  const id = useId();
+
   return (
     <fieldset className="member-picker" disabled={disabled}>
       <legend>Members</legend>
       <ul className="member-picker-list">
         {members.map((member) => (
           <li key={member.id}>
-            <label className="member-option">
+            <label className="member-option" htmlFor={`${id}-${member.id}`}>
               <Input
+                id={`${id}-${member.id}`}
                 type="checkbox"
                 checked={selected.includes(member.id)}
                 onChange={(event) =>
