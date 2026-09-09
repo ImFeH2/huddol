@@ -1,19 +1,16 @@
 [package]
 name = "huddol-app"
 version.workspace = true
-description.workspace = true
 authors.workspace = true
 edition.workspace = true
+description.workspace = true
 
 [package.metadata.release]
 pre-release-hook = ["node", "../scripts/release-hook.mjs"]
 
 [lib]
-name = "huddol_app_lib"
 crate-type = ["rlib"]
-
-[build-dependencies]
-tauri-build = { version = "2", features = [] }
+name = "huddol_app_lib"
 
 [dependencies]
 anyhow = "1"
@@ -22,7 +19,10 @@ tauri = { version = "2", features = [] }
 tauri-plugin-shell = "2"
 tauri-plugin-single-instance = "2"
 
-[target.'cfg(windows)'.dependencies]
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[target."cfg(windows)".dependencies]
 windows-sys = { version = "0.61", features = ["Win32_UI_WindowsAndMessaging"] }
 
 [features]

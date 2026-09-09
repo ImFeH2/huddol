@@ -2,27 +2,93 @@
 name = "huddol"
 version = "0.0.0"
 description = "Run your own organization of agents."
-authors = [
-    { name = "ImFeH2", email = "i@feh2.im" }
-]
 requires-python = ">=3.13"
+authors = [{ name = "ImFeH2", email = "i@feh2.im" }]
 dependencies = [
-    "httpx>=0.28.1",
-    "opentelemetry-exporter-otlp-proto-http>=1.44.0",
-    "opentelemetry-sdk>=1.44.0",
-    "psutil>=7.2.2",
-    "pydantic-ai-slim[anthropic,duckduckgo,google,openai]>=2.28.0",
+  "httpx>=0.28.1",
+  "opentelemetry-exporter-otlp-proto-http>=1.44.0",
+  "opentelemetry-sdk>=1.44.0",
+  "psutil>=7.2.2",
+  "pydantic-ai-slim[anthropic,duckduckgo,google,openai]>=2.28.0",
 ]
 
 [project.scripts]
 huddol = "huddol.__main__:main"
 
+[dependency-groups]
+dev = [
+  "import-linter>=2.14",
+  "mypy>=2.3.1",
+  "pyinstaller>=6.21.0",
+  "pytest>=9.1.1",
+  "ruff>=0.16.0",
+  "types-psutil>=7.2.2.20260827",
+]
+
 [build-system]
 requires = ["uv_build>=0.11.16,<0.12.0"]
 build-backend = "uv_build"
 
-[tool.pytest.ini_options]
-pythonpath = ["."]
+[tool.importlinter]
+root_package = "huddol"
+include_external_packages = true
+
+[[tool.importlinter.contracts]]
+name = "Layers run one way only"
+type = "layers"
+layers = [
+  "huddol.adapters",
+  "huddol.runtime",
+  "huddol.tools",
+  "huddol.services",
+  "huddol.ports",
+  "huddol.core",
+]
+
+[[tool.importlinter.contracts]]
+name = "Services do not know about each other"
+type = "independence"
+modules = [
+  "huddol.services.todo",
+  "huddol.services.memory",
+  "huddol.services.library",
+  "huddol.services.history",
+]
+
+[[tool.importlinter.contracts]]
+name = "Only adapters know the model runtime"
+type = "forbidden"
+source_modules = [
+  "huddol.core",
+  "huddol.ports",
+  "huddol.services",
+  "huddol.tools",
+  "huddol.runtime",
+]
+forbidden_modules = ["pydantic_ai"]
+
+[[tool.importlinter.contracts]]
+name = "Only adapters touch storage and the network"
+type = "forbidden"
+source_modules = [
+  "huddol.core",
+  "huddol.services",
+  "huddol.tools",
+  "huddol.runtime",
+]
+forbidden_modules = ["sqlite3", "httpx", "subprocess"]
+
+[[tool.importlinter.contracts]]
+name = "Core is self contained"
+type = "forbidden"
+source_modules = ["huddol.core"]
+forbidden_modules = [
+  "huddol.ports",
+  "huddol.services",
+  "huddol.tools",
+  "huddol.runtime",
+  "huddol.adapters",
+]
 
 [tool.mypy]
 python_version = "3.13"
@@ -34,73 +100,5 @@ show_error_codes = true
 module = ["huddol.adapters.sandbox.windows"]
 disable_error_code = ["attr-defined", "name-defined"]
 
-[tool.importlinter]
-root_package = "huddol"
-include_external_packages = true
-
-[[tool.importlinter.contracts]]
-name = "Layers run one way only"
-type = "layers"
-layers = [
-    "huddol.adapters",
-    "huddol.runtime",
-    "huddol.tools",
-    "huddol.services",
-    "huddol.ports",
-    "huddol.core",
-]
-
-[[tool.importlinter.contracts]]
-name = "Services do not know about each other"
-type = "independence"
-modules = [
-    "huddol.services.todo",
-    "huddol.services.memory",
-    "huddol.services.library",
-    "huddol.services.history",
-]
-
-[[tool.importlinter.contracts]]
-name = "Only adapters know the model runtime"
-type = "forbidden"
-source_modules = [
-    "huddol.core",
-    "huddol.ports",
-    "huddol.services",
-    "huddol.tools",
-    "huddol.runtime",
-]
-forbidden_modules = ["pydantic_ai"]
-
-[[tool.importlinter.contracts]]
-name = "Only adapters touch storage and the network"
-type = "forbidden"
-source_modules = [
-    "huddol.core",
-    "huddol.services",
-    "huddol.tools",
-    "huddol.runtime",
-]
-forbidden_modules = ["sqlite3", "httpx", "subprocess"]
-
-[[tool.importlinter.contracts]]
-name = "Core is self contained"
-type = "forbidden"
-source_modules = ["huddol.core"]
-forbidden_modules = [
-    "huddol.ports",
-    "huddol.services",
-    "huddol.tools",
-    "huddol.runtime",
-    "huddol.adapters",
-]
-
-[dependency-groups]
-dev = [
-    "import-linter>=2.14",
-    "mypy>=2.3.1",
-    "pyinstaller>=6.21.0",
-    "pytest>=9.1.1",
-    "ruff>=0.16.0",
-    "types-psutil>=7.2.2.20260827",
-]
+[tool.pytest.ini_options]
+pythonpath = ["."]

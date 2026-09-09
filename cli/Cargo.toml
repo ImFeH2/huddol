@@ -1,9 +1,9 @@
 [package]
 name = "huddol-cli"
 version.workspace = true
-description.workspace = true
 authors.workspace = true
 edition.workspace = true
+description.workspace = true
 
 [package.metadata.release]
 pre-release-replacements = []

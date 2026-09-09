@@ -1,8 +1,8 @@
 allow-branch = ["main"]
 shared-version = true
-consolidate-commits = true
 publish = false
 
+consolidate-commits = true
 pre-release-commit-message = "chore: release v{{version}}"
 sign-commit = true
 
