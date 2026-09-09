@@ -1,46 +1,44 @@
-# Logs
 logs
 *.log
+lerna-debug.log*
 npm-debug.log*
+pnpm-debug.log*
 yarn-debug.log*
 yarn-error.log*
-pnpm-debug.log*
-lerna-debug.log*
 
-node_modules
 dist
 dist-debug
 dist-ssr
-/artifacts/
-/target
-/cli/target/
-*.local
+node_modules
 
-__pycache__/
 *.py[cod]
+__pycache__/
 .pytest_cache/
 .ruff_cache/
 .venv/
-/core/build/
-/core/dist/
-/app/src-tauri/core/
-/app/src-tauri/target/
-/app/src-tauri/gen/schemas/
-/app/core/
 
-# Editor directories and files
+/app/core/
+/app/gen/schemas
+/app/icons/android/
+/app/icons/ios/
+/app/src-tauri/core/
+/app/src-tauri/gen/schemas/
+/app/src-tauri/icons/android/
+/app/src-tauri/icons/ios/
+/app/src-tauri/target/
+/app/target/
+/artifacts/
+/cli/target/
+/core/build/
+/target
+
+*.local
+*.njsproj
+*.ntvs*
+*.sln
+*.suo
+*.sw?
+.DS_Store
+.idea
 .vscode/*
 !.vscode/extensions.json
-.idea
-.DS_Store
-*.suo
-*.ntvs*
-*.njsproj
-*.sln
-*.sw?
-
-# tauri icon also emits mobile icons this desktop app never bundles
-app/src-tauri/icons/android/
-app/src-tauri/icons/ios/
-app/icons/android/
-app/icons/ios/
