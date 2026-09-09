@@ -10,13 +10,9 @@
     "includes": ["**", "!!**/dist"]
   },
   "formatter": {
-    "enabled": true,
-    "indentStyle": "space",
-    "indentWidth": 2,
-    "lineEnding": "lf"
+    "indentStyle": "space"
   },
   "linter": {
-    "enabled": true,
     "rules": {
       "preset": "recommended",
       "a11y": {
@@ -29,24 +25,9 @@
       }
     }
   },
-  "javascript": {
-    "formatter": {
-      "quoteStyle": "double",
-      "semicolons": "always",
-      "trailingCommas": "all"
-    }
-  },
   "css": {
     "parser": {
       "tailwindDirectives": true
-    }
-  },
-  "assist": {
-    "enabled": true,
-    "actions": {
-      "source": {
-        "organizeImports": "on"
-      }
     }
   }
 }
