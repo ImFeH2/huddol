@@ -1,5 +1,4 @@
 allow-branch = ["main"]
-release = false
 shared-version = true
 consolidate-commits = true
 publish = false

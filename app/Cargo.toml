@@ -6,7 +6,6 @@ authors.workspace = true
 edition.workspace = true
 
 [package.metadata.release]
-release = true
 pre-release-hook = ["node", "../scripts/release-hook.mjs"]
 
 [lib]
@@ -21,7 +20,7 @@ anyhow = "1"
 serde_json = "1"
 tauri = { version = "2", features = [] }
 tauri-plugin-shell = "2"
-tauri-plugin-single-instance = { path = "vendor/tauri-plugin-single-instance-2.4.3/crate", version = "=2.4.3" }
+tauri-plugin-single-instance = "2"
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61", features = ["Win32_UI_WindowsAndMessaging"] }

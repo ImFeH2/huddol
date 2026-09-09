@@ -7,12 +7,7 @@
   },
   "files": {
     "ignoreUnknown": true,
-    "includes": [
-      "**",
-      "!!**/dist",
-      "!!app/vendor/tauri-plugin-single-instance-2.4.3/crate/.cargo_vcs_info.json",
-      "!!app/vendor/tauri-plugin-single-instance-2.4.3/upstream/source/.cargo_vcs_info.json"
-    ]
+    "includes": ["**", "!!**/dist"]
   },
   "formatter": {
     "enabled": true,

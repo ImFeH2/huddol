@@ -94,18 +94,10 @@ test("cargo-release synchronizes versions and stops before commit on failed chec
       ).match(/\[package\.metadata\.release\]\n[\s\S]*?(?=\n\[|$)/)[0];
       write(
         `${crate}/Cargo.toml`,
-        `[package]\nname = "huddol-${crate}"\nversion.workspace = true\nedition = "2024"\n${metadata}\n` +
-          (crate === "app"
-            ? '[dependencies]\nvendor = { path = "vendor/crate", version = "=2.4.3" }\n'
-            : ""),
+        `[package]\nname = "huddol-${crate}"\nversion.workspace = true\nedition = "2024"\n${metadata}\n`,
       );
       write(`${crate}/src/lib.rs`, "");
     }
-    write(
-      "app/vendor/crate/Cargo.toml",
-      '[package]\nname = "vendor"\nversion = "2.4.3"\nedition = "2024"\n',
-    );
-    write("app/vendor/crate/src/lib.rs", "");
     write(
       "core/pyproject.toml",
       `[project]\nname = "huddol"\nversion = "${manifest.version}"\nrequires-python = ">=3.13"\n`,
@@ -139,7 +131,6 @@ test("cargo-release synchronizes versions and stops before commit on failed chec
     run("git", ["init", "--bare", remote]);
     git("remote", "add", "origin", remote);
     git("push", "-u", "origin", "main");
-    const vendor = read("app/vendor/crate/Cargo.toml");
     const major = Number(manifest.version.split(".")[0]) + 1;
     const files = git("ls-files").split("\n");
     const snapshot = () => files.map((path) => [path, read(path)]);
@@ -186,10 +177,6 @@ test("cargo-release synchronizes versions and stops before commit on failed chec
           ),
         );
       }
-      assert.equal(read("app/vendor/crate/Cargo.toml"), vendor);
-      assert.ok(
-        read("Cargo.lock").includes('name = "vendor"\nversion = "2.4.3"'),
-      );
       assert.equal(
         JSON.parse(read("app/tauri.conf.json")).version,
         "package.json",

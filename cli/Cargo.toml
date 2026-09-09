@@ -6,7 +6,6 @@ authors.workspace = true
 edition.workspace = true
 
 [package.metadata.release]
-release = true
 pre-release-replacements = []
 
 [dependencies]
