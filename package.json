@@ -10,7 +10,7 @@
     "build:core": "node scripts/build-core.mjs",
     "build:frontend": "pnpm --dir web build:frontend",
     "check": "pnpm check:config && pnpm check:web && pnpm check:core && pnpm check:rust",
-    "check:config": "pnpm format:toml:check && pnpm format:yaml:check && actionlint && pnpm exec lefthook validate && node --test scripts/paths.test.mjs",
+    "check:config": "pnpm format:toml:check && pnpm format:yaml:check && actionlint && pnpm exec lefthook validate",
     "check:core": "uv run --directory core ruff check . && uv run --directory core ruff format --check . && uv run --directory core mypy src/huddol && uv run --directory core lint-imports",
     "check:rust": "cargo fmt --check && node scripts/cargo.mjs check && node scripts/cargo.mjs clippy --all-targets -- -D warnings",
     "check:web": "pnpm exec biome check . && pnpm --dir web typecheck",

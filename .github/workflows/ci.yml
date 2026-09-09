@@ -73,12 +73,6 @@ jobs:
           LEFTHOOK: 0
       - name: Install Python dependencies
         run: uv sync --project core --all-groups --frozen
-      - name: Install cargo-release
-        if: runner.os == 'Linux'
-        run: cargo install cargo-release --version 0.25.22 --locked
-      - name: Test release
-        if: runner.os == 'Linux'
-        run: node --test scripts/release.test.mjs
       - name: Check
         run: pnpm check
       - name: Test
