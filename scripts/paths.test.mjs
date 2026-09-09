@@ -6,6 +6,72 @@ import { resolve } from "node:path";
 import { test } from "node:test";
 import { root } from "./process.mjs";
 
+test("desktop scripts run Tauri from app", () => {
+  const { scripts } = JSON.parse(
+    fs.readFileSync(resolve(root, "package.json"), "utf8"),
+  );
+  for (const [entry, args] of [
+    ["dev", "dev"],
+    ["dev:release", "dev --release"],
+    ["build:app", "build"],
+  ]) {
+    assert.equal(scripts[entry], `pnpm --dir app exec tauri ${args}`);
+  }
+});
+
+test("cargo forwards arguments from the workspace root", async (t) => {
+  const argv = process.argv;
+  const exitCode = process.exitCode;
+  const cwd = process.cwd();
+  const calls = [];
+  t.mock.method(childProcess, "spawn", (command, args, options) => {
+    calls.push({ command, args, options });
+    return {
+      once(event, listener) {
+        if (event === "close") {
+          queueMicrotask(() => listener(args[0] === "check" ? 0 : 23));
+        }
+      },
+    };
+  });
+  syncBuiltinESMExports();
+  try {
+    process.chdir(resolve(root, "app"));
+    for (const args of [
+      ["check"],
+      ["clippy", "--all-targets", "--", "-D", "warnings"],
+      ["test", "--", "test name"],
+    ]) {
+      process.argv = [...argv.slice(0, 2), ...args];
+      await import(`./cargo.mjs?command=${args[0]}`);
+      const call = calls.at(-1);
+      assert.equal(
+        call.command,
+        process.platform === "win32" ? "cargo.exe" : "cargo",
+      );
+      assert.deepEqual(call.args, args);
+      assert.equal(call.options.cwd, root);
+      assert.deepEqual(call.options.env, {
+        ...process.env,
+        TAURI_CONFIG: '{"bundle":{"resources":[]}}',
+      });
+      assert.equal(process.exitCode, args[0] === "check" ? exitCode : 23);
+    }
+    process.argv = argv.slice(0, 2);
+    await assert.rejects(
+      import("./cargo.mjs?empty"),
+      /Expected a Cargo command/,
+    );
+    assert.equal(calls.length, 3);
+  } finally {
+    process.argv = argv;
+    process.exitCode = exitCode;
+    process.chdir(cwd);
+    t.mock.restoreAll();
+    syncBuiltinESMExports();
+  }
+});
+
 test("core packaging targets the desktop resources", async (t) => {
   const config = JSON.parse(
     fs.readFileSync(resolve(root, "app/tauri.conf.json"), "utf8"),
