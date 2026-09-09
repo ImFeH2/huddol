@@ -1,16 +1,20 @@
-commit-msg:
-  jobs:
-    - name: commitlint
-      run: pnpm exec commitlint --edit "{1}"
-
 pre-commit:
+  fail_on_changes: always
   parallel: true
   jobs:
     - name: config
       run: pnpm format:toml:check && pnpm format:yaml:check && pnpm check:config
+
     - name: web
       run: pnpm format:web:check && pnpm check:web && pnpm test:web
+
     - name: core
       run: pnpm format:core:check && pnpm check:core && pnpm test:core
+
     - name: rust
       run: pnpm format:rust:check && pnpm check:rust && pnpm test:rust
+
+commit-msg:
+  jobs:
+    - name: commitlint
+      run: pnpm exec commitlint --edit "{1}"
