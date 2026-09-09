@@ -7,3 +7,6 @@ version = "0.0.0"
 authors = ["ImFeH2 <i@feh2.im>"]
 edition = "2024"
 description = "Run your own organization of agents."
+readme = "README.md"
+repository = "https://github.com/ImFeH2/huddol"
+license = "Apache-2.0"

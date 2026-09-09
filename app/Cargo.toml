@@ -4,6 +4,9 @@ version.workspace = true
 authors.workspace = true
 edition.workspace = true
 description.workspace = true
+readme.workspace = true
+repository.workspace = true
+license.workspace = true
 
 [package.metadata.release]
 pre-release-hook = ["node", "../scripts/release-hook.mjs"]
