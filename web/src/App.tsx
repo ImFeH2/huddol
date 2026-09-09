@@ -40,6 +40,7 @@ import { LimitsPage, ModelPage } from "@/features/settings/index";
 import { LangfusePage } from "@/features/settings/langfuse";
 import { type BackendError, backend, type Member } from "@/lib/backend";
 import { plural } from "@/lib/format";
+import "@/App.css";
 
 type Loaded = {
   members: Member[];
