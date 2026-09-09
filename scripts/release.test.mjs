@@ -152,7 +152,7 @@ test("cargo-release synchronizes versions and stops before commit on failed chec
       assert.equal(git("rev-list", "--count", `${previous}..HEAD`), "1");
       assert.equal(
         git("log", "-1", "--format=%s"),
-        `chore: release v${version}`,
+        `chore: release ${version}`,
       );
       git("verify-commit", "HEAD");
       assert.equal(
@@ -160,6 +160,14 @@ test("cargo-release synchronizes versions and stops before commit on failed chec
         git("rev-parse", "HEAD"),
       );
       git("verify-tag", `v${version}`);
+      assert.equal(
+        git(
+          "for-each-ref",
+          "--format=%(contents:subject)",
+          `refs/tags/v${version}`,
+        ),
+        `chore: release ${version}`,
+      );
       for (const path of [
         "package.json",
         "app/package.json",
