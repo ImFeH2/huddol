@@ -6,4 +6,4 @@ allowBuilds:
   edgedriver: false
   esbuild: true
   geckodriver: false
-  lefthook: true
+  lefthook: false

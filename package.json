@@ -35,7 +35,8 @@
     "test:core": "uv run --directory core pytest -W error",
     "test:rust": "node scripts/cargo.mjs test",
     "icon": "pnpm --dir app exec tauri icon ../assets/icon.json",
-    "release": "cargo release"
+    "release": "cargo release",
+    "prepare": "lefthook install"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.5.6",
