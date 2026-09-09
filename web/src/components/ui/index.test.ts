@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { hueFor, initialsFor } from "./index";
+import { hueFor, initialsFor } from "@/components/ui/index";
 
 describe("initialsFor", () => {
   it("uses the first two letters of a single word", () => {

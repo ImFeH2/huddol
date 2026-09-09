@@ -1,7 +1,7 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
-import { Banner } from "../ui/index";
-import { Shell } from "./shell";
+import { Shell } from "@/components/layout/shell";
+import { Banner } from "@/components/ui/index";
 
 describe("Shell feedback", () => {
   it("keeps the page and navigation alongside one live failure notice", () => {

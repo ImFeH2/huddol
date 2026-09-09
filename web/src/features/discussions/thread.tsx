@@ -7,29 +7,29 @@ import {
   useRef,
   useState,
 } from "react";
-import { useOrganization } from "../../app/organization";
-import { useNavigate } from "../../app/router";
-import { Page, PageBody, PageHeader } from "../../components/layout/shell";
-import { ConfirmDialog } from "../../components/ui/dialog";
+import { useOrganization } from "@/app/organization";
+import { useNavigate } from "@/app/router";
+import { Page, PageBody, PageHeader } from "@/components/layout/shell";
+import { ConfirmDialog } from "@/components/ui/dialog";
 import {
   Avatar,
   Banner,
   Button,
   Chip,
   EmptyState,
-} from "../../components/ui/index";
-import { OverflowMenu } from "../../components/ui/menu";
+} from "@/components/ui/index";
+import { OverflowMenu } from "@/components/ui/menu";
+import { Composer } from "@/features/discussions/composer";
+import { DiscussionMembersDialog } from "@/features/discussions/members";
+import { formatTime, highlightMentions } from "@/features/mentions";
 import {
   BackendError,
   backend,
   type DiscussionDetail,
   type Message,
-} from "../../lib/backend";
-import { plural, relativeTime } from "../../lib/format";
-import { formatTime, highlightMentions } from "../mentions";
-import { Composer } from "./composer";
-import { DiscussionMembersDialog } from "./members";
-import "./discussions.css";
+} from "@/lib/backend";
+import { plural, relativeTime } from "@/lib/format";
+import "@/features/discussions/discussions.css";
 
 export function ThreadPage({ id }: { id: number }) {
   const { members, humanId, refresh } = useOrganization();

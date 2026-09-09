@@ -1,8 +1,12 @@
 import { CornerDownLeft, Send } from "lucide-react";
 import { Fragment, useId, useMemo, useRef, useState } from "react";
-import { Avatar, Button, Textarea } from "../../components/ui/index";
-import type { Member } from "../../lib/backend";
-import { candidatesFor, completeMention, mentionQuery } from "../mentions";
+import { Avatar, Button, Textarea } from "@/components/ui/index";
+import {
+  candidatesFor,
+  completeMention,
+  mentionQuery,
+} from "@/features/mentions";
+import type { Member } from "@/lib/backend";
 
 const MENU_LIMIT = 8;
 

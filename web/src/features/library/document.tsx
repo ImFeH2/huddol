@@ -1,18 +1,18 @@
 import { AlertTriangle, Save, SquarePen, Trash2 } from "lucide-react";
 import { useCallback, useEffect, useId, useState } from "react";
-import { useNavigate } from "../../app/router";
+import { useNavigate } from "@/app/router";
 import {
   Page,
   PageBody,
   PageHeader,
   Toolbar,
   ToolbarSpacer,
-} from "../../components/layout/shell";
-import { ConfirmDialog, PromptDialog } from "../../components/ui/dialog";
-import { Banner, Button, Chip, EmptyState } from "../../components/ui/index";
-import { BackendError, backend } from "../../lib/backend";
-import { documentFolder, formatBytes } from "../../lib/format";
-import "./library.css";
+} from "@/components/layout/shell";
+import { ConfirmDialog, PromptDialog } from "@/components/ui/dialog";
+import { Banner, Button, Chip, EmptyState } from "@/components/ui/index";
+import { BackendError, backend } from "@/lib/backend";
+import { documentFolder, formatBytes } from "@/lib/format";
+import "@/features/library/library.css";
 
 type Loaded = { content: string; hash: string };
 

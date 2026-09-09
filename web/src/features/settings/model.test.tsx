@@ -1,6 +1,6 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
-import { ModelPage, modelUpdate } from "./index";
+import { ModelPage, modelUpdate } from "@/features/settings/index";
 
 const values = {
   api_type: "openai",

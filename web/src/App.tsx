@@ -8,14 +8,14 @@ import {
   Users,
 } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
-import { OrganizationProvider } from "./app/organization";
+import { OrganizationProvider } from "@/app/organization";
 import {
   navIdOf,
   type Route,
   RouterProvider,
   useNavigate,
   useRouter,
-} from "./app/router";
+} from "@/app/router";
 import {
   Nav,
   NavItem,
@@ -27,19 +27,19 @@ import {
   Sidebar,
   SidebarFooter,
   SidebarOrg,
-} from "./components/layout/shell";
-import { Avatar, Badge, Banner, Spinner } from "./components/ui/index";
-import { DiscussionsPage } from "./features/discussions/list";
-import { ThreadPage } from "./features/discussions/thread";
-import { DocumentPage } from "./features/library/document";
-import { LibraryPage } from "./features/library/list";
-import { MemberPage } from "./features/members/detail";
-import { MembersPage } from "./features/members/list";
-import { ExecutionPage } from "./features/settings/execution";
-import { LimitsPage, ModelPage } from "./features/settings/index";
-import { LangfusePage } from "./features/settings/langfuse";
-import { type BackendError, backend, type Member } from "./lib/backend";
-import { plural } from "./lib/format";
+} from "@/components/layout/shell";
+import { Avatar, Badge, Banner, Spinner } from "@/components/ui/index";
+import { DiscussionsPage } from "@/features/discussions/list";
+import { ThreadPage } from "@/features/discussions/thread";
+import { DocumentPage } from "@/features/library/document";
+import { LibraryPage } from "@/features/library/list";
+import { MemberPage } from "@/features/members/detail";
+import { MembersPage } from "@/features/members/list";
+import { ExecutionPage } from "@/features/settings/execution";
+import { LimitsPage, ModelPage } from "@/features/settings/index";
+import { LangfusePage } from "@/features/settings/langfuse";
+import { type BackendError, backend, type Member } from "@/lib/backend";
+import { plural } from "@/lib/format";
 
 type Loaded = {
   members: Member[];

@@ -1,6 +1,6 @@
 import { MoreHorizontal } from "lucide-react";
 import { type ReactNode, useEffect, useId, useRef, useState } from "react";
-import "./menu.css";
+import "@/components/ui/menu.css";
 
 export type MenuAction = {
   id: string;

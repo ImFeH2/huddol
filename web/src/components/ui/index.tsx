@@ -5,7 +5,7 @@ import type {
   Ref,
   TextareaHTMLAttributes,
 } from "react";
-import "./ui.css";
+import "@/components/ui/ui.css";
 
 type ButtonProps = ButtonHTMLAttributes<HTMLButtonElement> & {
   variant?: "default" | "primary" | "ghost" | "danger";

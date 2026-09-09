@@ -4,7 +4,7 @@ import {
   ExecutionForm,
   type ExecutionSettings,
   executionUpdate,
-} from "./execution";
+} from "@/features/settings/execution";
 
 const initial: ExecutionSettings = {
   environment: { kind: "native" },

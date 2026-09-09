@@ -1,8 +1,8 @@
 import { useId, useState } from "react";
-import { useOrganization } from "../../app/organization";
-import { Modal } from "../../components/ui/dialog";
-import { Avatar, Banner, Button, Chip, Input } from "../../components/ui/index";
-import { backend, type Member } from "../../lib/backend";
+import { useOrganization } from "@/app/organization";
+import { Modal } from "@/components/ui/dialog";
+import { Avatar, Banner, Button, Chip, Input } from "@/components/ui/index";
+import { backend, type Member } from "@/lib/backend";
 
 export function MemberPicker({
   members,

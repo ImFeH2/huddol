@@ -8,8 +8,8 @@ import {
   Trash2,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { useOrganization } from "../../app/organization";
-import { useNavigate } from "../../app/router";
+import { useOrganization } from "@/app/organization";
+import { useNavigate } from "@/app/router";
 import {
   type Column,
   Page,
@@ -19,8 +19,8 @@ import {
   Table,
   Toolbar,
   ToolbarSpacer,
-} from "../../components/layout/shell";
-import { ConfirmDialog } from "../../components/ui/dialog";
+} from "@/components/layout/shell";
+import { ConfirmDialog } from "@/components/ui/dialog";
 import {
   Badge,
   Button,
@@ -31,17 +31,17 @@ import {
   IconButton,
   SearchField,
   StatusText,
-} from "../../components/ui/index";
-import { OverflowMenu } from "../../components/ui/menu";
+} from "@/components/ui/index";
+import { OverflowMenu } from "@/components/ui/menu";
+import { CreateDiscussionDialog } from "@/features/discussions/create";
 import {
   backend,
   type DiscussionSummary,
   type FoundMessage,
   type Member,
-} from "../../lib/backend";
-import { plural } from "../../lib/format";
-import { CreateDiscussionDialog } from "./create";
-import "./discussions.css";
+} from "@/lib/backend";
+import { plural } from "@/lib/format";
+import "@/features/discussions/discussions.css";
 
 type Segment = { id: string; text: string; match: boolean };
 

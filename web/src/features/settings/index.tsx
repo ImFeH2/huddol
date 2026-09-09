@@ -1,14 +1,9 @@
 import { AlertTriangle } from "lucide-react";
 import { useCallback, useEffect, useId, useState } from "react";
-import {
-  Page,
-  PageBody,
-  PageHeader,
-  Section,
-} from "../../components/layout/shell";
-import { Banner, Button, Chip, Field, Input } from "../../components/ui/index";
-import { backend } from "../../lib/backend";
-import "./settings.css";
+import { Page, PageBody, PageHeader, Section } from "@/components/layout/shell";
+import { Banner, Button, Chip, Field, Input } from "@/components/ui/index";
+import { backend } from "@/lib/backend";
+import "@/features/settings/settings.css";
 
 function useSaver(load: () => Promise<void>) {
   const [status, setStatus] = useState<string | null>(null);

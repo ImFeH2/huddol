@@ -417,5 +417,5 @@ const insideTauri =
 // would close a cycle that this top-level await deadlocks on, silently.
 export const backend: Backend =
   import.meta.env.DEV && !insideTauri
-    ? (await import("./mock")).createMockBackend(Backend)
+    ? (await import("@/lib/mock")).createMockBackend(Backend)
     : new Backend();

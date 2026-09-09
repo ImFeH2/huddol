@@ -9,8 +9,8 @@ import {
   User,
 } from "lucide-react";
 import { useMemo, useState } from "react";
-import { useOrganization } from "../../app/organization";
-import { useNavigate } from "../../app/router";
+import { useOrganization } from "@/app/organization";
+import { useNavigate } from "@/app/router";
 import {
   type Column,
   Page,
@@ -20,8 +20,8 @@ import {
   Table,
   Toolbar,
   ToolbarSpacer,
-} from "../../components/layout/shell";
-import { ConfirmDialog, PromptDialog } from "../../components/ui/dialog";
+} from "@/components/layout/shell";
+import { ConfirmDialog, PromptDialog } from "@/components/ui/dialog";
 import {
   Avatar,
   Button,
@@ -33,11 +33,11 @@ import {
   SearchField,
   StateDot,
   StatusText,
-} from "../../components/ui/index";
-import { OverflowMenu } from "../../components/ui/menu";
-import { backend, type Member } from "../../lib/backend";
-import { plural } from "../../lib/format";
-import "./members.css";
+} from "@/components/ui/index";
+import { OverflowMenu } from "@/components/ui/menu";
+import { backend, type Member } from "@/lib/backend";
+import { plural } from "@/lib/format";
+import "@/features/members/members.css";
 
 const COLUMNS: Column[] = [
   { key: "member", label: "Member" },

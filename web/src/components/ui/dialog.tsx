@@ -1,8 +1,8 @@
 import * as Dialog from "@radix-ui/react-dialog";
 import { X } from "lucide-react";
 import { type ReactNode, useEffect, useId, useRef, useState } from "react";
-import { Button, Field, IconButton, Input } from "./index";
-import "./dialog.css";
+import { Button, Field, IconButton, Input } from "@/components/ui/index";
+import "@/components/ui/dialog.css";
 
 export function Modal({
   open,

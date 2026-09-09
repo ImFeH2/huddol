@@ -1,6 +1,6 @@
 import * as RadioGroup from "@radix-ui/react-radio-group";
 import { useId } from "react";
-import "./ui.css";
+import "@/components/ui/ui.css";
 
 export function Choices({
   label,

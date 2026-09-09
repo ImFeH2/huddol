@@ -7,7 +7,7 @@ import {
   Trash2,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { useNavigate } from "../../app/router";
+import { useNavigate } from "@/app/router";
 import {
   type Column,
   Page,
@@ -17,8 +17,8 @@ import {
   Table,
   Toolbar,
   ToolbarSpacer,
-} from "../../components/layout/shell";
-import { ConfirmDialog, PromptDialog } from "../../components/ui/dialog";
+} from "@/components/layout/shell";
+import { ConfirmDialog, PromptDialog } from "@/components/ui/dialog";
 import {
   Button,
   Chip,
@@ -26,16 +26,16 @@ import {
   EmptyState,
   IconButton,
   SearchField,
-} from "../../components/ui/index";
-import { OverflowMenu } from "../../components/ui/menu";
-import { backend, type LibraryEntry } from "../../lib/backend";
+} from "@/components/ui/index";
+import { OverflowMenu } from "@/components/ui/menu";
+import { backend, type LibraryEntry } from "@/lib/backend";
 import {
   documentFolder,
   documentName,
   formatBytes,
   plural,
-} from "../../lib/format";
-import "./library.css";
+} from "@/lib/format";
+import "@/features/library/library.css";
 
 const COLUMNS: Column[] = [
   { key: "document", label: "Document" },

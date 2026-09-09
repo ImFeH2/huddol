@@ -1,6 +1,6 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
-import { MemberPicker } from "./members";
+import { MemberPicker } from "@/features/discussions/members";
 
 function render(disabled = false) {
   return renderToStaticMarkup(

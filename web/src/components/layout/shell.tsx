@@ -1,6 +1,6 @@
 import { ArrowLeft, ChevronDown } from "lucide-react";
 import { type ReactNode, useId, useRef, useState } from "react";
-import "./shell.css";
+import "@/components/layout/shell.css";
 
 export function Shell({
   sidebar,

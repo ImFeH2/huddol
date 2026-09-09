@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import type { Member } from "../lib/backend";
+import type { Member } from "@/lib/backend";
 
 export function highlightMentions(
   body: string,

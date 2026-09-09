@@ -13,7 +13,7 @@ vi.mock("@tauri-apps/api/core", () => ({
   },
 }));
 
-const { Backend, BackendError } = await import("./backend");
+const { Backend, BackendError } = await import("@/lib/backend");
 
 function connected() {
   const backend = new Backend();

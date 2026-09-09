@@ -1,4 +1,4 @@
-import type { Backend, BackendEvent, Member } from "./backend";
+import type { Backend, BackendEvent, Member } from "@/lib/backend";
 
 type MockMessage = {
   id: number;

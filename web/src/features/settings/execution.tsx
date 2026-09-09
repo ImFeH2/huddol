@@ -1,15 +1,9 @@
 import { useCallback, useEffect, useId, useRef, useState } from "react";
-import { Page, PageBody, PageHeader } from "../../components/layout/shell";
-import { Choices } from "../../components/ui/choices";
-import {
-  Banner,
-  Button,
-  Chip,
-  Field,
-  Textarea,
-} from "../../components/ui/index";
-import { backend } from "../../lib/backend";
-import "./settings.css";
+import { Page, PageBody, PageHeader } from "@/components/layout/shell";
+import { Choices } from "@/components/ui/choices";
+import { Banner, Button, Chip, Field, Textarea } from "@/components/ui/index";
+import { backend } from "@/lib/backend";
+import "@/features/settings/settings.css";
 
 export type EnvironmentTarget =
   | { kind: "native" }

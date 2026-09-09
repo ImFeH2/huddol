@@ -1,8 +1,8 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
-import { Backend } from "../../lib/backend";
-import { createMockBackend } from "../../lib/mock";
-import { LangfusePage, langfuseUpdate } from "./langfuse";
+import { LangfusePage, langfuseUpdate } from "@/features/settings/langfuse";
+import { Backend } from "@/lib/backend";
+import { createMockBackend } from "@/lib/mock";
 
 const stored = {
   enabled: true,

@@ -1,9 +1,9 @@
 import { useEffect, useId, useState } from "react";
-import { useOrganization } from "../../app/organization";
-import { Modal } from "../../components/ui/dialog";
-import { Button, Field, Input } from "../../components/ui/index";
-import { backend } from "../../lib/backend";
-import { MemberPicker } from "./members";
+import { useOrganization } from "@/app/organization";
+import { Modal } from "@/components/ui/dialog";
+import { Button, Field, Input } from "@/components/ui/index";
+import { MemberPicker } from "@/features/discussions/members";
+import { backend } from "@/lib/backend";
 
 export function CreateDiscussionDialog({
   open,

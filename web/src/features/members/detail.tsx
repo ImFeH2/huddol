@@ -12,8 +12,8 @@ import {
   Trash2,
 } from "lucide-react";
 import { type ReactNode, useCallback, useEffect, useState } from "react";
-import { useOrganization } from "../../app/organization";
-import { useNavigate } from "../../app/router";
+import { useOrganization } from "@/app/organization";
+import { useNavigate } from "@/app/router";
 import {
   type Column,
   Page,
@@ -21,8 +21,8 @@ import {
   PageHeader,
   Section,
   Table,
-} from "../../components/layout/shell";
-import { ConfirmDialog } from "../../components/ui/dialog";
+} from "@/components/layout/shell";
+import { ConfirmDialog } from "@/components/ui/dialog";
 import {
   Avatar,
   Banner,
@@ -33,17 +33,17 @@ import {
   Meter,
   StateDot,
   StatusText,
-} from "../../components/ui/index";
-import { OverflowMenu } from "../../components/ui/menu";
+} from "@/components/ui/index";
+import { OverflowMenu } from "@/components/ui/menu";
+import { formatTime } from "@/features/mentions";
 import {
   type AgentDetail,
   type AgentRun,
   backend,
   type Todo,
-} from "../../lib/backend";
-import { formatBytes, plural, relativeTime } from "../../lib/format";
-import { formatTime } from "../mentions";
-import "./members.css";
+} from "@/lib/backend";
+import { formatBytes, plural, relativeTime } from "@/lib/format";
+import "@/features/members/members.css";
 
 const TODO_COLUMNS: Column[] = [
   { key: "todo", label: "Todo" },

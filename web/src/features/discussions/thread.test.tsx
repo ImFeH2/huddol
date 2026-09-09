@@ -1,7 +1,7 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
-import { OrganizationProvider } from "../../app/organization";
-import { MessageRow } from "./thread";
+import { OrganizationProvider } from "@/app/organization";
+import { MessageRow } from "@/features/discussions/thread";
 
 function render(pending: boolean, acknowledged: boolean, busy = false) {
   return renderToStaticMarkup(

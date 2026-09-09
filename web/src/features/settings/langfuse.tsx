@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useId, useState } from "react";
-import { Page, PageBody, PageHeader } from "../../components/layout/shell";
-import { Banner, Button, Chip, Field, Input } from "../../components/ui/index";
-import { backend } from "../../lib/backend";
-import "./settings.css";
+import { Page, PageBody, PageHeader } from "@/components/layout/shell";
+import { Banner, Button, Chip, Field, Input } from "@/components/ui/index";
+import { backend } from "@/lib/backend";
+import "@/features/settings/settings.css";
 
 export function langfuseUpdate(
   values: Record<string, unknown>,

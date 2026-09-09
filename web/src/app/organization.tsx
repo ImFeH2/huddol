@@ -1,5 +1,5 @@
 import { createContext, type ReactNode, useContext } from "react";
-import type { Member } from "../lib/backend";
+import type { Member } from "@/lib/backend";
 
 export type Organization = {
   members: Member[];

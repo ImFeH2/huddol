@@ -1,13 +1,13 @@
 import { isValidElement, type ReactElement } from "react";
 import { describe, expect, it } from "vitest";
-import type { Member } from "../lib/backend";
 import {
   candidatesFor,
   completeMention,
   highlightMentions,
   matchMembers,
   mentionQuery,
-} from "./mentions";
+} from "@/features/mentions";
+import type { Member } from "@/lib/backend";
 
 const members: Member[] = [
   { id: 1, type: "human", name: "You", state: "idle" },
