@@ -3,7 +3,7 @@ pre-commit:
   parallel: true
   jobs:
     - name: config
-      run: pnpm format:toml:check && pnpm format:yaml:check && pnpm check:config
+      run: pnpm format:config:check && pnpm check:config
 
     - name: web
       run: pnpm format:web:check && pnpm check:web && pnpm test:web
