@@ -4,10 +4,10 @@ consolidate-commits = true
 
 pre-release-commit-message = "chore: release {{version}}"
 pre-release-replacements = [
-  { file = "../package.json", search = '"version": "[^"]+"', replace = '"version": "{{version}}"', exactly = 1, prerelease = true },
-  { file = "../app/package.json", search = '"version": "[^"]+"', replace = '"version": "{{version}}"', exactly = 1, prerelease = true },
-  { file = "../web/package.json", search = '"version": "[^"]+"', replace = '"version": "{{version}}"', exactly = 1, prerelease = true },
-  { file = "../core/pyproject.toml", search = '(?m)^version = "[^"]+"', replace = 'version = "{{version}}"', exactly = 1, prerelease = true },
+  { file = "../package.json", search = '"version": "[^"]+"', replace = '"version": "{{version}}"', exactly = 1 },
+  { file = "../app/package.json", search = '"version": "[^"]+"', replace = '"version": "{{version}}"', exactly = 1 },
+  { file = "../web/package.json", search = '"version": "[^"]+"', replace = '"version": "{{version}}"', exactly = 1 },
+  { file = "../core/pyproject.toml", search = '(?m)^version = "[^"]+"', replace = 'version = "{{version}}"', exactly = 1 },
 ]
 
 tag-name = "v{{version}}"

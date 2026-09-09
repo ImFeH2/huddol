@@ -134,12 +134,7 @@ test("cargo-release synchronizes versions and stops before commit on failed chec
     const major = Number(manifest.version.split(".")[0]) + 1;
     const files = git("ls-files").split("\n");
     const snapshot = () => files.map((path) => [path, read(path)]);
-    for (const [version, pythonVersion] of [
-      [`${major}.0.0`, `${major}.0.0`],
-      [`${major}.1.0-alpha.1`, `${major}.1.0a1`],
-      [`${major}.1.0-rc.1`, `${major}.1.0rc1`],
-      [`${major}.1.0`, `${major}.1.0`],
-    ]) {
+    for (const version of [`${major}.0.0`, `${major}.1.0`]) {
       const previous = git("rev-parse", "HEAD");
       const before = snapshot();
       const tags = git("tag");
@@ -177,7 +172,7 @@ test("cargo-release synchronizes versions and stops before commit on failed chec
       }
       assert.ok(read("Cargo.toml").includes(`version = "${version}"`));
       assert.ok(read("core/pyproject.toml").includes(`version = "${version}"`));
-      assert.ok(read("core/uv.lock").includes(`version = "${pythonVersion}"`));
+      assert.ok(read("core/uv.lock").includes(`version = "${version}"`));
       for (const crate of ["app", "cli"]) {
         assert.ok(
           read("Cargo.lock").includes(
@@ -199,7 +194,7 @@ test("cargo-release synchronizes versions and stops before commit on failed chec
         git("rev-parse", `v${version}`),
       );
     }
-    assert.equal(read(".git/checks"), "check\ntest\n".repeat(4));
+    assert.equal(read(".git/checks"), "check\ntest\n".repeat(2));
     for (const check of ["check", "test"]) {
       const head = git("rev-parse", "HEAD");
       const tags = git("tag");
