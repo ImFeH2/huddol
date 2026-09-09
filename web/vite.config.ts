@@ -12,6 +12,7 @@ export default defineConfig({
       "@": fileURLToPath(new URL("./src", import.meta.url)),
     },
   },
+
   clearScreen: false,
   server: {
     port: 1420,

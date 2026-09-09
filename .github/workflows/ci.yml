@@ -73,12 +73,14 @@ jobs:
           LEFTHOOK: 0
       - name: Install Python dependencies
         run: uv sync --project core --all-groups --frozen
+      - name: Format
+        run: pnpm format:check
       - name: Check
         run: pnpm check
       - name: Test
         run: pnpm test
-      - name: Build frontend
-        run: pnpm build:frontend
+      - name: Build web
+        run: pnpm build:web
       - name: Package core
         run: pnpm build:core
       - name: Check release build

@@ -5,6 +5,7 @@ if (process.env.DRY_RUN === "true") {
 } else if (process.env.DRY_RUN === "false") {
   for (const [command, args] of [
     [binary("uv"), ["lock", "--project", "core"]],
+    [binary("pnpm"), ["format:check"]],
     [binary("pnpm"), ["check"]],
     [binary("pnpm"), ["test"]],
   ]) {
