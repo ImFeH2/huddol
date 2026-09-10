@@ -1,8 +1,14 @@
+from pathlib import PurePosixPath
+
 from PyInstaller.utils.hooks import copy_metadata
 
+from huddol.adapters.execution.wsl import COMPONENT_SOURCES
 
 datas = copy_metadata("pydantic-ai-slim", recursive=True)
-datas.append(("../artifacts/execution.pyz", "execution"))
+datas.extend(
+    (f"src/{source}", str(PurePosixPath("execution", source).parent))
+    for source in COMPONENT_SOURCES
+)
 
 
 a = Analysis(

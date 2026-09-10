@@ -3,15 +3,38 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+import sys
 import threading
 from collections.abc import Sequence
 from pathlib import Path
 from typing import IO, Any
 
-from huddol.adapters.execution.bundle import component
 from huddol.adapters.execution.worker import result_value
 from huddol.core.errors import DomainError
 from huddol.ports.execution import EditResult, RunResult
+
+COMPONENT_SOURCES = (
+    "__main__.py",
+    "huddol/__init__.py",
+    "huddol/core/__init__.py",
+    "huddol/core/errors.py",
+    "huddol/ports/__init__.py",
+    "huddol/ports/execution.py",
+    "huddol/adapters/__init__.py",
+    "huddol/adapters/sandbox/__init__.py",
+    "huddol/adapters/sandbox/paths.py",
+    "huddol/adapters/sandbox/commands.py",
+    "huddol/adapters/execution/__init__.py",
+    "huddol/adapters/execution/editing.py",
+    "huddol/adapters/execution/local.py",
+    "huddol/adapters/execution/worker.py",
+)
+
+
+def component() -> Path:
+    if getattr(sys, "frozen", False):
+        return Path(vars(sys)["_MEIPASS"]) / "execution"
+    return Path(__file__).resolve().parents[3]
 
 
 def wsl_output(arguments: Sequence[str]) -> bytes:
@@ -77,12 +100,12 @@ class WslConnection:
         with self._lock:
             if self._worker is not None:
                 return self._worker
-        archive = component()
-        if not archive.is_file():
+        directory = component()
+        if not (directory / "__main__.py").is_file():
             raise DomainError("execution_unavailable", "Execution component is missing")
         translated = (
             wsl_output(
-                ["-d", self.distribution, "--exec", "wslpath", "-u", str(archive)]
+                ["-d", self.distribution, "--exec", "wslpath", "-u", str(directory)]
             )
             .decode("utf-8")
             .strip()

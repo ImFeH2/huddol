@@ -20,9 +20,12 @@ def main(argv: list[str] | None = None) -> int:
     args = list(sys.argv[1:] if argv is None else argv)
 
     if args:
-        from huddol.adapters.execution.worker import auxiliary_main
+        if args[0] == "--windows-write-sandbox" and os.name == "nt":
+            from huddol.adapters.sandbox.windows import run_restricted_command
 
-        return auxiliary_main(args)
+            separator = args.index("--")
+            return run_restricted_command(args[1], args[separator + 1 :], os.getcwd())
+        raise SystemExit("Unknown execution mode")
 
     cast(TextIOWrapper, sys.stdin).reconfigure(encoding="utf-8", errors="strict")
     cast(TextIOWrapper, sys.stdout).reconfigure(

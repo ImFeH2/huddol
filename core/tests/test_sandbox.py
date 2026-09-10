@@ -85,11 +85,13 @@ def test_macos_command_passes_roots_as_parameters(tmp_path: Path) -> None:
     assert command[-2:] == ["--", "ls"]
 
 
-def test_windows_command_reenters_the_execution_component() -> None:
+def test_windows_command_reenters_the_kernel_entrypoint() -> None:
     command = windows_command(
-        "S-1-5-21-1-2-3", ["cmd", "/c", "echo"], [sys.executable, "-I", "execution.pyz"]
+        "S-1-5-21-1-2-3",
+        ["cmd", "/c", "echo"],
+        [sys.executable, "-I", "-m", "huddol"],
     )
-    assert command[:3] == [sys.executable, "-I", "execution.pyz"]
+    assert command[:4] == [sys.executable, "-I", "-m", "huddol"]
     assert "--windows-write-sandbox" in command
     assert command[command.index("--windows-write-sandbox") + 1] == "S-1-5-21-1-2-3"
     assert command[-3:] == ["--", "cmd", "/c"] or command[-4:] == [

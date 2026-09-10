@@ -9,16 +9,6 @@ const work = resolve(core, "build");
 
 const extension = process.platform === "win32" ? ".exe" : "";
 
-run("uv", [
-  "run",
-  "--project",
-  core,
-  "python",
-  "-m",
-  "huddol.adapters.execution.bundle",
-  resolve(root, "artifacts", "execution.pyz"),
-]);
-
 run(
   "uv",
   [

@@ -9,7 +9,6 @@ import threading
 from dataclasses import asdict
 from typing import Any
 
-from huddol.adapters.execution.editing import edit_file
 from huddol.adapters.execution.local import LocalExecution
 from huddol.core.errors import DomainError
 
@@ -56,27 +55,7 @@ def host_path(value: str) -> str:
     return value
 
 
-def edit_main() -> int:
-    _reply(
-        lambda: asdict(edit_file(**json.loads(sys.stdin.buffer.read().decode("utf-8"))))
-    )
-    return 0
-
-
-def auxiliary_main(args: list[str]) -> int:
-    if args == ["--execution-edit"]:
-        return edit_main()
-    if args and args[0] == "--windows-write-sandbox" and os.name == "nt":
-        from huddol.adapters.sandbox.windows import run_restricted_command
-
-        separator = args.index("--")
-        return run_restricted_command(args[1], args[separator + 1 :], os.getcwd())
-    raise SystemExit("Unknown execution mode")
-
-
 def main() -> int:
-    if sys.argv[1:]:
-        return auxiliary_main(sys.argv[1:])
     if not sys.platform.startswith("linux"):
         raise SystemExit("The execution worker requires Linux")
     environment: LocalExecution | None = None

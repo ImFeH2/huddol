@@ -288,14 +288,6 @@ def _change_ace(
             _kernel.LocalFree(descriptor)
 
 
-def allow_component_read(path: Path) -> None:
-    sid = _sid_pointer("S-1-1-0")
-    try:
-        _change_ace(path, sid, SET_ACCESS, 0x120089 | 0x1200A0)
-    finally:
-        _kernel.LocalFree(sid)
-
-
 def _change_user_object_ace(
     handle: wintypes.HANDLE,
     sid: ctypes.c_void_p,

@@ -1,17 +1,16 @@
 from __future__ import annotations
 
+import shutil
 import subprocess
 import sys
 import time
-import zipfile
 from pathlib import Path
 
 import pytest
 
-from huddol.adapters.execution.bundle import build
-from huddol.adapters.execution.local import LocalExecution
+from huddol.adapters.execution.local import LocalExecution, entrypoint
 from huddol.adapters.execution.manager import ExecutionManager
-from huddol.adapters.execution.wsl import WslConnection
+from huddol.adapters.execution.wsl import COMPONENT_SOURCES, WslConnection, component
 from huddol.core.errors import DomainError
 
 
@@ -23,23 +22,30 @@ def isolated_business_data(tmp_path: Path, monkeypatch):
     assert not directory.exists()
 
 
+def staged_component(destination: Path) -> Path:
+    for source in COMPONENT_SOURCES:
+        target = destination / source
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy(component() / source, target)
+    return destination
+
+
 @pytest.mark.skipif(not sys.platform.startswith("linux"), reason="Linux execution")
 def test_worker_reuses_linux_run_edit_and_sandbox_without_business_services(
     tmp_path: Path, monkeypatch
 ) -> None:
-    archive = build(tmp_path / "component 中文 space.pyz")
-    with zipfile.ZipFile(archive) as contents:
-        names = contents.namelist()
     assert not any(
-        "sqlite" in name or "model" in name or "scheduler" in name for name in names
+        "sqlite" in source or "model" in source or "scheduler" in source
+        for source in COMPONENT_SOURCES
     )
+    staged = staged_component(tmp_path / "component 中文 space")
     allowed = tmp_path / "allowed"
     allowed.mkdir()
     outside = tmp_path / "outside.txt"
     outside.write_text("private", encoding="utf-8")
     connection = WslConnection("test", tmp_path, [str(allowed)])
     monkeypatch.setattr(
-        connection, "_command", lambda: [sys.executable, "-I", str(archive)]
+        connection, "_command", lambda: [sys.executable, "-I", str(staged)]
     )
     try:
         connection.inspect()
@@ -71,7 +77,7 @@ def test_worker_reuses_linux_run_edit_and_sandbox_without_business_services(
         assert outside.read_text() == "private"
         candidate = WslConnection("test", tmp_path, [])
         monkeypatch.setattr(
-            candidate, "_command", lambda: [sys.executable, "-I", str(archive)]
+            candidate, "_command", lambda: [sys.executable, "-I", str(staged)]
         )
         candidate.inspect()
         connection.apply_configuration(candidate)
@@ -119,7 +125,6 @@ def test_timeout_does_not_leave_a_linux_descendant_writing_later(
 def test_worker_pipe_closure_ends_the_linux_command(tmp_path: Path) -> None:
     import json
 
-    archive = build(tmp_path / "execution.pyz")
     marker = tmp_path / "late"
     started = tmp_path / "started"
     request = {
@@ -138,7 +143,7 @@ def test_worker_pipe_closure_ends_the_linux_command(tmp_path: Path) -> None:
         },
     }
     process = subprocess.Popen(
-        [sys.executable, "-I", str(archive)],
+        [sys.executable, "-I", str(component())],
         stdin=subprocess.PIPE,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
@@ -166,12 +171,11 @@ def test_worker_pipe_closure_ends_the_linux_command(tmp_path: Path) -> None:
 def test_wsl_reinspection_keeps_unusable_directory_diagnostics(
     tmp_path: Path, monkeypatch
 ) -> None:
-    archive = build(tmp_path / "execution.pyz")
     connection = WslConnection(
         "test", tmp_path, [str(tmp_path), "relative/bad"], tolerant=True
     )
     monkeypatch.setattr(
-        connection, "_command", lambda: [sys.executable, "-I", str(archive)]
+        connection, "_command", lambda: [sys.executable, "-I", str(component())]
     )
     try:
         connection.inspect()
@@ -182,7 +186,7 @@ def test_wsl_reinspection_keeps_unusable_directory_diagnostics(
         assert connection.run(["/bin/true"]).exit_code == 0
         candidate = WslConnection("test", tmp_path, [str(tmp_path)])
         monkeypatch.setattr(
-            candidate, "_command", lambda: [sys.executable, "-I", str(archive)]
+            candidate, "_command", lambda: [sys.executable, "-I", str(component())]
         )
         candidate.inspect()
         connection.apply_configuration(candidate)
@@ -263,56 +267,18 @@ def test_execution_helpers_ignore_other_business_modules_on_pythonpath(
         result = environment.run([sys.executable, "-c", "print('command-ok')"])
         assert result.exit_code == 0 and "command-ok" in result.stdout
         assert target.read_text() == "after"
-        assert not marker.exists()
     finally:
         environment.close()
-
-
-@pytest.mark.skipif(sys.platform != "win32", reason="Windows component permissions")
-def test_native_component_is_not_writable_by_the_restricted_command(
-    tmp_path: Path,
-) -> None:
-    from huddol.adapters.execution.local import entrypoint
-
-    environment = LocalExecution(tmp_path, [str(tmp_path)])
-    try:
-        component = Path(entrypoint()[-1])
-        original = component.read_bytes()
-        result = environment.run(
-            [
-                sys.executable,
-                "-c",
-                "from pathlib import Path; import sys; Path(sys.argv[1]).write_bytes(b'changed')",
-                str(component),
-            ]
-        )
-        assert result.exit_code != 0
-        assert component.read_bytes() == original
-    finally:
-        environment.close()
-
-
-def test_execution_component_is_shared_and_needs_no_per_instance_cleanup(
-    tmp_path: Path,
-) -> None:
-    import gc
-
-    from huddol.adapters.execution.local import entrypoint
-
-    allowed = tmp_path / "allowed"
-    allowed.mkdir()
-    outside = tmp_path / "outside.txt"
-    outside.write_text("private", encoding="utf-8")
-    environment = LocalExecution(tmp_path, [str(allowed)])
-    with pytest.raises(DomainError) as error:
-        environment.edit(str(outside), "private", "changed")
-    assert error.value.code == "not_writable"
-    component = Path(entrypoint()[-1])
-    assert component.is_file()
-    del environment
-    gc.collect()
-    assert component.is_file()
-    assert Path(entrypoint()[-1]) == component
+    reentered = subprocess.run(
+        [*entrypoint(), "--windows-write-sandbox", "S-1-5-21-1-2-3", "--", "true"],
+        capture_output=True,
+        timeout=60,
+        check=False,
+    )
+    assert not marker.exists()
+    if sys.platform != "win32":
+        assert reentered.returncode != 0
+        assert b"Unknown execution mode" in reentered.stderr
 
 
 def test_reconfiguration_reuses_the_same_execution_instance(tmp_path: Path) -> None:

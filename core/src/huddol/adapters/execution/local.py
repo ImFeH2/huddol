@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import os
 import signal
 import subprocess
@@ -13,7 +12,6 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from huddol.adapters.sandbox.windows import WindowsWriteAccess
 
-from huddol.adapters.execution.bundle import component
 from huddol.adapters.execution.editing import edit_file
 from huddol.adapters.sandbox.commands import (
     linux_command,
@@ -31,7 +29,7 @@ DEFAULT_TIMEOUT = 120
 def entrypoint() -> list[str]:
     if getattr(sys, "frozen", False):
         return [sys.executable]
-    return [sys.executable, "-I", str(component())]
+    return [sys.executable, "-I", "-m", "huddol"]
 
 
 class LocalExecution:
@@ -196,34 +194,11 @@ class LocalExecution:
     def edit(
         self, path: str, old_text: str, new_text: str, *, replace_all: bool = False
     ) -> EditResult:
-        if not self._enforce:
-            return edit_file(
-                path,
-                old_text,
-                new_text,
-                root=self.root,
-                directories=list(self.write_directories),
-                replace_all=replace_all,
-            )
-        values = {
-            "path": path,
-            "old_text": old_text,
-            "new_text": new_text,
-            "root": self.root,
-            "directories": list(self.write_directories),
-            "replace_all": replace_all,
-        }
-        code, output, errors = self._execute(
-            [*entrypoint(), "--execution-edit"],
-            None,
-            None,
-            json.dumps(values, ensure_ascii=False).encode("utf-8"),
+        return edit_file(
+            path,
+            old_text,
+            new_text,
+            root=self.root,
+            directories=list(self.write_directories),
+            replace_all=replace_all,
         )
-        if code != 0:
-            raise DomainError(
-                "edit_failed",
-                errors.decode("utf-8", "replace")[:2000] or "File editor failed",
-            )
-        from huddol.adapters.execution.worker import result_value
-
-        return EditResult(**result_value(output))
