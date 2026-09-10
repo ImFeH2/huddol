@@ -439,21 +439,34 @@ fn diagnostic_request_id(message: &Value) -> Option<u64> {
 
 fn diagnostic_method(message: &Value) -> &'static str {
     match message.get("method").and_then(Value::as_str) {
+        Some("ping") => "ping",
         Some("organization.get") => "organization.get",
         Some("organization.create_agent") => "organization.create_agent",
-        Some("organization.delete_agent") => "organization.delete_agent",
+        Some("organization.rename_member") => "organization.rename_member",
         Some("organization.pause_agent") => "organization.pause_agent",
         Some("organization.resume_agent") => "organization.resume_agent",
-        Some("agent.history.get") => "agent.history.get",
+        Some("organization.delete_agent") => "organization.delete_agent",
         Some("discussion.create") => "discussion.create",
-        Some("discussion.delete") => "discussion.delete",
+        Some("discussion.list") => "discussion.list",
+        Some("discussion.read") => "discussion.read",
         Some("discussion.send") => "discussion.send",
-        Some("settings.get_execution") => "settings.get_execution",
-        Some("settings.update_execution") => "settings.update_execution",
-        Some("settings.get_model") => "settings.get_model",
-        Some("settings.update_model") => "settings.update_model",
-        Some("settings.get_observability") => "settings.get_observability",
-        Some("settings.update_observability") => "settings.update_observability",
+        Some("discussion.ack") => "discussion.ack",
+        Some("discussion.revoke_ack") => "discussion.revoke_ack",
+        Some("discussion.set_members") => "discussion.set_members",
+        Some("discussion.add_members") => "discussion.add_members",
+        Some("discussion.remove_members") => "discussion.remove_members",
+        Some("discussion.archive") => "discussion.archive",
+        Some("discussion.unarchive") => "discussion.unarchive",
+        Some("discussion.delete") => "discussion.delete",
+        Some("discussion.search") => "discussion.search",
+        Some("library.list") => "library.list",
+        Some("library.read") => "library.read",
+        Some("library.write") => "library.write",
+        Some("library.delete") => "library.delete",
+        Some("library.move") => "library.move",
+        Some("agent.detail") => "agent.detail",
+        Some("settings.get") => "settings.get",
+        Some("settings.update") => "settings.update",
         Some("system.shutdown") => "system.shutdown",
         _ => "unknown",
     }
@@ -575,8 +588,8 @@ mod tests {
     #[test]
     fn logs_only_known_request_method_names() {
         assert_eq!(
-            diagnostic_method(&json!({"method": "discussion.send"})),
-            "discussion.send"
+            diagnostic_method(&json!({"method": "settings.get"})),
+            "settings.get"
         );
         assert_eq!(
             diagnostic_method(&json!({"method": "private request content"})),
