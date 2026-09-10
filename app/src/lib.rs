@@ -101,27 +101,22 @@ mod tests {
     fn startup_windows_are_shown_without_activation() {
         let config: serde_json::Value =
             serde_json::from_str(include_str!("../tauri.conf.json")).unwrap();
-        let window = &config["app"]["windows"][0];
+        let window: tauri::utils::config::WindowConfig =
+            serde_json::from_value(config["app"]["windows"][0].clone()).unwrap();
 
-        assert_eq!(
-            window["visible"], false,
+        assert!(
+            !window.visible,
             "the window must be created hidden before its first show"
         );
-        assert_eq!(window["focus"], false, "the window must not activate");
-        assert_eq!(
-            window["focusable"], true,
+        assert!(!window.focus, "the window must not activate");
+        assert!(
+            window.focusable,
             "the window must remain activatable by a Human click"
         );
-        assert_eq!(
-            window["alwaysOnTop"], false,
-            "the window must not be topmost"
-        );
-        assert_eq!(
-            window["maximized"], false,
-            "the window must not start maximized"
-        );
-        assert_eq!(
-            window["skipTaskbar"], false,
+        assert!(!window.always_on_top, "the window must not be topmost");
+        assert!(!window.maximized, "the window must not start maximized");
+        assert!(
+            !window.skip_taskbar,
             "the window must appear in the taskbar"
         );
     }
