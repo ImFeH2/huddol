@@ -12,13 +12,7 @@
   "app": {
     "windows": [
       {
-        "title": "Huddol",
-        "width": 1360,
-        "height": 860,
-        "minWidth": 960,
-        "minHeight": 680,
-        "visible": false,
-        "focus": false
+        "title": "Huddol"
       }
     ],
     "security": {

@@ -49,15 +49,8 @@ pub fn run() {
                     .set_startup_error(error.to_string());
             }
 
-            // Create the window hidden so the first show can preserve the existing foreground
-            // application. With `focus: false`, Tauri uses a non-activating first show on Windows.
-            let main_window = app
-                .get_webview_window("main")
-                .ok_or_else(|| std::io::Error::other("main window is unavailable"))?;
             if app.state::<ActivationState>().finish_startup() {
                 activate_main_window(app.handle());
-            } else {
-                main_window.show()?;
             }
             Ok(())
         })
@@ -95,29 +88,5 @@ mod tests {
         let shell = source.find(".plugin(tauri_plugin_shell::init").unwrap();
 
         assert!(single_instance < shell);
-    }
-
-    #[test]
-    fn startup_windows_are_shown_without_activation() {
-        let config: serde_json::Value =
-            serde_json::from_str(include_str!("../tauri.conf.json")).unwrap();
-        let window: tauri::utils::config::WindowConfig =
-            serde_json::from_value(config["app"]["windows"][0].clone()).unwrap();
-
-        assert!(
-            !window.visible,
-            "the window must be created hidden before its first show"
-        );
-        assert!(!window.focus, "the window must not activate");
-        assert!(
-            window.focusable,
-            "the window must remain activatable by a Human click"
-        );
-        assert!(!window.always_on_top, "the window must not be topmost");
-        assert!(!window.maximized, "the window must not start maximized");
-        assert!(
-            !window.skip_taskbar,
-            "the window must appear in the taskbar"
-        );
     }
 }
