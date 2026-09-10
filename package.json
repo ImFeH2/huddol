@@ -28,7 +28,7 @@
     "format:rust": "cargo fmt",
     "format:rust:check": "cargo fmt --check",
     "check": "pnpm check:config && pnpm check:web && pnpm check:core && pnpm check:rust",
-    "check:config": "actionlint && pnpm exec lefthook validate",
+    "check:config": "tombi lint && actionlint && pnpm exec lefthook validate",
     "check:web": "pnpm exec biome check --formatter-enabled=false . && pnpm --dir web check",
     "check:core": "uv run --directory core ruff check . && uv run --directory core mypy src/huddol && uv run --directory core lint-imports",
     "check:rust": "node scripts/cargo.mjs check && node scripts/cargo.mjs clippy --all-targets -- -D warnings",

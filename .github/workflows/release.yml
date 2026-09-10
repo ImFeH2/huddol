@@ -68,7 +68,6 @@ jobs:
         with:
           toolchain: stable
           rustflags: ""
-          cache-workspaces: . -> target
 
       - name: Install Linux dependencies
         if: runner.os == 'Linux'
@@ -132,7 +131,6 @@ jobs:
         with:
           toolchain: stable
           rustflags: ""
-          cache-workspaces: . -> target
 
       - name: Build CLI
         run: cargo build -p huddol-cli --bin huddol-cli --release --locked

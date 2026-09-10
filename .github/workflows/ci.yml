@@ -41,29 +41,6 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v7
 
-      - name: Set up pnpm
-        uses: pnpm/action-setup@v6
-
-      - name: Set up Node
-        uses: actions/setup-node@v7
-        with:
-          node-version: 24
-          cache: pnpm
-
-      - name: Set up uv
-        uses: astral-sh/setup-uv@v10.0.1
-        with:
-          enable-cache: true
-          cache-dependency-glob: core/uv.lock
-
-      - name: Set up Rust
-        uses: actions-rust-lang/setup-rust-toolchain@v1
-        with:
-          toolchain: stable
-          components: rustfmt,clippy
-          rustflags: ""
-          cache-workspaces: . -> target
-
       - name: Install Linux dependencies
         if: runner.os == 'Linux'
         run: |
@@ -79,6 +56,28 @@ jobs:
       - name: Enable sandbox support
         if: runner.os == 'Linux'
         run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+
+      - name: Set up Rust
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: stable
+          components: rustfmt,clippy
+          rustflags: ""
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v6
+
+      - name: Set up Node
+        uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v10.0.1
+        with:
+          enable-cache: true
+          cache-dependency-glob: core/uv.lock
 
       - name: Install actionlint
         shell: bash
