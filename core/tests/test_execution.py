@@ -159,7 +159,7 @@ def test_worker_pipe_closure_ends_the_linux_command(tmp_path: Path) -> None:
     finally:
         if process.poll() is None:
             process.kill()
-            process.communicate()
+        process.communicate()
 
 
 @pytest.mark.skipif(not sys.platform.startswith("linux"), reason="Linux execution")

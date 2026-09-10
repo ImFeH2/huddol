@@ -60,6 +60,9 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y bubblewrap libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf xdg-utils
+      - name: Enable sandbox support
+        if: runner.os == 'Linux'
+        run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
       - name: Install actionlint
         shell: bash
         run: |
