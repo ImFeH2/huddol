@@ -1,7 +1,7 @@
 {
   "name": "huddol-web",
   "version": "0.0.0",
-  "description": "Huddol web frontend.",
+  "description": "Run your own organization of agents.",
   "private": true,
   "type": "module",
   "scripts": {

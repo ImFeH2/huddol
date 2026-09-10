@@ -1,7 +1,7 @@
 {
   "name": "huddol-app",
   "version": "0.0.0",
-  "description": "Huddol desktop app.",
+  "description": "Run your own organization of agents.",
   "private": true,
   "type": "module",
   "devDependencies": {
