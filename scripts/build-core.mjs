@@ -1,26 +1,11 @@
-import { spawnSync } from "node:child_process";
 import { cpSync, rmSync } from "node:fs";
 import { resolve } from "node:path";
-import { root } from "./process.mjs";
+import { root, run } from "./process.mjs";
 
 const core = resolve(root, "core");
 const bundled = resolve(root, "app", "core");
 const dist = resolve(core, "dist");
 const work = resolve(core, "build");
-
-function run(command, args, options = {}) {
-  const result = spawnSync(command, args, {
-    cwd: root,
-    stdio: "inherit",
-    ...options,
-  });
-  if (result.error) {
-    throw result.error;
-  }
-  if (result.status !== 0) {
-    throw new Error(`${command} exited with status ${result.status}`);
-  }
-}
 
 const extension = process.platform === "win32" ? ".exe" : "";
 

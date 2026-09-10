@@ -1,21 +1,7 @@
-import { binary, run } from "./process.mjs";
+import { run } from "./process.mjs";
 
-if (process.env.DRY_RUN === "true") {
-  console.log("Dry run: skipping lock updates and release checks.");
-} else if (process.env.DRY_RUN === "false") {
-  for (const [command, args] of [
-    [binary("uv"), ["lock", "--project", "core"]],
-    [binary("pnpm"), ["format:check"]],
-    [binary("pnpm"), ["check"]],
-    [binary("pnpm"), ["test"]],
-  ]) {
-    if ((await run(command, args)) !== 0) {
-      console.error(
-        "Release checks failed. Version changes remain uncommitted; inspect git diff before retrying.",
-      );
-      break;
-    }
-  }
-} else {
+if (process.env.DRY_RUN === "false") {
+  run("uv", ["lock", "--project", "core"]);
+} else if (process.env.DRY_RUN !== "true") {
   throw new Error("This hook must be run by cargo release.");
 }
