@@ -8,8 +8,10 @@
   "scripts": {
     "dev": "pnpm --dir app exec tauri dev",
     "dev:release": "pnpm --dir app exec tauri dev --release",
+    "build": "pnpm build:cli && pnpm build:app --debug --no-bundle --ci",
     "build:web": "pnpm --dir web build",
     "build:core": "node scripts/build-core.mjs",
+    "build:cli": "cargo build -p huddol-cli --bin huddol-cli --locked",
     "build:app": "pnpm --dir app exec tauri build",
     "format": "pnpm format:config && pnpm format:web && pnpm format:core && pnpm format:rust",
     "format:check": "pnpm format:config:check && pnpm format:web:check && pnpm format:core:check && pnpm format:rust:check",

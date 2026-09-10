@@ -105,11 +105,5 @@ jobs:
       - name: Test
         run: pnpm test
 
-      - name: Build web
-        run: pnpm build:web
-
-      - name: Package core
-        run: pnpm build:core
-
-      - name: Check release build
-        run: cargo check --release
+      - name: Build
+        run: pnpm build
