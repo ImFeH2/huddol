@@ -29,76 +29,11 @@ dev = [
 requires = ["uv_build>=0.11.16,<0.12.0"]
 build-backend = "uv_build"
 
-[tool.importlinter]
-root_package = "huddol"
-include_external_packages = true
-
-[[tool.importlinter.contracts]]
-name = "Layers run one way only"
-type = "layers"
-layers = [
-  "huddol.adapters",
-  "huddol.runtime",
-  "huddol.tools",
-  "huddol.services",
-  "huddol.ports",
-  "huddol.core",
-]
-
-[[tool.importlinter.contracts]]
-name = "Services do not know about each other"
-type = "independence"
-modules = [
-  "huddol.services.todo",
-  "huddol.services.memory",
-  "huddol.services.library",
-  "huddol.services.history",
-]
-
-[[tool.importlinter.contracts]]
-name = "Only adapters know the model runtime"
-type = "forbidden"
-source_modules = [
-  "huddol.core",
-  "huddol.ports",
-  "huddol.services",
-  "huddol.tools",
-  "huddol.runtime",
-]
-forbidden_modules = ["pydantic_ai"]
-
-[[tool.importlinter.contracts]]
-name = "Only adapters touch storage and the network"
-type = "forbidden"
-source_modules = [
-  "huddol.core",
-  "huddol.services",
-  "huddol.tools",
-  "huddol.runtime",
-]
-forbidden_modules = ["sqlite3", "httpx", "subprocess"]
-
-[[tool.importlinter.contracts]]
-name = "Core is self contained"
-type = "forbidden"
-source_modules = ["huddol.core"]
-forbidden_modules = [
-  "huddol.ports",
-  "huddol.services",
-  "huddol.tools",
-  "huddol.runtime",
-  "huddol.adapters",
-]
-
 [tool.mypy]
 python_version = "3.13"
 plugins = ["pydantic.mypy"]
 warn_unused_configs = true
-show_error_codes = true
 
 [[tool.mypy.overrides]]
 module = ["huddol.adapters.sandbox.windows"]
 disable_error_code = ["attr-defined", "name-defined"]
-
-[tool.pytest.ini_options]
-pythonpath = ["."]
