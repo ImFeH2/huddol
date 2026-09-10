@@ -17,7 +17,7 @@ concurrency:
 
 jobs:
   ci:
-    name: Check (${{ matrix.name }})
+    name: CI (${{ matrix.name }})
     strategy:
       fail-fast: false
       matrix:
@@ -33,21 +33,26 @@ jobs:
     runs-on: ${{ matrix.os }}
     env:
       TAURI_CONFIG: '{"bundle":{"externalBin":[]}}'
+
     steps:
       - name: Checkout
         uses: actions/checkout@v7
+
       - name: Set up pnpm
         uses: pnpm/action-setup@v6
+
       - name: Set up Node
         uses: actions/setup-node@v7
         with:
           node-version: 24
           cache: pnpm
+
       - name: Set up uv
         uses: astral-sh/setup-uv@v10.0.1
         with:
           enable-cache: true
           cache-dependency-glob: core/uv.lock
+
       - name: Set up Rust
         uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
@@ -55,14 +60,23 @@ jobs:
           components: rustfmt,clippy
           rustflags: ""
           cache-workspaces: . -> target
+
       - name: Install Linux dependencies
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y bubblewrap libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf xdg-utils
+          sudo apt-get install -y \
+            bubblewrap \
+            libappindicator3-dev \
+            librsvg2-dev \
+            libwebkit2gtk-4.1-dev \
+            patchelf \
+            xdg-utils
+
       - name: Enable sandbox support
         if: runner.os == 'Linux'
         run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+
       - name: Install actionlint
         shell: bash
         run: |
@@ -70,21 +84,29 @@ jobs:
           curl -fsSL https://raw.githubusercontent.com/rhysd/actionlint/v1.7.12/scripts/download-actionlint.bash -o "$RUNNER_TEMP/download-actionlint.bash"
           bash "$RUNNER_TEMP/download-actionlint.bash" 1.7.12 "$RUNNER_TEMP/actionlint"
           echo "$RUNNER_TEMP/actionlint" >> "$GITHUB_PATH"
+
       - name: Install frontend dependencies
         run: pnpm install --frozen-lockfile
         env:
           LEFTHOOK: 0
+
       - name: Install Python dependencies
         run: uv sync --project core --all-groups --frozen
+
       - name: Format
         run: pnpm format:check
+
       - name: Check
         run: pnpm check
+
       - name: Test
         run: pnpm test
+
       - name: Build web
         run: pnpm build:web
+
       - name: Package core
         run: pnpm build:core
+
       - name: Check release build
         run: cargo check --release

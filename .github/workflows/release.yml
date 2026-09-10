@@ -12,18 +12,21 @@ concurrency:
   group: release-${{ github.ref }}
   cancel-in-progress: false
 
+env:
+  GH_REPO: ${{ github.repository }}
+
+defaults:
+  run:
+    shell: bash
+
 jobs:
   ci:
-    name: Run CI
+    name: CI
     uses: ./.github/workflows/ci.yml
-    permissions:
-      contents: read
 
-  build:
-    name: Build release (${{ matrix.name }})
+  app:
+    name: App (${{ matrix.name }})
     needs: ci
-    permissions:
-      contents: write
     strategy:
       fail-fast: false
       matrix:
@@ -37,39 +40,56 @@ jobs:
           - name: macOS x64
             os: macos-15-intel
     runs-on: ${{ matrix.os }}
+    permissions:
+      contents: write
+
     steps:
       - name: Checkout
         uses: actions/checkout@v7
+
       - name: Set up pnpm
         uses: pnpm/action-setup@v6
+
       - name: Set up Node
         uses: actions/setup-node@v7
         with:
           node-version: 24
           cache: pnpm
+
       - name: Set up uv
         uses: astral-sh/setup-uv@v10.0.1
         with:
           enable-cache: true
           cache-dependency-glob: core/uv.lock
+
       - name: Set up Rust
         uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
           toolchain: stable
           rustflags: ""
           cache-workspaces: . -> target
+
       - name: Install Linux dependencies
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y bubblewrap libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf xdg-utils
+          sudo apt-get install -y \
+            bubblewrap \
+            libappindicator3-dev \
+            librsvg2-dev \
+            libwebkit2gtk-4.1-dev \
+            patchelf \
+            xdg-utils
+
       - name: Install frontend dependencies
         run: pnpm install --frozen-lockfile
         env:
           LEFTHOOK: 0
+
       - name: Install Python dependencies
         run: uv sync --project core --all-groups --frozen
-      - name: Build and upload release
+
+      - name: Build and upload app
         uses: tauri-apps/tauri-action@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -78,13 +98,10 @@ jobs:
           tagName: ${{ github.ref_name }}
           releaseName: Huddol ${{ github.ref_name }}
           releaseDraft: true
-          prerelease: ${{ contains(github.ref_name, '-') }}
 
   cli:
-    name: Build CLI (${{ matrix.name }})
-    needs: build
-    permissions:
-      contents: write
+    name: CLI (${{ matrix.name }})
+    needs: app
     strategy:
       fail-fast: false
       matrix:
@@ -102,24 +119,30 @@ jobs:
             os: macos-15-intel
             platform: macos-x64
     runs-on: ${{ matrix.os }}
+    permissions:
+      contents: write
+
     steps:
       - name: Checkout
         uses: actions/checkout@v7
+
       - name: Set up Rust
         uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
           toolchain: stable
           rustflags: ""
           cache-workspaces: . -> target
+
       - name: Build CLI
         run: cargo build -p huddol-cli --bin huddol-cli --release --locked
+
       - name: Archive CLI
         if: runner.os != 'Windows'
-        shell: bash
         run: |
           mkdir -p release
           tar -czf "release/huddol-cli-${GITHUB_REF_NAME}-${{ matrix.platform }}.tar.gz" \
             -C target/release huddol-cli
+
       - name: Archive CLI for Windows
         if: runner.os == 'Windows'
         shell: pwsh
@@ -128,20 +151,21 @@ jobs:
           Compress-Archive `
             -Path target/release/huddol-cli.exe `
             -DestinationPath "release/huddol-cli-${env:GITHUB_REF_NAME}-${{ matrix.platform }}.zip"
+
       - name: Upload CLI
-        shell: bash
-        run: gh release upload "$GITHUB_REF_NAME" release/* --repo "$GITHUB_REPOSITORY" --clobber
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release upload "$GITHUB_REF_NAME" release/* --clobber
 
   publish:
-    name: Publish release
+    name: Publish
     needs: cli
+    runs-on: ubuntu-latest
     permissions:
       contents: write
-    runs-on: ubuntu-latest
+
     steps:
       - name: Publish release
-        run: gh release edit "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --draft=false
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release edit "$GITHUB_REF_NAME" --draft=false
