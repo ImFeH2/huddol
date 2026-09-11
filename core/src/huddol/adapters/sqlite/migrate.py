@@ -8,6 +8,7 @@ from collections.abc import Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from huddol.adapters.execution.manager import environment_key
 from huddol.adapters.files.tree import MarkdownTree
 from huddol.adapters.sqlite.agent import SqliteAgentStore
 from huddol.adapters.sqlite.store import SqliteStore
@@ -284,7 +285,18 @@ def migrate(legacy_dir: Path, target_dir: Path) -> Report:
         if "path" in list(row.keys())
     ]
     if directories:
-        agent_store.set_write_directories(directories)
+        execution = agent_store.get_settings("execution") or {}
+        agent_store.set_settings(
+            "execution",
+            {
+                **execution,
+                "directories": {
+                    environment_key({"kind": "native"}): list(
+                        dict.fromkeys(directories)
+                    )
+                },
+            },
+        )
     report.record("settings_sections", 3)
     report.record("write_directories", len(directories))
 

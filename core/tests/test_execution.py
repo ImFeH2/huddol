@@ -200,7 +200,9 @@ def test_wsl_reinspection_keeps_unusable_directory_diagnostics(
 def test_environment_identity_is_bound_but_its_directory_policy_updates(
     tmp_path: Path, monkeypatch
 ) -> None:
-    manager = ExecutionManager(tmp_path, [str(tmp_path)], enforce=False)
+    manager = ExecutionManager(
+        tmp_path, settings={"directories": {"native": [str(tmp_path)]}}, enforce=False
+    )
     first = manager.snapshot()
     allowed = tmp_path / "allowed"
     allowed.mkdir()
@@ -232,7 +234,9 @@ def test_environment_identity_is_bound_but_its_directory_policy_updates(
 def test_failed_persistence_does_not_switch_execution_or_directories(
     tmp_path: Path,
 ) -> None:
-    manager = ExecutionManager(tmp_path, [str(tmp_path)], enforce=False)
+    manager = ExecutionManager(
+        tmp_path, settings={"directories": {"native": [str(tmp_path)]}}, enforce=False
+    )
     bound = manager.snapshot()
 
     def fail(values):
@@ -282,27 +286,113 @@ def test_execution_helpers_ignore_other_business_modules_on_pythonpath(
 
 
 def test_reconfiguration_reuses_the_same_execution_instance(tmp_path: Path) -> None:
-    manager = ExecutionManager(tmp_path, [str(tmp_path)], enforce=False)
-    original = manager._environments[("native", "")]
+    manager = ExecutionManager(
+        tmp_path, settings={"directories": {"native": [str(tmp_path)]}}, enforce=False
+    )
+    original = manager._environments["native"]
     try:
         for directories in ([], [str(tmp_path)], []):
             manager.configure({"write_directories": directories}, lambda values: None)
-            assert manager._environments[("native", "")] is original
+            assert manager._environments["native"] is original
             assert manager.snapshot().write_directories == tuple(directories)
         assert len(manager._environments) == 1
     finally:
         manager.close()
 
 
+def test_each_environment_keeps_its_own_write_directories(
+    tmp_path: Path, monkeypatch
+) -> None:
+    native_directory = tmp_path / "native"
+    wsl_directory = tmp_path / "wsl"
+    native_directory.mkdir()
+    wsl_directory.mkdir()
+    manager = ExecutionManager(tmp_path, enforce=False)
+    original = manager._create
+
+    def create(target, directories, *, tolerant=False):
+        if target["kind"] == "wsl":
+            return LocalExecution(tmp_path, directories, enforce=False)
+        return original(target, directories, tolerant=tolerant)
+
+    monkeypatch.setattr(manager, "_create", create)
+    saved = []
+    try:
+        manager.configure({"write_directories": [str(native_directory)]}, saved.append)
+        manager.configure(
+            {
+                "environment": {"kind": "wsl", "distribution": "test"},
+                "write_directories": [str(wsl_directory)],
+            },
+            saved.append,
+        )
+        assert manager.snapshot().write_directories == (str(wsl_directory),)
+
+        status = manager.configure({"environment": {"kind": "native"}}, saved.append)
+        assert manager.snapshot().write_directories == (str(native_directory),)
+        assert status["write_directories"] == [str(native_directory)]
+        assert status["directories"] == {
+            "native": [str(native_directory)],
+            "wsl:test": [str(wsl_directory)],
+        }
+        assert saved[-1] == {
+            "environment": {"kind": "native"},
+            "directories": status["directories"],
+        }
+
+        manager.configure(
+            {"environment": {"kind": "wsl", "distribution": "test"}}, saved.append
+        )
+        assert manager.snapshot().write_directories == (str(wsl_directory),)
+    finally:
+        manager.close()
+
+
+def test_changing_the_current_directories_leaves_other_environments_alone(
+    tmp_path: Path, monkeypatch
+) -> None:
+    native_directory = tmp_path / "native"
+    replacement = tmp_path / "replacement"
+    native_directory.mkdir()
+    replacement.mkdir()
+    manager = ExecutionManager(
+        tmp_path,
+        settings={
+            "environment": {"kind": "native"},
+            "directories": {
+                "native": [str(native_directory)],
+                "wsl:test": ["/mnt/c/elsewhere"],
+            },
+        },
+        enforce=False,
+    )
+    try:
+        status = manager.configure(
+            {"write_directories": [str(replacement)]}, lambda values: None
+        )
+        assert status["environment"] == {"kind": "native"}
+        assert status["write_directories"] == [str(replacement)]
+        assert status["directories"] == {
+            "native": [str(replacement)],
+            "wsl:test": ["/mnt/c/elsewhere"],
+        }
+    finally:
+        manager.close()
+
+
 def test_execution_status_reports_configuration_and_diagnostics(tmp_path: Path) -> None:
     manager = ExecutionManager(
-        tmp_path, [str(tmp_path), "relative/bad"], enforce=False, tolerant=True
+        tmp_path,
+        settings={"directories": {"native": [str(tmp_path), "relative/bad"]}},
+        enforce=False,
+        tolerant=True,
     )
     try:
         status = manager.status()
         assert set(status) == {
             "environment",
             "write_directories",
+            "directories",
             "working_directory",
             "unusable_write_directories",
             "error",
@@ -312,6 +402,7 @@ def test_execution_status_reports_configuration_and_diagnostics(tmp_path: Path) 
         assert status["environment"] == {"kind": "native"}
         assert status["working_directory"] == str(tmp_path.resolve())
         assert status["write_directories"] == [str(tmp_path), "relative/bad"]
+        assert status["directories"] == {"native": [str(tmp_path), "relative/bad"]}
         assert status["unusable_write_directories"] == [
             {"path": "relative/bad", "reason": "invalid_directory"}
         ]
@@ -363,7 +454,7 @@ def test_closing_a_connection_unblocks_a_large_unsent_request(
 
 
 def test_invalid_saved_environment_does_not_fall_back_to_native(tmp_path: Path) -> None:
-    manager = ExecutionManager(tmp_path, environment={"kind": "invalid"})
+    manager = ExecutionManager(tmp_path, settings={"environment": {"kind": "invalid"}})
     assert manager.status()["error"]
     with pytest.raises(DomainError):
         manager.snapshot().run(["echo", "should not run"])

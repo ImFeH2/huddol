@@ -57,10 +57,7 @@ def main(argv: list[str] | None = None) -> int:
             store.set_agent_state(member.id, "idle")
 
     execution = ExecutionManager(
-        workspace,
-        agent_store.write_directories(),
-        environment=(agent_store.get_settings("execution") or {}).get("environment"),
-        tolerant=True,
+        workspace, settings=agent_store.get_settings("execution"), tolerant=True
     )
     deps = Dependencies(
         store=store,

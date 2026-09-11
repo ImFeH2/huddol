@@ -24,10 +24,6 @@ CREATE TABLE IF NOT EXISTS settings (
     section TEXT PRIMARY KEY,
     values_json TEXT NOT NULL
 );
-CREATE TABLE IF NOT EXISTS write_directories (
-    position INTEGER PRIMARY KEY,
-    path TEXT NOT NULL
-);
 CREATE TABLE IF NOT EXISTS reminded (
     agent_id INTEGER NOT NULL,
     discussion_id INTEGER NOT NULL,
@@ -346,40 +342,4 @@ class SqliteAgentStore:
                 "INSERT INTO settings (section, values_json) VALUES (?, ?)"
                 " ON CONFLICT (section) DO UPDATE SET values_json = excluded.values_json",
                 (section, json.dumps(values, ensure_ascii=False, sort_keys=True)),
-            )
-
-    def set_execution_settings(self, values: dict[str, object]) -> None:
-        directories = values["write_directories"]
-        if not isinstance(directories, list) or not all(
-            isinstance(path, str) for path in directories
-        ):
-            raise ValueError("write_directories must be a list of paths")
-        with self._db:
-            self._db.execute(
-                "INSERT INTO settings (section, values_json) VALUES ('execution', ?)"
-                " ON CONFLICT (section) DO UPDATE SET values_json = excluded.values_json",
-                (
-                    json.dumps(
-                        {"environment": values["environment"]},
-                        ensure_ascii=False,
-                        sort_keys=True,
-                    ),
-                ),
-            )
-            self._db.execute("DELETE FROM write_directories")
-            self._db.executemany(
-                "INSERT INTO write_directories (position, path) VALUES (?, ?)",
-                list(enumerate(dict.fromkeys(directories))),
-            )
-
-    def write_directories(self) -> tuple[str, ...]:
-        rows = self._db.execute("SELECT path FROM write_directories ORDER BY position")
-        return tuple(str(row["path"]) for row in rows)
-
-    def set_write_directories(self, values: Sequence[str]) -> None:
-        with self._db:
-            self._db.execute("DELETE FROM write_directories")
-            self._db.executemany(
-                "INSERT INTO write_directories (position, path) VALUES (?, ?)",
-                list(enumerate(dict.fromkeys(values))),
             )

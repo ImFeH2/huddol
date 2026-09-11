@@ -33,7 +33,11 @@ def server(tmp_path: Path):
         todos=agent_store,
         history=agent_store,
         settings=agent_store,
-        execution=ExecutionManager(tmp_path, [str(tmp_path)], enforce=False),
+        execution=ExecutionManager(
+            tmp_path,
+            settings={"directories": {"native": [str(tmp_path)]}},
+            enforce=False,
+        ),
         library_tree=MarkdownTree(tmp_path / "library"),
         memory_tree_for=lambda member_id: MarkdownTree(
             tmp_path / "agents" / str(member_id) / "memory"
@@ -249,6 +253,10 @@ def test_execution_settings_update_the_live_sandbox(server, tmp_path: Path) -> N
         values={"write_directories": [str(target)]},
     )
     assert deps.execution.snapshot().write_directories == (str(target.resolve()),)
+    assert deps.settings.get_settings("execution") == {
+        "environment": {"kind": "native"},
+        "directories": {"native": [str(target.resolve())]},
+    }
 
 
 def test_agent_detail_reports_todos_and_runs(server) -> None:

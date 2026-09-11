@@ -246,8 +246,10 @@ def test_settings_sections_are_carried_over(legacy: Path, tmp_path: Path) -> Non
     model = agent_store.get_settings("model")
     assert model is not None
     assert model["model"] == "m"
-    assert agent_store.get_settings("execution") == {"backend": "wsl"}
-    assert agent_store.write_directories() == ("/workspace/app", "/tmp")
+    assert agent_store.get_settings("execution") == {
+        "backend": "wsl",
+        "directories": {"native": ["/workspace/app", "/tmp"]},
+    }
     store.close()
 
 

@@ -98,7 +98,7 @@ def test_history_search_finds_runs_by_content(agent_store: SqliteAgentStore) -> 
     assert history.search("nothing") == ()
 
 
-def test_settings_round_trip_and_write_directories(
+def test_settings_round_trip_without_a_directory_table(
     agent_store: SqliteAgentStore,
 ) -> None:
     agent_store.set_settings("model", {"model": "claude-opus-5", "compaction": 200})
@@ -108,8 +108,13 @@ def test_settings_round_trip_and_write_directories(
     }
     assert agent_store.get_settings("missing") is None
 
-    agent_store.set_write_directories(["/workspace/app", "/tmp", "/workspace/app"])
-    assert agent_store.write_directories() == ("/workspace/app", "/tmp")
+    tables = {
+        str(row["name"])
+        for row in agent_store._db.execute(
+            "SELECT name FROM sqlite_master WHERE type = 'table'"
+        )
+    }
+    assert "write_directories" not in tables
 
 
 def test_effects_are_numbered_per_turn_and_read_back_in_order(

@@ -29,6 +29,24 @@ def target_value(value: object) -> dict[str, str]:
     raise DomainError("invalid_environment", "Choose Native or a WSL distribution")
 
 
+def environment_key(target: dict[str, str]) -> str:
+    if target["kind"] == "native":
+        return "native"
+    return f"wsl:{target['distribution']}"
+
+
+def directory_map(value: object) -> dict[str, list[str]]:
+    if not isinstance(value, dict):
+        return {}
+    return {
+        key: list(items)
+        for key, items in value.items()
+        if isinstance(key, str)
+        and isinstance(items, list)
+        and all(isinstance(item, str) for item in items)
+    }
+
+
 class BoundExecution:
     def __init__(self, lookup: Callable[[], ExecutionEnvironment]) -> None:
         self._lookup = lookup
@@ -63,9 +81,8 @@ class ExecutionManager:
     def __init__(
         self,
         root: Path,
-        directories: Sequence[str] = (),
         *,
-        environment: object = None,
+        settings: dict[str, object] | None = None,
         enforce: bool = True,
         tolerant: bool = False,
     ) -> None:
@@ -73,23 +90,26 @@ class ExecutionManager:
         self._enforce = enforce
         self._lock = threading.RLock()
         self._closed = False
-        self._environments: dict[tuple[str, str], LocalExecution | WslConnection] = {}
+        self._environments: dict[str, LocalExecution | WslConnection] = {}
         self._target: dict[str, str] = {"kind": "invalid"}
-        self._directories = list(directories)
+        self._key: str | None = None
+        stored = settings or {}
+        self._directories = directory_map(stored.get("directories"))
         self._error: str | None = None
         try:
+            environment = stored.get("environment")
             target = target_value(
                 {"kind": "native"} if environment is None else environment
             )
+            key = environment_key(target)
+            instance = self._create(
+                target, self._directories.get(key, []), tolerant=tolerant
+            )
             self._target = target
-            instance = self._create(target, directories, tolerant=tolerant)
-            self._environments[self._key(target)] = instance
+            self._key = key
+            self._environments[key] = instance
         except DomainError as error:
             self._error = str(error)
-
-    @staticmethod
-    def _key(target: dict[str, str]) -> tuple[str, str]:
-        return target["kind"], target.get("distribution", "")
 
     def _create(
         self,
@@ -117,7 +137,7 @@ class ExecutionManager:
         return instance
 
     def snapshot(self) -> ExecutionEnvironment:
-        key = self._key(self._target)
+        key = self._key
 
         def lookup() -> ExecutionEnvironment:
             with self._lock:
@@ -125,7 +145,7 @@ class ExecutionManager:
                     raise DomainError(
                         "execution_closed", "Execution environment is closed"
                     )
-                if key not in self._environments:
+                if key is None or key not in self._environments:
                     raise DomainError(
                         "execution_unavailable",
                         self._error or "Execution environment is unavailable",
@@ -143,10 +163,16 @@ class ExecutionManager:
             except DomainError as error:
                 probe_error = str(error)
         with self._lock:
-            selected = self._environments.get(self._key(self._target))
+            key = self._key
+            selected = self._environments.get(key) if key is not None else None
             return {
                 "environment": self._target,
-                "write_directories": list(self._directories),
+                "write_directories": list(self._directories.get(key, []))
+                if key is not None
+                else [],
+                "directories": {
+                    name: list(items) for name, items in self._directories.items()
+                },
                 "working_directory": selected.root if selected else None,
                 "unusable_write_directories": [
                     {"path": path, "reason": reason}
@@ -168,7 +194,10 @@ class ExecutionManager:
             if self._closed:
                 raise DomainError("execution_closed", "Execution environment is closed")
             target = target_value(values.get("environment", self._target))
-            directories = values.get("write_directories", self._directories)
+            key = environment_key(target)
+            directories = values.get(
+                "write_directories", self._directories.get(key, [])
+            )
             if not isinstance(directories, list) or not all(
                 isinstance(item, str) for item in directories
             ):
@@ -176,16 +205,16 @@ class ExecutionManager:
                     "invalid_directory", "Writable directories must be a list of paths"
                 )
             candidate = self._create(target, directories)
+            stored = {**self._directories, key: list(candidate.write_directories)}
             configured: dict[str, object] = {
                 "environment": target,
-                "write_directories": list(candidate.write_directories),
+                "directories": {name: list(items) for name, items in stored.items()},
             }
             try:
                 persist(configured)
             except Exception:
                 candidate.close()
                 raise
-            key = self._key(target)
             existing = self._environments.get(key)
             if existing is None:
                 self._environments[key] = candidate
@@ -198,7 +227,8 @@ class ExecutionManager:
                     existing.apply_configuration(candidate)
                 candidate.close()
             self._target = target
-            self._directories = list(candidate.write_directories)
+            self._key = key
+            self._directories = stored
             self._error = None
         return self.status()
 

@@ -257,7 +257,7 @@ class Api:
                     )
             if section == "execution":
                 result = self._scheduler.execution.configure(
-                    values, settings.set_execution_settings
+                    values, lambda stored: settings.set_settings("execution", stored)
                 )
                 self._dispatcher.emit("settings.updated", {"section": section})
                 return result

@@ -634,8 +634,17 @@ def test_unusable_write_directories_are_reported_not_fatal(tmp_path: Path) -> No
     import sqlite3
 
     connection = sqlite3.connect(data / "huddol.sqlite3")
-    connection.execute("DELETE FROM write_directories")
-    connection.execute("INSERT INTO write_directories VALUES (0, 'relative/bad')")
+    connection.execute(
+        "UPDATE settings SET values_json = ? WHERE section = 'execution'",
+        (
+            json.dumps(
+                {
+                    "environment": {"kind": "native"},
+                    "directories": {"native": ["relative/bad"]},
+                }
+            ),
+        ),
+    )
     connection.commit()
     connection.close()
 
