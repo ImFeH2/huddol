@@ -49,6 +49,7 @@ class Scheduler:
         self._authorizer = authorizer or Authorizer()
         self._semaphore = threading.Semaphore(max_concurrent)
         self._threads: dict[int, threading.Thread] = {}
+        self._failed: dict[int, frozenset[tuple[int, int]]] = {}
         self._lock = threading.Lock()
         self._stop = threading.Event()
         self._wake = threading.Event()
@@ -126,12 +127,33 @@ class Scheduler:
             return False
         return self.history.usage_total(agent_id)["total_tokens"] >= limit
 
+    def pending_keys(self, agent_id: int) -> frozenset[tuple[int, int]]:
+        return frozenset(
+            (item.discussion_id, item.message_id)
+            for item in self.store.pending(agent_id)
+        )
+
+    def _record_outcome(self, agent_id: int, status: str) -> None:
+        keys = self.pending_keys(agent_id) if status == "failed" else None
+        with self._lock:
+            if keys is None:
+                self._failed.pop(agent_id, None)
+            else:
+                self._failed[agent_id] = keys
+
+    def _failed_on(self, agent_id: int, keys: frozenset[tuple[int, int]]) -> bool:
+        with self._lock:
+            return self._failed.get(agent_id) == keys
+
     def runnable_agents(self) -> tuple[int, ...]:
         found: list[int] = []
         for member in self.store.list_members():
             if not member.is_agent or member.state != "idle":
                 continue
-            if not self.store.pending(member.id):
+            keys = self.pending_keys(member.id)
+            if not keys:
+                continue
+            if self._failed_on(member.id, keys):
                 continue
             if self.over_token_limit(member.id):
                 continue
@@ -262,6 +284,7 @@ class Scheduler:
                 error=error,
             )
         finally:
+            self._record_outcome(agent_id, status)
             current = self.store.get_member(agent_id)
             if current is not None and current.state == "running":
                 self.store.set_agent_state(agent_id, "idle")

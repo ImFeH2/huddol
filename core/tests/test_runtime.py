@@ -577,6 +577,43 @@ def test_a_failing_turn_is_recorded_and_the_agent_recovers(world) -> None:
     assert world.store.get_member(MAIN).state == "idle"
 
 
+def test_a_failed_turn_is_not_restarted_on_the_same_pending(world) -> None:
+    room = mention(world)
+    failing = RecordingRunner(
+        lambda request, tools: TurnOutcome(messages_json="[]", error="no model")
+    )
+    scheduler = Scheduler(world, failing)
+    try:
+        assert scheduler.tick() == (MAIN,)
+        scheduler._threads[MAIN].join(timeout=5)
+        runs = world.history.runs(MAIN)
+        assert [run.status for run in runs] == ["failed"]
+        assert world.store.get_member(MAIN).state == "idle"
+        assert world.store.pending(MAIN)
+
+        assert scheduler.runnable_agents() == ()
+        assert scheduler.tick() == ()
+        assert len(world.history.runs(MAIN)) == 1
+
+        world.store.append_message(room, HUMAN, "@Main are you there?")
+        assert scheduler.runnable_agents() == (MAIN,)
+        record = scheduler.run_turn(MAIN)
+        assert record is not None and record.status == "failed"
+        assert len(world.history.runs(MAIN)) == 2
+        assert scheduler.runnable_agents() == ()
+
+        scheduler._runner = RecordingRunner()
+        assert scheduler.runnable_agents() == ()
+        world.store.append_message(room, HUMAN, "@Main once more")
+        assert scheduler.runnable_agents() == (MAIN,)
+        record = scheduler.run_turn(MAIN)
+        assert record is not None and record.status == "completed"
+        assert scheduler._failed == {}
+        assert scheduler.runnable_agents() == (MAIN,)
+    finally:
+        scheduler.stop()
+
+
 def test_paused_agents_are_not_runnable(world) -> None:
     mention(world)
     world.store.set_agent_state(MAIN, "paused")
