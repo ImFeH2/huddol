@@ -171,7 +171,8 @@ def test_discussion_management_preserves_history_and_pending(world, actor_id) ->
     assert actor.search_messages("first", sender_id=HUMAN, discussion_id=room) == []
     assert actor.search_messages("first", discussion_id=untouched) == []
     actor.archive_discussion(room, False)
-    assert actor.read_discussion(room)["awaiting_ack"] == [2]
+    restored = actor.read_discussion(room)
+    assert (restored["awaiting_ack"], restored["archived"]) == ([2], False)
     actor.delete_discussion(room)
     assert world.store.pending(actor_id) == ()
     assert world.store.messages(room) == ()

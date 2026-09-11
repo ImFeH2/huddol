@@ -265,6 +265,7 @@ class AgentTools:
                 for item in sorted(discussion.member_ids)
             ],
             "total_messages": store.message_count(discussion_id),
+            "archived": discussion.archived,
             "messages": [
                 {
                     "id": item.id,
