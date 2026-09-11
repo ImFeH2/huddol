@@ -1,8 +1,6 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import { LangfusePage, langfuseUpdate } from "@/features/settings/langfuse";
-import { Backend } from "@/lib/backend";
-import { createMockBackend } from "@/lib/mock";
 
 const stored = {
   enabled: true,
@@ -41,22 +39,5 @@ describe("Langfuse settings", () => {
     const enabledId = html.match(/<input[^>]*id="([^"]+-enabled)"/)?.[1];
     expect(enabledId).toBeDefined();
     expect(html).toContain(`for="${enabledId}"`);
-  });
-
-  it("keeps mock responses redacted across updates without credentials", async () => {
-    const backend = createMockBackend(Backend);
-    const result = await backend.updateSettings(
-      "observability",
-      langfuseUpdate(stored, "test-public", "test-secret"),
-    );
-    expect(result.keys_set).toBe(true);
-    expect(result).not.toHaveProperty("public_key");
-    expect(result).not.toHaveProperty("secret_key");
-    await backend.updateSettings("observability", { enabled: false });
-    const reloaded = await backend.settings("observability");
-    expect(reloaded.keys_set).toBe(true);
-    expect(reloaded.enabled).toBe(false);
-    expect(reloaded).not.toHaveProperty("public_key");
-    expect(reloaded).not.toHaveProperty("secret_key");
   });
 });

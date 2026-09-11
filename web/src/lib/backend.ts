@@ -100,30 +100,94 @@ type Pending = {
   reject: (reason: unknown) => void;
 };
 
-type Frame = {
+export type Frame = {
   type: string;
   id?: number;
   result?: unknown;
   error?: { code: string; message: string };
 } & Record<string, unknown>;
 
+export type Transport = {
+  open(receive: (frame: Frame) => void): Promise<void>;
+  send(request: {
+    id: number;
+    method: string;
+    params: Record<string, unknown>;
+  }): Promise<void>;
+};
+
+type Hot = {
+  on(event: string, listener: (payload: Frame) => void): void;
+  send(event: string, data?: unknown): void;
+};
+
 const REQUEST_TIMEOUT = 60_000;
 
+function tauriTransport(): Transport {
+  return {
+    async open(receive) {
+      const channel = new Channel<Frame>();
+      channel.onmessage = receive;
+      await invoke("subscribe", { channel });
+    },
+    async send(request) {
+      await invoke("send", { message: request });
+    },
+  };
+}
+
+function devTransport(hot: Hot): Transport {
+  return {
+    async open(receive) {
+      hot.on("huddol:frame", receive);
+    },
+    async send(request) {
+      hot.send("huddol:request", request);
+    },
+  };
+}
+
+export function selectTransport(
+  tauri = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window,
+  hot: Hot | undefined = import.meta.hot,
+): Transport {
+  if (tauri) return tauriTransport();
+  if (hot) return devTransport(hot);
+  throw new BackendError(
+    "no_transport",
+    "No Huddol backend is available. Open Huddol from the desktop app or the Vite dev server.",
+    true,
+  );
+}
+
 export class Backend {
+  #select: () => Transport;
   #nextId = 1;
   #pending = new Map<number, Pending>();
   #listeners = new Set<(event: BackendEvent) => void>();
-  #ready: Promise<void> | null = null;
+  #ready: Promise<Transport> | null = null;
   #closed: BackendError | null = null;
   #rejectConnection: ((error: BackendError) => void) | null = null;
   #failures = new Set<(error: BackendError) => void>();
 
+  constructor(select: () => Transport = selectTransport) {
+    this.#select = select;
+  }
+
   async connect(): Promise<void> {
+    await this.#open();
+  }
+
+  async #attach(): Promise<Transport> {
+    const transport = this.#select();
+    await transport.open((frame) => this.#receive(frame));
+    return transport;
+  }
+
+  async #open(): Promise<Transport> {
     if (this.#closed) throw this.#closed;
     if (this.#ready) return this.#ready;
-    const channel = new Channel<Frame>();
-    channel.onmessage = (frame) => this.#receive(frame);
-    this.#ready = new Promise<void>((resolve, reject) => {
+    this.#ready = new Promise<Transport>((resolve, reject) => {
       const timer = setTimeout(() => {
         this.#disconnect(
           new BackendError(
@@ -138,21 +202,23 @@ export class Backend {
         this.#rejectConnection = null;
         reject(error);
       };
-      invoke("subscribe", { channel }).then(
-        () => {
+      this.#attach().then(
+        (transport) => {
           clearTimeout(timer);
           this.#rejectConnection = null;
-          resolve();
+          resolve(transport);
         },
         (error: unknown) =>
           this.#disconnect(
-            new BackendError(
-              "connection_failed",
-              typeof error === "string"
-                ? error
-                : "Could not connect to Huddol. Restart Huddol.",
-              true,
-            ),
+            error instanceof BackendError
+              ? error
+              : new BackendError(
+                  "connection_failed",
+                  typeof error === "string"
+                    ? error
+                    : "Could not connect to Huddol. Restart Huddol.",
+                  true,
+                ),
           ),
       );
     });
@@ -229,7 +295,7 @@ export class Backend {
     method: string,
     params: Record<string, unknown> = {},
   ): Promise<T> {
-    await this.connect();
+    const transport = await this.#open();
     if (this.#closed) throw this.#closed;
     const id = this.#nextId++;
     return new Promise<T>((resolve, reject) => {
@@ -258,7 +324,7 @@ export class Backend {
           reject(error);
         },
       });
-      invoke("send", { message: { id, method, params } }).catch(() => {
+      transport.send({ id, method, params }).catch(() => {
         const pending = this.#pending.get(id);
         if (!pending) return;
         const error = new BackendError(
@@ -407,15 +473,4 @@ export class Backend {
   }
 }
 
-const insideTauri =
-  typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
-
-// Running the frontend in a plain browser has no Tauri bridge, so development
-// falls back to fixtures. Vite folds import.meta.env.DEV to false for the
-// bundle Tauri ships, which drops the mock and its data entirely. The mock
-// receives this class as an argument instead of importing it: a value import
-// would close a cycle that this top-level await deadlocks on, silently.
-export const backend: Backend =
-  import.meta.env.DEV && !insideTauri
-    ? (await import("@/lib/mock")).createMockBackend(Backend)
-    : new Backend();
+export const backend = new Backend();
