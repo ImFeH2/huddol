@@ -8,6 +8,39 @@
   "formatter": {
     "indentStyle": "space"
   },
+  "linter": {
+    "rules": {
+      "style": {
+        "noRestrictedImports": {
+          "level": "error",
+          "options": {
+            "patterns": [
+              {
+                "group": ["@radix-ui/**"],
+                "message": "Radix primitives are wrapped in web/src/components/ui."
+              },
+              {
+                "group": ["@tauri-apps/**"],
+                "message": "Tauri is reached through web/src/lib/backend.ts."
+              }
+            ]
+          }
+        }
+      }
+    }
+  },
+  "overrides": [
+    {
+      "includes": ["web/src/components/ui/**", "web/src/lib/backend.ts"],
+      "linter": {
+        "rules": {
+          "style": {
+            "noRestrictedImports": "off"
+          }
+        }
+      }
+    }
+  ],
   "css": {
     "parser": {
       "tailwindDirectives": true
