@@ -1,6 +1,6 @@
-import { CornerDownLeft, Send } from "lucide-react";
+import { Send } from "lucide-react";
 import { Fragment, useId, useMemo, useRef, useState } from "react";
-import { Avatar, Button, Textarea } from "@/components/ui/index";
+import { Avatar, IconButton, Textarea } from "@/components/ui/index";
 import {
   candidatesFor,
   completeMention,
@@ -9,6 +9,39 @@ import {
 import type { Member } from "@/lib/backend";
 
 const MENU_LIMIT = 8;
+
+export type ComposerKey = {
+  key: string;
+  shiftKey: boolean;
+  ctrlKey: boolean;
+  metaKey: boolean;
+  isComposing?: boolean;
+};
+
+export type ComposerAction =
+  | "send"
+  | "newline"
+  | "accept"
+  | "dismiss"
+  | "up"
+  | "down";
+
+export function composerKey(
+  event: ComposerKey,
+  suggesting: boolean,
+): ComposerAction | null {
+  if (event.isComposing) return null;
+  if (suggesting) {
+    if (event.key === "ArrowDown") return "down";
+    if (event.key === "ArrowUp") return "up";
+    if (event.key === "Escape") return "dismiss";
+    if (event.key === "Tab") return "accept";
+  }
+  if (event.key !== "Enter") return null;
+  if (event.ctrlKey || event.metaKey) return "send";
+  if (event.shiftKey) return "newline";
+  return suggesting ? "accept" : "send";
+}
 
 export function Composer({
   members,
@@ -73,118 +106,115 @@ export function Composer({
   return (
     <div className="composer">
       {suggesting ? (
-        <ul className="mention-menu" id={menuId} aria-label="Members">
+        <div
+          className="mention-menu"
+          id={menuId}
+          role="listbox"
+          aria-label="Members"
+        >
           {candidates.map((member, index) => {
             const inside = memberIds.has(member.id);
             return (
               <Fragment key={member.id}>
                 {index === elsewhereFrom && index > 0 ? (
-                  <li className="mention-group" role="presentation">
-                    Elsewhere in the organization — inserts a reference,
-                    notifies nobody
-                  </li>
+                  <div className="mention-group" role="presentation">
+                    Not in this Discussion
+                  </div>
                 ) : null}
-                <li role="presentation">
-                  <button
-                    type="button"
-                    className="mention-option"
-                    role="option"
-                    id={`${menuId}-${member.id}`}
-                    aria-selected={index === active}
-                    data-active={index === active}
-                    data-reference={!inside}
-                    onMouseDown={(event) => {
-                      event.preventDefault();
-                      accept(member);
-                    }}
-                  >
-                    <Avatar name={member.name} size="sm" />
-                    <span className="mention-name">{member.name}</span>
+                <button
+                  type="button"
+                  className="mention-option"
+                  role="option"
+                  id={`${menuId}-${member.id}`}
+                  aria-selected={index === active}
+                  data-active={index === active}
+                  data-reference={!inside}
+                  onMouseDown={(event) => {
+                    event.preventDefault();
+                    accept(member);
+                  }}
+                >
+                  <Avatar name={member.name} size="sm" />
+                  <span className="mention-name">{member.name}</span>
+                  {inside ? (
                     <span className="mention-meta">
-                      {inside
-                        ? member.type === "human"
-                          ? "Human"
-                          : member.state
-                        : "reference only"}
+                      {member.type === "human" ? "Human" : member.state}
                     </span>
-                  </button>
-                </li>
+                  ) : null}
+                </button>
               </Fragment>
             );
           })}
-        </ul>
+        </div>
       ) : null}
-      <Textarea
-        ref={input}
-        value={body}
-        rows={3}
-        placeholder={placeholder}
-        aria-label="Message"
-        role="combobox"
-        aria-expanded={suggesting}
-        aria-controls={suggesting ? menuId : undefined}
-        aria-autocomplete="list"
-        aria-activedescendant={
-          suggesting ? `${menuId}-${candidates[active].id}` : undefined
-        }
-        onChange={(event) => {
-          setBody(event.target.value);
-          setCaret(event.target.selectionStart ?? 0);
-          setHighlighted(0);
-          setDismissed(false);
-        }}
-        onSelect={(event) => setCaret(event.currentTarget.selectionStart ?? 0)}
-        onKeyDown={(event) => {
-          if (suggesting) {
-            const size = candidates.length;
-            if (event.key === "ArrowDown") {
-              event.preventDefault();
-              setHighlighted((current) => (current + 1) % size);
-              return;
-            }
-            if (event.key === "ArrowUp") {
-              event.preventDefault();
-              setHighlighted((current) => (current - 1 + size) % size);
-              return;
-            }
-            if (event.key === "Tab" || event.key === "Enter") {
-              if (
-                !(event.key === "Enter" && (event.metaKey || event.ctrlKey))
-              ) {
-                event.preventDefault();
-                accept(candidates[active]);
-                return;
-              }
-            }
-            if (event.key === "Escape") {
-              event.preventDefault();
-              setDismissed(true);
-              return;
-            }
+      <div className="composer-field">
+        <Textarea
+          ref={input}
+          value={body}
+          rows={1}
+          autoGrow
+          maxRows={8}
+          placeholder={placeholder}
+          aria-label="Message"
+          role="combobox"
+          aria-expanded={suggesting}
+          aria-controls={suggesting ? menuId : undefined}
+          aria-autocomplete="list"
+          aria-activedescendant={
+            suggesting ? `${menuId}-${candidates[active].id}` : undefined
           }
-          if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
+          onChange={(event) => {
+            setBody(event.target.value);
+            setCaret(event.target.selectionStart ?? 0);
+            setHighlighted(0);
+            setDismissed(false);
+          }}
+          onSelect={(event) =>
+            setCaret(event.currentTarget.selectionStart ?? 0)
+          }
+          onKeyDown={(event) => {
+            const action = composerKey(
+              {
+                key: event.key,
+                shiftKey: event.shiftKey,
+                ctrlKey: event.ctrlKey,
+                metaKey: event.metaKey,
+                isComposing: event.nativeEvent.isComposing,
+              },
+              suggesting,
+            );
+            if (action === null || action === "newline") return;
             event.preventDefault();
-            void submit();
-          }
-        }}
-      />
-      <div className="composer-actions">
-        <span className="composer-hint">
-          <kbd>
-            <CornerDownLeft size={11} />
-            &#8984;/Ctrl + Enter
-          </kbd>
-          to send
-        </span>
-        <Button
-          variant="primary"
+            const size = candidates.length;
+            switch (action) {
+              case "down":
+                setHighlighted((current) => (current + 1) % size);
+                break;
+              case "up":
+                setHighlighted((current) => (current - 1 + size) % size);
+                break;
+              case "accept":
+                accept(candidates[active]);
+                break;
+              case "dismiss":
+                setDismissed(true);
+                break;
+              case "send":
+                void submit();
+                break;
+            }
+          }}
+        />
+      </div>
+      <span className="composer-send">
+        <IconButton
+          label="Send · Enter"
           disabled={busy || !body.trim()}
-          onClick={submit}
+          onClick={() => void submit()}
         >
           <Send size={15} />
-          Send
-        </Button>
-      </div>
+        </IconButton>
+      </span>
     </div>
   );
 }

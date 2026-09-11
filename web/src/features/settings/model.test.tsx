@@ -1,6 +1,6 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
-import { ModelPage, modelUpdate } from "@/features/settings/index";
+import { ModelPanel, modelUpdate } from "@/features/settings/model";
 
 const values = {
   api_type: "openai",
@@ -48,7 +48,7 @@ describe("model compaction settings", () => {
   });
 
   it("renders a labelled numeric field and disables saving before loading", () => {
-    const html = renderToStaticMarkup(<ModelPage />);
+    const html = renderToStaticMarkup(<ModelPanel />);
     expect(html).toContain("Compaction threshold (bytes)");
     expect(html).toContain('type="number"');
     expect(html).toContain('min="1"');

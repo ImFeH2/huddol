@@ -30,7 +30,7 @@
 .menu-list {
   position: absolute;
   top: calc(100% + var(--space-2));
-  z-index: 20;
+  z-index: var(--layer-menu);
   min-width: 168px;
   padding: var(--space-2);
   border-radius: var(--radius-sm);

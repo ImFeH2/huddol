@@ -1,29 +1,33 @@
-import { AlertTriangle, Save, SquarePen, Trash2 } from "lucide-react";
-import { useCallback, useEffect, useId, useState } from "react";
+import { AlertTriangle, Check, Save, SquarePen, Trash2 } from "lucide-react";
+import { useCallback, useEffect, useState } from "react";
 import { useNavigate } from "@/app/router";
-import {
-  Page,
-  PageBody,
-  PageHeader,
-  Toolbar,
-  ToolbarSpacer,
-} from "@/components/layout/shell";
+import { Page, PageBody, PageHeader, Toolbar } from "@/components/layout/shell";
 import { ConfirmDialog, PromptDialog } from "@/components/ui/dialog";
-import { Banner, Button, Chip, EmptyState } from "@/components/ui/index";
+import {
+  Banner,
+  Button,
+  Chip,
+  EmptyState,
+  Textarea,
+} from "@/components/ui/index";
+import { OverflowMenu } from "@/components/ui/menu";
 import { BackendError, backend } from "@/lib/backend";
 import { documentFolder, formatBytes } from "@/lib/format";
 import "@/features/library/library.css";
 
 type Loaded = { content: string; hash: string };
 
+type Saved = "shown" | "fading" | null;
+
+const SAVED_HOLD_MS = 2000;
+
 export function DocumentPage({ path }: { path: string }) {
   const navigate = useNavigate();
-  const editorId = useId();
   const [loaded, setLoaded] = useState<Loaded | null>(null);
   const [draft, setDraft] = useState("");
   const [missing, setMissing] = useState(false);
   const [conflict, setConflict] = useState(false);
-  const [saved, setSaved] = useState(false);
+  const [saved, setSaved] = useState<Saved>(null);
   const [busy, setBusy] = useState(false);
   const [renaming, setRenaming] = useState(false);
   const [doomed, setDoomed] = useState(false);
@@ -48,12 +52,22 @@ export function DocumentPage({ path }: { path: string }) {
     void load();
   }, [load]);
 
+  useEffect(() => {
+    if (saved !== "shown") return;
+    const timer = setTimeout(() => setSaved("fading"), SAVED_HOLD_MS);
+    return () => clearTimeout(timer);
+  }, [saved]);
+
   const dirty = loaded !== null && draft !== loaded.content;
+  const folder = documentFolder(path);
+  const crumb = {
+    label: "Library",
+    onSelect: () => navigate({ name: "library" }),
+  };
 
   const save = async () => {
     if (!dirty || loaded === null) return;
     setBusy(true);
-    setSaved(false);
     try {
       const result = await backend.writeLibrary(path, draft, loaded.hash);
       if (result.conflict) {
@@ -61,7 +75,7 @@ export function DocumentPage({ path }: { path: string }) {
         return;
       }
       setLoaded({ content: draft, hash: result.hash });
-      setSaved(true);
+      setSaved("shown");
     } catch (failure) {
       backend.reportFailure(failure);
     } finally {
@@ -72,59 +86,64 @@ export function DocumentPage({ path }: { path: string }) {
   if (missing) {
     return (
       <Page>
-        <PageHeader
-          title="Document not found"
-          crumb={{
-            label: "Library",
-            onSelect: () => navigate({ name: "library" }),
-          }}
-        />
+        <PageHeader title={path} crumb={crumb} />
         <PageBody>
-          <EmptyState
-            title="Nothing at this path"
-            description="It may have been renamed or deleted by another Member."
-            action={
-              <Button onClick={() => navigate({ name: "library" })}>
-                Back to the Library
-              </Button>
-            }
-          />
+          <EmptyState title="Document not found" />
         </PageBody>
       </Page>
     );
   }
 
-  const folder = documentFolder(path);
-
   return (
     <Page>
       <PageHeader
         title={path}
-        lede="Every Member can read and edit this document. Saving checks that nobody changed it while you were writing."
-        crumb={{
-          label: "Library",
-          onSelect: () => navigate({ name: "library" }),
-        }}
+        crumb={crumb}
         actions={
-          <Button variant="primary" disabled={!dirty || busy} onClick={save}>
-            <Save size={16} />
-            {busy ? "Saving" : "Save"}
-          </Button>
+          <>
+            <Button variant="primary" disabled={!dirty || busy} onClick={save}>
+              <Save size={16} />
+              {busy ? "Saving" : "Save"}
+            </Button>
+            <OverflowMenu
+              label={`Actions for ${path}`}
+              actions={[
+                {
+                  id: "rename",
+                  label: "Rename",
+                  icon: <SquarePen size={15} />,
+                  onSelect: () => setRenaming(true),
+                },
+                {
+                  id: "delete",
+                  label: "Delete",
+                  icon: <Trash2 size={15} />,
+                  tone: "danger",
+                  onSelect: () => setDoomed(true),
+                },
+              ]}
+            />
+          </>
         }
       />
       <Toolbar>
         {folder ? <Chip>{folder}</Chip> : null}
-        <Chip>{formatBytes(draft.length)}</Chip>
+        <Chip>{formatBytes(new TextEncoder().encode(draft).length)}</Chip>
         {dirty ? <Chip tone="blue">Unsaved changes</Chip> : null}
-        <ToolbarSpacer />
-        <Button onClick={() => setRenaming(true)}>
-          <SquarePen size={15} />
-          Rename
-        </Button>
-        <Button variant="danger" onClick={() => setDoomed(true)}>
-          <Trash2 size={15} />
-          Delete
-        </Button>
+        {saved ? (
+          <span
+            className="saved-chip"
+            data-fading={saved === "fading" ? "true" : undefined}
+            onTransitionEnd={() =>
+              setSaved((current) => (current === "fading" ? null : current))
+            }
+          >
+            <Chip tone="success">
+              <Check size={12} />
+              Saved
+            </Chip>
+          </span>
+        ) : null}
       </Toolbar>
       <PageBody variant="flush">
         <div className="editor-shell">
@@ -134,33 +153,20 @@ export function DocumentPage({ path }: { path: string }) {
               icon={<AlertTriangle size={16} />}
               onDismiss={() => setConflict(false)}
             >
-              Another Member saved this document while you were editing. Reopen
-              it to see their version; saving now would discard their work.
-            </Banner>
-          ) : null}
-          {saved && !dirty ? (
-            <Banner tone="success" onDismiss={() => setSaved(false)}>
-              Saved.
+              Someone saved this document while you were editing. Reopen it to
+              see their version.
             </Banner>
           ) : null}
           <div className="editor">
-            <label className="form-label" htmlFor={editorId}>
-              Markdown
-            </label>
-            <textarea
-              id={editorId}
-              className="editor-area"
+            <Textarea
+              aria-label="Document"
               value={draft}
               spellCheck={false}
-              onChange={(event) => setDraft(event.target.value)}
+              onChange={(event) => {
+                setDraft(event.target.value);
+                setSaved(null);
+              }}
             />
-            <div className="editor-status">
-              <span className="muted">
-                {dirty
-                  ? "Unsaved. Saving fails if someone else changed the document first."
-                  : "Up to date with what every other Member sees."}
-              </span>
-            </div>
           </div>
         </div>
       </PageBody>
@@ -169,7 +175,6 @@ export function DocumentPage({ path }: { path: string }) {
         open={renaming}
         onOpenChange={setRenaming}
         title="Rename document"
-        description="Agents are told to record readable names alongside any reference, but a rename can still leave stale pointers in someone's Memory."
         label="New path"
         initial={path}
         submitLabel="Rename"
@@ -183,7 +188,7 @@ export function DocumentPage({ path }: { path: string }) {
         open={doomed}
         onOpenChange={setDoomed}
         title={`Delete ${path}?`}
-        description="The document is removed for every Member. This cannot be undone."
+        description="The document is removed for every Member."
         confirmLabel="Delete document"
         onConfirm={async () => {
           await backend.deleteLibrary(path);

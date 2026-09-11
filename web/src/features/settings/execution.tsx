@@ -1,5 +1,4 @@
 import { useCallback, useEffect, useId, useRef, useState } from "react";
-import { Page, PageBody, PageHeader } from "@/components/layout/shell";
 import { Choices } from "@/components/ui/choices";
 import { Banner, Button, Chip, Field, Textarea } from "@/components/ui/index";
 import { backend } from "@/lib/backend";
@@ -12,11 +11,40 @@ export type EnvironmentTarget =
 export type ExecutionSettings = {
   environment: EnvironmentTarget;
   write_directories: string[];
+  directories: Record<string, string[]>;
   distributions: string[];
   error: string | null;
   probe_error: string | null;
   unusable_write_directories: { path: string; reason: string }[];
 };
+
+export function environmentKey(target: EnvironmentTarget): string {
+  return target.kind === "native"
+    ? "native"
+    : target.kind === "wsl"
+      ? `wsl:${target.distribution}`
+      : "";
+}
+
+export function directoryDrafts(
+  directories: Record<string, string[]>,
+): Record<string, string> {
+  return Object.fromEntries(
+    Object.entries(directories).map(([key, paths]) => [key, paths.join("\n")]),
+  );
+}
+
+export function executionChanged(
+  saved: ExecutionSettings,
+  selected: string,
+  draft: string,
+): boolean {
+  return (
+    selected !== environmentKey(saved.environment) ||
+    draft !== (saved.directories[selected] ?? []).join("\n") ||
+    saved.error !== null
+  );
+}
 
 export function executionUpdate(value: string, directories: string) {
   let environment: EnvironmentTarget;
@@ -40,14 +68,6 @@ export function executionUpdate(value: string, directories: string) {
   };
 }
 
-function targetValue(target: EnvironmentTarget) {
-  return target.kind === "native"
-    ? "native"
-    : target.kind === "wsl"
-      ? `wsl:${target.distribution}`
-      : "";
-}
-
 export function ExecutionForm({
   initial,
   onSave,
@@ -60,17 +80,15 @@ export function ExecutionForm({
   const id = useId();
   const input = useRef<HTMLTextAreaElement>(null);
   const [info, setInfo] = useState(initial);
-  const [selected, setSelected] = useState(targetValue(initial.environment));
-  const [directories, setDirectories] = useState(
-    initial.write_directories.join("\n"),
+  const [selected, setSelected] = useState(environmentKey(initial.environment));
+  const [drafts, setDrafts] = useState(() =>
+    directoryDrafts(initial.directories),
   );
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
-  const changed =
-    selected !== targetValue(info.environment) ||
-    directories !== info.write_directories.join("\n") ||
-    info.error !== null;
+  const draft = drafts[selected] ?? "";
+  const changed = executionChanged(info, selected, draft);
   const options = [
     { value: "native", label: "Native" },
     ...info.distributions.map((distribution) => ({
@@ -80,23 +98,25 @@ export function ExecutionForm({
   ];
   if (
     info.environment.kind === "wsl" &&
-    !options.some((option) => option.value === targetValue(info.environment))
+    !options.some((option) => option.value === environmentKey(info.environment))
   ) {
     options.push({
-      value: targetValue(info.environment),
+      value: environmentKey(info.environment),
       label: `WSL · ${info.environment.distribution}`,
     });
   }
+  const selectedLabel =
+    options.find((option) => option.value === selected)?.label ?? selected;
   const save = async () => {
     if (busy || !changed || !selected) return;
     setBusy(true);
     setError(null);
     setSaved(false);
     try {
-      const result = await onSave(executionUpdate(selected, directories));
+      const result = await onSave(executionUpdate(selected, draft));
       setInfo(result);
-      setSelected(targetValue(result.environment));
-      setDirectories(result.write_directories.join("\n"));
+      setSelected(environmentKey(result.environment));
+      setDrafts(directoryDrafts(result.directories));
       setSaved(true);
     } catch (failure) {
       setError(failure instanceof Error ? failure.message : String(failure));
@@ -123,9 +143,7 @@ export function ExecutionForm({
         <Banner tone="warning">{info.probe_error}</Banner>
       ) : null}
       {saved ? (
-        <Banner tone="success">
-          Saved. Environment changes apply to new Turns.
-        </Banner>
+        <Banner tone="success">Saved. Applies to new Turns.</Banner>
       ) : null}
       {info.unusable_write_directories.length ? (
         <Banner tone="warning">
@@ -151,14 +169,22 @@ export function ExecutionForm({
             setSaved(false);
           }}
         />
-        <Field label="Writable directories" htmlFor={id}>
+        <Field
+          label={
+            <>
+              Writable directories <Chip>{selectedLabel}</Chip>
+            </>
+          }
+          htmlFor={id}
+        >
           <Textarea
             ref={input}
             id={id}
             rows={6}
-            value={directories}
+            value={draft}
             onChange={(event) => {
-              setDirectories(event.target.value);
+              const value = event.target.value;
+              setDrafts((current) => ({ ...current, [selected]: value }));
               setSaved(false);
             }}
           />
@@ -177,7 +203,7 @@ export function ExecutionForm({
   );
 }
 
-export function ExecutionPage() {
+export function ExecutionPanel() {
   const [info, setInfo] = useState<ExecutionSettings | null>(null);
   const [error, setError] = useState<string | null>(null);
   const load = useCallback(async () => {
@@ -192,23 +218,26 @@ export function ExecutionPage() {
     void load();
   }, [load]);
   return (
-    <Page>
-      <PageHeader title="Execution" />
-      <PageBody>
-        {error ? <Banner tone="danger">{error}</Banner> : null}
-        {!info && error ? <Button onClick={load}>Retry</Button> : null}
-        {info ? (
-          <ExecutionForm
-            initial={info}
-            onSave={async (values) =>
-              (await backend.updateSettings(
-                "execution",
-                values,
-              )) as ExecutionSettings
-            }
-          />
-        ) : null}
-      </PageBody>
-    </Page>
+    <>
+      {error ? (
+        <Banner tone="danger">
+          {error}
+          <div className="settings-actions">
+            <Button onClick={() => void load()}>Retry</Button>
+          </div>
+        </Banner>
+      ) : null}
+      {info ? (
+        <ExecutionForm
+          initial={info}
+          onSave={async (values) =>
+            (await backend.updateSettings(
+              "execution",
+              values,
+            )) as ExecutionSettings
+          }
+        />
+      ) : null}
+    </>
   );
 }

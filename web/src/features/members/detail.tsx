@@ -29,20 +29,21 @@ import {
   Button,
   Chip,
   Dot,
-  EmptyState,
   Meter,
   StateDot,
   StatusText,
 } from "@/components/ui/index";
 import { OverflowMenu } from "@/components/ui/menu";
-import { formatTime } from "@/features/mentions";
+import { Tooltip } from "@/components/ui/tooltip";
+import { agentStateLabel } from "@/features/members/state";
 import {
   type AgentDetail,
   type AgentRun,
   backend,
+  type Member,
   type Todo,
 } from "@/lib/backend";
-import { formatBytes, plural, relativeTime } from "@/lib/format";
+import { formatBytes, formatTime, plural, relativeTime } from "@/lib/format";
 import "@/features/members/members.css";
 
 const TODO_COLUMNS: Column[] = [
@@ -79,18 +80,36 @@ function runTone(status: string): "green" | "red" | "blue" | "yellow" | "grey" {
 export function MemberPage({ id }: { id: number }) {
   const { members, refresh } = useOrganization();
   const navigate = useNavigate();
+  const member = members.find((item) => item.id === id);
+  const agent = member?.type === "agent" ? member : null;
+
+  useEffect(() => {
+    if (!agent) navigate({ name: "members" });
+  }, [agent, navigate]);
+
+  if (!agent) return null;
+  return <AgentPage member={agent} refresh={refresh} />;
+}
+
+function AgentPage({
+  member,
+  refresh,
+}: {
+  member: Member;
+  refresh: () => Promise<void>;
+}) {
+  const navigate = useNavigate();
   const [detail, setDetail] = useState<AgentDetail | null>(null);
   const [doomed, setDoomed] = useState(false);
-  const member = members.find((item) => item.id === id);
+  const paused = member.state === "paused";
 
   const load = useCallback(async () => {
-    if (member?.type !== "agent") return;
     try {
-      setDetail(await backend.agentDetail(id));
+      setDetail(await backend.agentDetail(member.id));
     } catch (failure) {
       backend.reportFailure(failure);
     }
-  }, [id, member]);
+  }, [member.id]);
 
   useEffect(() => {
     void load();
@@ -102,65 +121,16 @@ export function MemberPage({ id }: { id: number }) {
     });
   }, [load]);
 
-  if (!member) {
-    return (
-      <Page>
-        <PageHeader
-          title="Member not found"
-          crumb={{
-            label: "Members",
-            onSelect: () => navigate({ name: "members" }),
-          }}
-        />
-        <PageBody>
-          <EmptyState
-            title="Nothing to show"
-            description="This Member is no longer in the organization."
-          />
-        </PageBody>
-      </Page>
-    );
-  }
-
-  if (member.type === "human") {
-    return (
-      <Page>
-        <PageHeader
-          title={member.name}
-          lede="A Human Member. Humans and Agents share one identity model, so there is no separate machinery to show here."
-          crumb={{
-            label: "Members",
-            onSelect: () => navigate({ name: "members" }),
-          }}
-          leading={<Avatar name={member.name} size="lg" />}
-        />
-        <PageBody>
-          <EmptyState
-            title="No Agent state"
-            description="Todos, Memory and Turns belong to Agents. Humans work through the Discussions view."
-            action={
-              <Button onClick={() => navigate({ name: "discussions" })}>
-                Go to Discussions
-              </Button>
-            }
-          />
-        </PageBody>
-      </Page>
-    );
-  }
-
-  const usage = detail?.usage;
-  const limit = detail?.token_limit ?? 0;
-  const spent = usage?.total_tokens ?? member.tokens ?? 0;
-  const openTodos = (detail?.todos ?? []).filter(
-    (todo) => todo.status !== "done",
-  ).length;
+  const openTodos = detail
+    ? detail.todos.filter((todo) => todo.status !== "done").length
+    : 0;
+  const tokenLimit = detail?.token_limit ?? 0;
 
   return (
     <Page>
       <PageHeader
         title={member.name}
-        lede={`Agent · ${plural(usage?.requests ?? 0, "model request")} · ${plural(detail?.runs.length ?? 0, "recorded Turn")}`}
+        status={<AgentState member={member} tokenLimit={tokenLimit} />}
         crumb={{
           label: "Members",
           onSelect: () => navigate({ name: "members" }),
@@ -169,27 +139,23 @@ export function MemberPage({ id }: { id: number }) {
         actions={
           <>
             <Button
-              variant={member.state === "paused" ? "primary" : "default"}
+              variant={paused ? "primary" : "default"}
               onClick={async () => {
-                await (member.state === "paused"
+                await (paused
                   ? backend.resumeAgent(member.id)
                   : backend.pauseAgent(member.id));
                 await refresh();
               }}
             >
-              {member.state === "paused" ? (
-                <Play size={16} />
-              ) : (
-                <Pause size={16} />
-              )}
-              {member.state === "paused" ? "Resume" : "Pause"}
+              {paused ? <Play size={16} /> : <Pause size={16} />}
+              {paused ? "Resume" : "Pause"}
             </Button>
             <OverflowMenu
               label={`Actions for ${member.name}`}
               actions={[
                 {
                   id: "delete",
-                  label: "Delete Agent",
+                  label: "Delete",
                   icon: <Trash2 size={15} />,
                   tone: "danger",
                   disabled: member.state === "running",
@@ -201,157 +167,139 @@ export function MemberPage({ id }: { id: number }) {
         }
       />
       <PageBody>
-        {detail?.over_token_limit ? (
-          <Banner tone="danger" icon={<CircleAlert size={16} />}>
-            <strong>{member.name} has reached its token ceiling.</strong> It is
-            no longer scheduled, so mentions will pile up unhandled. Raise the
-            limit under Settings, or hand the work to another Member.
-          </Banner>
-        ) : null}
-        {detail && detail.idle_streak >= 3 ? (
-          <Banner tone="warning" icon={<CircleAlert size={16} />}>
-            <strong>
-              The last {detail.idle_streak} Turns produced nothing.
-            </strong>{" "}
-            {member.name} acknowledged its mentions without sending, editing or
-            running anything. It may be stuck in a loop of declaring work done.
-          </Banner>
-        ) : null}
+        {detail ? (
+          <>
+            {detail.over_token_limit ? (
+              <Banner tone="danger" icon={<CircleAlert size={16} />}>
+                Token ceiling reached. Not scheduled until the limit is raised.
+              </Banner>
+            ) : null}
+            {detail.idle_streak >= 3 ? (
+              <Banner tone="warning" icon={<CircleAlert size={16} />}>
+                The last {detail.idle_streak} Turns produced nothing.
+              </Banner>
+            ) : null}
 
-        <div className="stat-grid">
-          <Stat
-            label="Token spend"
-            value={spent.toLocaleString()}
-            detail={
-              limit > 0 ? (
-                <>
-                  <Meter
-                    value={spent}
-                    max={limit}
-                    label={`Token spend for ${member.name}`}
-                  />
-                  <span className="muted">
-                    of {limit.toLocaleString()} cumulative
-                  </span>
-                </>
-              ) : (
-                <span className="muted">No ceiling configured</span>
-              )
-            }
-          />
-          <Stat
-            label="Model requests"
-            value={(usage?.requests ?? 0).toLocaleString()}
-            detail={
-              <span className="muted">
-                {(usage?.input_tokens ?? 0).toLocaleString()} in ·{" "}
-                {(usage?.output_tokens ?? 0).toLocaleString()} out
-              </span>
-            }
-          />
-          <Stat
-            label="State"
-            value={
-              <StatusText
-                dot={
-                  <StateDot
-                    state={member.state}
-                    ping={member.state === "running"}
-                  />
+            <div className="stat-grid">
+              <Stat
+                label="Token spend"
+                value={detail.usage.total_tokens.toLocaleString()}
+                detail={
+                  detail.token_limit > 0 ? (
+                    <>
+                      <Meter
+                        value={detail.usage.total_tokens}
+                        max={detail.token_limit}
+                        label={`Token spend for ${member.name}`}
+                      />
+                      <span className="muted">
+                        of {detail.token_limit.toLocaleString()}
+                      </span>
+                    </>
+                  ) : (
+                    <span className="muted">No ceiling</span>
+                  )
                 }
-              >
-                {member.state === "running"
-                  ? "Running"
-                  : member.state === "paused"
-                    ? "Paused"
-                    : "Idle"}
-              </StatusText>
-            }
-            detail={
-              <span className="muted">
-                {member.state === "paused"
-                  ? "No new Turns will start"
-                  : "Wakes when mentioned"}
-              </span>
-            }
-          />
-          <Stat
-            label="Open Todos"
-            value={String(openTodos)}
-            detail={
-              <span className="muted">
-                {plural(detail?.memory.length ?? 0, "Memory file")}
-              </span>
-            }
-          />
-        </div>
+              />
+              <Stat
+                label="Model requests"
+                value={detail.usage.requests.toLocaleString()}
+                detail={
+                  <span className="muted">
+                    {detail.usage.input_tokens.toLocaleString()} in ·{" "}
+                    {detail.usage.output_tokens.toLocaleString()} out
+                  </span>
+                }
+              />
+              <Stat
+                label="State"
+                value={<AgentState member={member} tokenLimit={tokenLimit} />}
+              />
+              <Stat
+                label="Open Todos"
+                value={String(openTodos)}
+                detail={
+                  <span className="muted">
+                    {plural(detail.memory.length, "Memory file")}
+                  </span>
+                }
+              />
+            </div>
 
-        <Section
-          title="Todos"
-          description="What this Agent believes it is working on across Turns."
-        >
-          {(detail?.todos ?? []).length === 0 ? (
-            <p className="muted">No Todos recorded.</p>
-          ) : (
-            <Table columns={TODO_COLUMNS} label="Todos">
-              {(detail?.todos ?? []).map((todo) => (
-                <TodoRow key={todo.id} todo={todo} />
-              ))}
-            </Table>
-          )}
-        </Section>
+            <Section title="Todos">
+              {detail.todos.length === 0 ? (
+                <p className="muted">No Todos</p>
+              ) : (
+                <Table columns={TODO_COLUMNS} label="Todos">
+                  {detail.todos.map((todo) => (
+                    <TodoRow key={todo.id} todo={todo} />
+                  ))}
+                </Table>
+              )}
+            </Section>
 
-        <Section
-          title="Memory"
-          description="Private notes this Agent keeps for itself. The Library is the shared one."
-        >
-          {(detail?.memory ?? []).length === 0 ? (
-            <p className="muted">No Memory files yet.</p>
-          ) : (
-            <Table columns={MEMORY_COLUMNS} label="Memory files">
-              {(detail?.memory ?? []).map((file) => (
-                <tr className="table-row" key={file.path}>
-                  <td>
-                    <span className="mono">{file.path}</span>
-                  </td>
-                  <td data-align="end" className="numeric muted">
-                    {formatBytes(file.size)}
-                  </td>
-                </tr>
-              ))}
-            </Table>
-          )}
-        </Section>
+            <Section title="Memory">
+              {detail.memory.length === 0 ? (
+                <p className="muted">No Memory files</p>
+              ) : (
+                <Table columns={MEMORY_COLUMNS} label="Memory files">
+                  {detail.memory.map((file) => (
+                    <tr className="table-row" key={file.path}>
+                      <td>
+                        <span className="mono">{file.path}</span>
+                      </td>
+                      <td data-align="end" className="numeric muted">
+                        {formatBytes(file.size)}
+                      </td>
+                    </tr>
+                  ))}
+                </Table>
+              )}
+            </Section>
 
-        <Section
-          title="Recent Turns"
-          description="Every Turn records what it actually produced. A Turn with no effects changed nothing."
-        >
-          {(detail?.runs ?? []).length === 0 ? (
-            <p className="muted">This Agent has not run yet.</p>
-          ) : (
-            <ul className="turn-list">
-              {(detail?.runs ?? []).slice(0, 10).map((run) => (
-                <TurnCard key={run.sequence} run={run} />
-              ))}
-            </ul>
-          )}
-        </Section>
+            <Section title="Recent Turns">
+              {detail.runs.length === 0 ? (
+                <p className="muted">No Turns yet</p>
+              ) : (
+                <ul className="turn-list">
+                  {detail.runs.slice(0, 10).map((run) => (
+                    <TurnCard key={run.sequence} run={run} />
+                  ))}
+                </ul>
+              )}
+            </Section>
+          </>
+        ) : null}
       </PageBody>
 
       <ConfirmDialog
         open={doomed}
         onOpenChange={setDoomed}
         title={`Delete ${member.name}?`}
-        description="Its messages stay in every Discussion and its name stays reserved. Its Memory, Todos and model history are removed."
+        description="Its Memory, Todos and history are removed."
         confirmLabel="Delete Agent"
         onConfirm={async () => {
           await backend.deleteAgent(member.id);
           await refresh();
-          navigate({ name: "members" });
         }}
       />
     </Page>
+  );
+}
+
+function AgentState({
+  member,
+  tokenLimit,
+}: {
+  member: Member;
+  tokenLimit: number;
+}) {
+  return (
+    <StatusText
+      dot={<StateDot state={member.state} ping={member.state === "running"} />}
+    >
+      {agentStateLabel(member, tokenLimit)}
+    </StatusText>
   );
 }
 
@@ -362,13 +310,13 @@ function Stat({
 }: {
   label: string;
   value: ReactNode;
-  detail: ReactNode;
+  detail?: ReactNode;
 }) {
   return (
     <div className="stat">
       <span className="stat-label">{label}</span>
       <span className="stat-value">{value}</span>
-      <span className="stat-detail">{detail}</span>
+      {detail ? <span className="stat-detail">{detail}</span> : null}
     </div>
   );
 }
@@ -427,13 +375,11 @@ function TurnCard({ run }: { run: AgentRun }) {
             `${plural(run.effects.length, "effect")} · ${tools.join(", ")}`
           )}
         </span>
-        <time
-          className="turn-time muted"
-          dateTime={run.started_at}
-          title={formatTime(run.started_at)}
-        >
-          {relativeTime(run.started_at)}
-        </time>
+        <Tooltip label={formatTime(run.started_at)}>
+          <time className="turn-time muted" dateTime={run.started_at}>
+            {relativeTime(run.started_at)}
+          </time>
+        </Tooltip>
       </button>
       {open ? (
         <div className="turn-body">
@@ -444,10 +390,7 @@ function TurnCard({ run }: { run: AgentRun }) {
             </p>
           ) : null}
           {run.effects.length === 0 ? (
-            <p className="muted">
-              This Turn read context and declared itself done without sending,
-              editing or running anything.
-            </p>
+            <p className="muted">Nothing produced.</p>
           ) : (
             <ul className="effects">
               {run.effects.map((effect) => (

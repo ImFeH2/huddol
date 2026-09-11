@@ -1,0 +1,25 @@
+import { describe, expect, it } from "vitest";
+import { navIdOf, pageKeyOf } from "@/app/router";
+
+describe("navIdOf", () => {
+  it("maps detail routes to their section", () => {
+    expect(navIdOf({ name: "discussion", id: 4 })).toBe("discussions");
+    expect(navIdOf({ name: "member", id: 2 })).toBe("members");
+    expect(navIdOf({ name: "document", path: "a.md" })).toBe("library");
+    expect(navIdOf({ name: "settings", section: "langfuse" })).toBe("settings");
+  });
+});
+
+describe("pageKeyOf", () => {
+  it("changes only when the page or its subject changes", () => {
+    expect(pageKeyOf({ name: "discussion", id: 4 })).not.toBe(
+      pageKeyOf({ name: "discussion", id: 5 }),
+    );
+    expect(pageKeyOf({ name: "settings", section: "model" })).toBe(
+      pageKeyOf({ name: "settings", section: "limits" }),
+    );
+    expect(pageKeyOf({ name: "library" })).not.toBe(
+      pageKeyOf({ name: "document", path: "library" }),
+    );
+  });
+});

@@ -13,26 +13,28 @@ import { Page, PageBody, PageHeader } from "@/components/layout/shell";
 import { ConfirmDialog } from "@/components/ui/dialog";
 import {
   Avatar,
+  AvatarStack,
   Banner,
   Button,
   Chip,
   EmptyState,
 } from "@/components/ui/index";
 import { OverflowMenu } from "@/components/ui/menu";
+import { Tooltip } from "@/components/ui/tooltip";
 import { Composer } from "@/features/discussions/composer";
 import { DiscussionMembersDialog } from "@/features/discussions/members";
-import { formatTime, highlightMentions } from "@/features/mentions";
+import { highlightMentions } from "@/features/mentions";
 import {
   BackendError,
   backend,
   type DiscussionDetail,
   type Message,
 } from "@/lib/backend";
-import { plural, relativeTime } from "@/lib/format";
+import { formatTime, relativeTime } from "@/lib/format";
 import "@/features/discussions/discussions.css";
 
 export function ThreadPage({ id }: { id: number }) {
-  const { members, humanId, refresh } = useOrganization();
+  const { members, humanId, discussions, refresh } = useOrganization();
   const navigate = useNavigate();
   const [detail, setDetail] = useState<DiscussionDetail | null>(null);
   const [missing, setMissing] = useState(false);
@@ -45,12 +47,14 @@ export function ThreadPage({ id }: { id: number }) {
   const [fresh, setFresh] = useState<ReadonlySet<number>>(new Set());
   const bottom = useRef<HTMLDivElement>(null);
   const seen = useRef(0);
+  const first = useRef(true);
 
   const load = useCallback(async () => {
     try {
       setDetail(await backend.readDiscussion(id));
       setMissing(false);
       setLoadFailed(false);
+      void refresh().catch(backend.reportFailure);
     } catch (failure) {
       if (
         failure instanceof BackendError &&
@@ -62,10 +66,11 @@ export function ThreadPage({ id }: { id: number }) {
         backend.reportFailure(failure);
       }
     }
-  }, [id]);
+  }, [id, refresh]);
 
   useEffect(() => {
     seen.current = 0;
+    first.current = true;
     setFresh(new Set());
     void load();
   }, [load]);
@@ -90,6 +95,10 @@ export function ThreadPage({ id }: { id: number }) {
       (largest, message) => Math.max(largest, message.id),
       0,
     );
+    if (first.current || newest > seen.current) {
+      first.current = false;
+      bottom.current?.scrollIntoView({ block: "end" });
+    }
     if (seen.current > 0 && newest > seen.current) {
       const arrived = new Set(
         detail.messages
@@ -102,11 +111,6 @@ export function ThreadPage({ id }: { id: number }) {
       return () => clearTimeout(timer);
     }
     seen.current = newest;
-  }, [detail]);
-
-  // biome-ignore lint/correctness/useExhaustiveDependencies: follow the tail as messages arrive
-  useEffect(() => {
-    bottom.current?.scrollIntoView({ block: "end" });
   }, [detail]);
 
   const memberIds = useMemo(
@@ -151,52 +155,52 @@ export function ThreadPage({ id }: { id: number }) {
     }
   };
 
+  const archive = async (archived: boolean) => {
+    try {
+      await backend.archiveDiscussion(id, archived);
+      if (archived) navigate({ name: "discussions" });
+      else await load();
+    } catch (failure) {
+      backend.reportFailure(failure);
+    }
+  };
+
   if (missing) {
     return (
       <Page>
         <PageHeader
           title="Discussion not found"
-          lede="It may have been deleted, or you may no longer be a Member of it."
-          crumb={{
-            label: "Discussions",
-            onSelect: () => navigate({ name: "discussions" }),
-          }}
+          actions={
+            <Button onClick={() => navigate({ name: "discussions" })}>
+              Back to Discussions
+            </Button>
+          }
         />
-        <PageBody>
-          <EmptyState
-            title="Nothing to show"
-            description="Go back to the list and pick another Discussion."
-            action={
-              <Button onClick={() => navigate({ name: "discussions" })}>
-                Back to Discussions
-              </Button>
-            }
-          />
-        </PageBody>
       </Page>
     );
   }
 
-  const people = detail?.members ?? [];
-  const typeOf = (memberId: number) =>
-    members.find((member) => member.id === memberId)?.type ?? "agent";
+  const names = (detail?.members ?? []).map((member) => member.name);
+  const topic =
+    discussions.find((item) => item.id === id)?.topic ?? detail?.topic ?? "";
 
   return (
     <Page>
       <PageHeader
-        title={detail?.topic ?? (loadFailed ? "Unavailable" : "Loading…")}
-        lede={
-          detail
-            ? `${plural(people.length, "Member")} · ${plural(detail.total_messages, "message")}`
-            : undefined
-        }
-        crumb={{
-          label: "Discussions",
-          onSelect: () => navigate({ name: "discussions" }),
-        }}
+        title={topic || (loadFailed ? "Unavailable" : "")}
+        status={detail?.archived ? <Chip>Archived</Chip> : undefined}
         actions={
           detail ? (
             <>
+              <Tooltip label={names.join("\n")}>
+                <Button
+                  variant="ghost"
+                  aria-label="Members"
+                  onClick={() => setEditingMembers(true)}
+                >
+                  <AvatarStack names={names} />
+                </Button>
+              </Tooltip>
               {awaiting.size > 0 ? (
                 <Button
                   variant="primary"
@@ -216,27 +220,22 @@ export function ThreadPage({ id }: { id: number }) {
                     icon: <Users size={15} />,
                     onSelect: () => setEditingMembers(true),
                   },
-                  {
-                    id: "archive",
-                    label: "Archive",
-                    icon: <Archive size={15} />,
-                    onSelect: async () => {
-                      await backend.archiveDiscussion(id, true);
-                      navigate({ name: "discussions" });
-                    },
-                  },
-                  {
-                    id: "unarchive",
-                    label: "Unarchive",
-                    icon: <ArchiveRestore size={15} />,
-                    onSelect: async () => {
-                      await backend.archiveDiscussion(id, false);
-                      await load();
-                    },
-                  },
+                  detail.archived
+                    ? {
+                        id: "unarchive",
+                        label: "Unarchive",
+                        icon: <ArchiveRestore size={15} />,
+                        onSelect: () => void archive(false),
+                      }
+                    : {
+                        id: "archive",
+                        label: "Archive",
+                        icon: <Archive size={15} />,
+                        onSelect: () => void archive(true),
+                      },
                   {
                     id: "delete",
-                    label: "Delete Discussion",
+                    label: "Delete",
                     icon: <Trash2 size={15} />,
                     tone: "danger",
                     onSelect: () => setDoomed(true),
@@ -248,40 +247,10 @@ export function ThreadPage({ id }: { id: number }) {
         }
       />
 
-      <div className="thread-strip">
-        <span className="thread-strip-icon" aria-hidden="true">
-          <Users size={14} />
-        </span>
-        <ul className="thread-people">
-          {people.map((member) => (
-            <li key={member.id}>
-              <Chip tone={typeOf(member.id) === "agent" ? "blue" : "neutral"}>
-                {member.name}
-              </Chip>
-            </li>
-          ))}
-        </ul>
-        {awaiting.size > 0 ? (
-          <span className="thread-pending">
-            {plural(awaiting.size, "message")} waiting for you
-          </span>
-        ) : null}
-      </div>
-
       <PageBody variant="flush">
         <div className="thread-scroll">
-          {error ? (
-            <div className="thread-banner">
-              <Banner tone="danger" onDismiss={() => setError(null)}>
-                {error}
-              </Banner>
-            </div>
-          ) : null}
           {detail && detail.messages.length === 0 ? (
-            <EmptyState
-              title="No messages yet"
-              description="Write the first one. Use @Name to notify a Member — for an Agent that schedules a Turn."
-            />
+            <EmptyState title="No messages yet" />
           ) : null}
           <ol className="messages">
             {(detail?.messages ?? []).map((message, index) => {
@@ -321,11 +290,19 @@ export function ThreadPage({ id }: { id: number }) {
           <div ref={bottom} />
         </div>
 
+        {error ? (
+          <div className="thread-banner">
+            <Banner tone="danger" onDismiss={() => setError(null)}>
+              {error}
+            </Banner>
+          </div>
+        ) : null}
+
         <Composer
           members={members}
           memberIds={memberIds}
           busy={busy}
-          placeholder="Write a message. Use @Name to notify a Member."
+          placeholder={topic ? `Message ${topic}` : "Message"}
           onSend={send}
         />
       </PageBody>
@@ -347,7 +324,7 @@ export function ThreadPage({ id }: { id: number }) {
         open={doomed}
         onOpenChange={setDoomed}
         title={`Delete “${detail?.topic ?? ""}”?`}
-        description="The Discussion and every message in it are removed for good. Archiving keeps the history instead."
+        description="Every message in it is removed."
         confirmLabel="Delete Discussion"
         onConfirm={async () => {
           await backend.deleteDiscussion(id);
@@ -394,13 +371,11 @@ export function MessageRow({
         {compact ? null : (
           <div className="message-head">
             <span className="message-sender">{message.sender_name}</span>
-            <time
-              className="message-time"
-              dateTime={message.created_at}
-              title={formatTime(message.created_at)}
-            >
-              {relativeTime(message.created_at)}
-            </time>
+            <Tooltip label={formatTime(message.created_at)}>
+              <time className="message-time" dateTime={message.created_at}>
+                {relativeTime(message.created_at)}
+              </time>
+            </Tooltip>
           </div>
         )}
         <div className="message-text">

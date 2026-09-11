@@ -8,12 +8,6 @@ export function formatBytes(size: number): string {
   return `${(size / (1024 * 1024)).toFixed(1)} MB`;
 }
 
-export function formatTokens(tokens: number): string {
-  if (tokens < 1000) return String(tokens);
-  if (tokens < 1_000_000) return `${(tokens / 1000).toFixed(1)}k`;
-  return `${(tokens / 1_000_000).toFixed(2)}M`;
-}
-
 export function documentName(path: string): string {
   const parts = path.split("/");
   return parts[parts.length - 1];
@@ -22,6 +16,17 @@ export function documentName(path: string): string {
 export function documentFolder(path: string): string | null {
   const cut = path.lastIndexOf("/");
   return cut > 0 ? path.slice(0, cut) : null;
+}
+
+export function formatTime(value: string): string {
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return value;
+  return parsed.toLocaleString("en-US", {
+    month: "short",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
 }
 
 export function relativeTime(value: string): string {
@@ -37,7 +42,7 @@ export function relativeTime(value: string): string {
     ["month", 2_629_800],
     ["year", 31_557_600],
   ];
-  const format = new Intl.RelativeTimeFormat(undefined, { numeric: "auto" });
+  const format = new Intl.RelativeTimeFormat("en-US", { numeric: "auto" });
   let chosen: [Intl.RelativeTimeFormatUnit, number] = units[0];
   for (const unit of units) {
     if (Math.abs(seconds) >= unit[1]) chosen = unit;

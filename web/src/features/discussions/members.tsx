@@ -21,6 +21,9 @@ export function MemberPicker({
     <fieldset className="member-picker" disabled={disabled}>
       <legend>Members</legend>
       <ul className="member-picker-list">
+        {members.length === 0 ? (
+          <li className="member-picker-empty muted">No other Members</li>
+        ) : null}
         {members.map((member) => (
           <li key={member.id}>
             <label className="member-option" htmlFor={`${id}-${member.id}`}>

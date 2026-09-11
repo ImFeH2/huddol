@@ -1,15 +1,19 @@
-import type {
-  ButtonHTMLAttributes,
-  InputHTMLAttributes,
-  ReactNode,
-  Ref,
-  TextareaHTMLAttributes,
+import {
+  type ButtonHTMLAttributes,
+  type InputHTMLAttributes,
+  type ReactNode,
+  type Ref,
+  type TextareaHTMLAttributes,
+  useLayoutEffect,
+  useRef,
 } from "react";
+import { Tooltip } from "@/components/ui/tooltip";
 import "@/components/ui/ui.css";
 
 type ButtonProps = ButtonHTMLAttributes<HTMLButtonElement> & {
   variant?: "default" | "primary" | "ghost" | "danger";
   size?: "md" | "sm";
+  ref?: Ref<HTMLButtonElement>;
 };
 
 export function Button({
@@ -33,27 +37,32 @@ export function Button({
 type IconButtonProps = ButtonHTMLAttributes<HTMLButtonElement> & {
   label: string;
   size?: "md" | "sm";
+  pressed?: boolean;
+  ref?: Ref<HTMLButtonElement>;
 };
 
 export function IconButton({
   label,
   size = "md",
+  pressed,
   type = "button",
   className,
   children,
   ...rest
 }: IconButtonProps) {
   return (
-    <button
-      type={type}
-      className={className ? `icon-button ${className}` : "icon-button"}
-      data-size={size}
-      aria-label={label}
-      title={label}
-      {...rest}
-    >
-      {children}
-    </button>
+    <Tooltip label={label}>
+      <button
+        type={type}
+        className={className ? `icon-button ${className}` : "icon-button"}
+        data-size={size}
+        aria-label={label}
+        aria-pressed={pressed}
+        {...rest}
+      >
+        {children}
+      </button>
+    </Tooltip>
   );
 }
 
@@ -61,7 +70,7 @@ export function Input({
   className,
   type,
   ...rest
-}: InputHTMLAttributes<HTMLInputElement>) {
+}: InputHTMLAttributes<HTMLInputElement> & { ref?: Ref<HTMLInputElement> }) {
   const base = type === "checkbox" ? "checkbox" : "field";
   return (
     <input
@@ -72,17 +81,64 @@ export function Input({
   );
 }
 
+export function autoGrowHeight(
+  scrollHeight: number,
+  lineHeight: number,
+  padding: number,
+  border: number,
+  maxRows?: number,
+): number {
+  const ceiling =
+    maxRows && maxRows > 0 ? maxRows * lineHeight + padding : Infinity;
+  return Math.min(scrollHeight, ceiling) + border;
+}
+
+function assignRef<T>(ref: Ref<T> | undefined, value: T | null) {
+  if (typeof ref === "function") ref(value);
+  else if (ref) ref.current = value;
+}
+
 export function Textarea({
   className,
   ref,
+  autoGrow = false,
+  maxRows,
   ...rest
 }: TextareaHTMLAttributes<HTMLTextAreaElement> & {
   ref?: Ref<HTMLTextAreaElement>;
+  autoGrow?: boolean;
+  maxRows?: number;
 }) {
+  const inner = useRef<HTMLTextAreaElement | null>(null);
+
+  useLayoutEffect(() => {
+    const element = inner.current;
+    if (!autoGrow || !element) return;
+    const style = getComputedStyle(element);
+    const padding =
+      Number.parseFloat(style.paddingTop) +
+      Number.parseFloat(style.paddingBottom);
+    const border =
+      Number.parseFloat(style.borderTopWidth) +
+      Number.parseFloat(style.borderBottomWidth);
+    element.style.height = "auto";
+    element.style.height = `${autoGrowHeight(
+      element.scrollHeight,
+      Number.parseFloat(style.lineHeight),
+      padding,
+      border,
+      maxRows,
+    )}px`;
+  });
+
   return (
     <textarea
-      ref={ref}
+      ref={(element) => {
+        inner.current = element;
+        assignRef(ref, element);
+      }}
       className={className ? `field ${className}` : "field"}
+      data-auto-grow={autoGrow ? "true" : undefined}
       {...rest}
     />
   );
@@ -221,12 +277,14 @@ export function initialsFor(name: string): string {
   return (words[0][0] + words[words.length - 1][0]).toUpperCase();
 }
 
+type AvatarSize = "xs" | "sm" | "md" | "lg";
+
 export function Avatar({
   name,
   size = "md",
 }: {
   name: string;
-  size?: "xs" | "sm" | "md" | "lg";
+  size?: AvatarSize;
 }) {
   return (
     <span
@@ -236,6 +294,35 @@ export function Avatar({
       aria-hidden="true"
     >
       {initialsFor(name)}
+    </span>
+  );
+}
+
+export function AvatarStack({
+  names,
+  max = 5,
+  size = "sm",
+}: {
+  names: string[];
+  max?: number;
+  size?: AvatarSize;
+}) {
+  const shown = names.length > max ? names.slice(0, max) : names;
+  const hidden = names.length - shown.length;
+  return (
+    <span className="avatar-stack" role="img" aria-label={names.join(", ")}>
+      {shown.map((name) => (
+        <Avatar key={name} name={name} size={size} />
+      ))}
+      {hidden > 0 ? (
+        <span
+          className="avatar avatar-more"
+          data-size={size}
+          aria-hidden="true"
+        >
+          +{hidden}
+        </span>
+      ) : null}
     </span>
   );
 }
@@ -299,17 +386,14 @@ export function Spinner({ label }: { label: string }) {
 
 export function EmptyState({
   title,
-  description,
   action,
 }: {
   title: string;
-  description?: ReactNode;
   action?: ReactNode;
 }) {
   return (
     <div className="empty">
       <h3>{title}</h3>
-      {description ? <p>{description}</p> : null}
       {action}
     </div>
   );

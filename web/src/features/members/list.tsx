@@ -3,8 +3,8 @@ import {
   Pause,
   Play,
   Plus,
-  RefreshCw,
   Search,
+  SquarePen,
   Trash2,
   User,
 } from "lucide-react";
@@ -19,7 +19,6 @@ import {
   RowLink,
   Table,
   Toolbar,
-  ToolbarSpacer,
 } from "@/components/layout/shell";
 import { ConfirmDialog, PromptDialog } from "@/components/ui/dialog";
 import {
@@ -28,13 +27,14 @@ import {
   Chip,
   CountPill,
   EmptyState,
-  IconButton,
   Meter,
   SearchField,
   StateDot,
   StatusText,
 } from "@/components/ui/index";
-import { OverflowMenu } from "@/components/ui/menu";
+import { type MenuAction, OverflowMenu } from "@/components/ui/menu";
+import { Segmented } from "@/components/ui/segmented";
+import { agentStateLabel } from "@/features/members/state";
 import { backend, type Member } from "@/lib/backend";
 import { plural } from "@/lib/format";
 import "@/features/members/members.css";
@@ -49,8 +49,51 @@ const COLUMNS: Column[] = [
 
 type Filter = "all" | "agents" | "humans";
 
+const FILTERS: { value: Filter; label: string }[] = [
+  { value: "all", label: "All" },
+  { value: "agents", label: "Agents" },
+  { value: "humans", label: "Humans" },
+];
+
+const COUNTED: Record<Filter, string> = {
+  all: "Member",
+  agents: "Agent",
+  humans: "Human",
+};
+
+export function memberActions(
+  member: Member,
+  on: { toggle: () => void; rename: () => void; remove: () => void },
+): MenuAction[] {
+  const rename: MenuAction = {
+    id: "rename",
+    label: "Rename",
+    icon: <SquarePen size={15} />,
+    onSelect: on.rename,
+  };
+  if (member.type !== "agent") return [rename];
+  const paused = member.state === "paused";
+  return [
+    {
+      id: "toggle",
+      label: paused ? "Resume" : "Pause",
+      icon: paused ? <Play size={15} /> : <Pause size={15} />,
+      onSelect: on.toggle,
+    },
+    rename,
+    {
+      id: "delete",
+      label: "Delete",
+      icon: <Trash2 size={15} />,
+      tone: "danger",
+      disabled: member.state === "running",
+      onSelect: on.remove,
+    },
+  ];
+}
+
 export function MembersPage({ tokenLimit }: { tokenLimit: number }) {
-  const { members, refresh, humanId } = useOrganization();
+  const { members, refresh } = useOrganization();
   const navigate = useNavigate();
   const [query, setQuery] = useState("");
   const [filter, setFilter] = useState<Filter>("all");
@@ -67,26 +110,10 @@ export function MembersPage({ tokenLimit }: { tokenLimit: number }) {
     });
   }, [members, query, filter]);
 
-  const agents = members.filter((member) => member.type === "agent").length;
-
   return (
     <Page>
       <PageHeader
         title="Members"
-        lede={
-          <>
-            Humans and Agents are equal Members: same identity, same messages,
-            same mentions. An Agent wakes when it is mentioned in a{" "}
-            <button
-              type="button"
-              className="inline-link"
-              onClick={() => navigate({ name: "discussions" })}
-            >
-              Discussion
-            </button>
-            , then decides for itself what to do.
-          </>
-        }
         actions={
           <Button variant="primary" onClick={() => setCreating(true)}>
             <Plus size={16} />
@@ -98,45 +125,21 @@ export function MembersPage({ tokenLimit }: { tokenLimit: number }) {
         <SearchField
           icon={<Search size={15} />}
           value={query}
-          placeholder="Search Members by name"
+          placeholder="Search Members"
           aria-label="Search Members"
           onChange={(event) => setQuery(event.target.value)}
         />
-        <fieldset className="segmented">
-          <legend className="visually-hidden">Filter by kind</legend>
-          {(["all", "agents", "humans"] as Filter[]).map((option) => (
-            <button
-              key={option}
-              type="button"
-              className="segment"
-              aria-pressed={filter === option}
-              onClick={() => setFilter(option)}
-            >
-              {option === "all"
-                ? "All"
-                : option === "agents"
-                  ? "Agents"
-                  : "Humans"}
-            </button>
-          ))}
-        </fieldset>
-        <ToolbarSpacer />
-        <IconButton
-          label="Refresh"
-          onClick={() => void refresh().catch(backend.reportFailure)}
-        >
-          <RefreshCw size={15} />
-        </IconButton>
+        <Segmented
+          label="Filter by kind"
+          value={filter}
+          options={FILTERS}
+          onChange={setFilter}
+        />
       </Toolbar>
       <PageBody>
-        <CountPill>
-          {plural(shown.length, "Member")} · {plural(agents, "Agent")}
-        </CountPill>
+        <CountPill>{plural(shown.length, COUNTED[filter])}</CountPill>
         {shown.length === 0 ? (
-          <EmptyState
-            title="No Members match"
-            description="Clear the search or change the filter."
-          />
+          <EmptyState title="No Members match" />
         ) : (
           <Table columns={COLUMNS} label="Members">
             {shown.map((member) => (
@@ -144,7 +147,6 @@ export function MembersPage({ tokenLimit }: { tokenLimit: number }) {
                 key={member.id}
                 member={member}
                 tokenLimit={tokenLimit}
-                isYou={member.id === humanId}
                 onOpen={() => navigate({ name: "member", id: member.id })}
                 onToggle={async () => {
                   await (member.state === "paused"
@@ -164,10 +166,7 @@ export function MembersPage({ tokenLimit }: { tokenLimit: number }) {
         open={creating}
         onOpenChange={setCreating}
         title="New Agent"
-        description="An Agent is a Member with its own continuous history, Todos and Memory. Names are unique across the organization and are how everyone mentions each other."
         label="Name"
-        placeholder="Scout"
-        hint="Members write @Name to reach it."
         submitLabel="Create Agent"
         onSubmit={async (name) => {
           await backend.createAgent(name);
@@ -178,7 +177,6 @@ export function MembersPage({ tokenLimit }: { tokenLimit: number }) {
         open={renaming !== null}
         onOpenChange={(next) => !next && setRenaming(null)}
         title="Rename Member"
-        description="Older messages keep the text they were written with, so a rename does not rewrite past mentions."
         label="Name"
         initial={renaming?.name ?? ""}
         submitLabel="Rename"
@@ -192,7 +190,7 @@ export function MembersPage({ tokenLimit }: { tokenLimit: number }) {
         open={doomed !== null}
         onOpenChange={(next) => !next && setDoomed(null)}
         title={`Delete ${doomed?.name ?? ""}?`}
-        description="Its messages stay in every Discussion, and its name stays reserved so old mentions keep pointing at the same individual. Its Memory, Todos and history are removed."
+        description="Its Memory, Todos and history are removed."
         confirmLabel="Delete Agent"
         onConfirm={async () => {
           if (doomed) await backend.deleteAgent(doomed.id);
@@ -204,10 +202,9 @@ export function MembersPage({ tokenLimit }: { tokenLimit: number }) {
   );
 }
 
-function MemberRow({
+export function MemberRow({
   member,
   tokenLimit,
-  isYou,
   onOpen,
   onToggle,
   onRename,
@@ -215,7 +212,6 @@ function MemberRow({
 }: {
   member: Member;
   tokenLimit: number;
-  isYou: boolean;
   onOpen: () => void;
   onToggle: () => void;
   onRename: () => void;
@@ -223,26 +219,17 @@ function MemberRow({
 }) {
   const agent = member.type === "agent";
   const tokens = member.tokens ?? 0;
-  const capped = agent && tokenLimit > 0 && tokens >= tokenLimit;
 
   return (
     <tr className="table-row">
       <td>
         <div className="cell-lead">
           <Avatar name={member.name} />
-          <RowLink
-            primary={member.name}
-            secondary={
-              agent
-                ? capped
-                  ? "Token ceiling reached — no longer scheduled"
-                  : "Wakes on mention, decides for itself"
-                : isYou
-                  ? "This is you"
-                  : "Human"
-            }
-            onSelect={onOpen}
-          />
+          {agent ? (
+            <RowLink primary={member.name} onSelect={onOpen} />
+          ) : (
+            <span className="member-name">{member.name}</span>
+          )}
         </div>
       </td>
       <td data-hide-below="md">
@@ -282,13 +269,7 @@ function MemberRow({
               />
             }
           >
-            {member.state === "running"
-              ? "Running a Turn"
-              : member.state === "paused"
-                ? "Paused"
-                : capped
-                  ? "At ceiling"
-                  : "Idle"}
+            {agentStateLabel(member, tokenLimit)}
           </StatusText>
         ) : (
           <span className="muted">—</span>
@@ -297,34 +278,11 @@ function MemberRow({
       <td className="cell-actions">
         <OverflowMenu
           label={`Actions for ${member.name}`}
-          actions={[
-            {
-              id: "toggle",
-              label: member.state === "paused" ? "Resume" : "Pause",
-              icon:
-                member.state === "paused" ? (
-                  <Play size={15} />
-                ) : (
-                  <Pause size={15} />
-                ),
-              disabled: !agent,
-              onSelect: onToggle,
-            },
-            {
-              id: "rename",
-              label: "Rename",
-              icon: <User size={15} />,
-              onSelect: onRename,
-            },
-            {
-              id: "delete",
-              label: "Delete",
-              icon: <Trash2 size={15} />,
-              tone: "danger",
-              disabled: !agent || member.state === "running",
-              onSelect: onDelete,
-            },
-          ]}
+          actions={memberActions(member, {
+            toggle: onToggle,
+            rename: onRename,
+            remove: onDelete,
+          })}
         />
       </td>
     </tr>

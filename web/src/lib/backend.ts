@@ -29,6 +29,7 @@ export type DiscussionDetail = {
   topic: string;
   members: { id: number; name: string }[];
   total_messages: number;
+  archived: boolean;
   read_through: number;
   awaiting_ack: number[];
   acknowledged: number[];

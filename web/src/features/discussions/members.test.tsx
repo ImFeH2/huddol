@@ -48,6 +48,14 @@ describe("discussion member picker", () => {
     expect(labels).toEqual(ids);
   });
 
+  it("names the empty state when there is nobody to pick", () => {
+    const html = renderToStaticMarkup(
+      <MemberPicker members={[]} selected={[]} onChange={() => {}} />,
+    );
+    expect(html).toContain("No other Members");
+    expect(html).not.toContain('type="checkbox"');
+  });
+
   it("disables the selection while saving", () => {
     expect(render(true)).toContain(
       '<fieldset class="member-picker" disabled="">',

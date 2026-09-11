@@ -1,8 +1,11 @@
-import { useCallback, useEffect, useId, useState } from "react";
-import { Page, PageBody, PageHeader } from "@/components/layout/shell";
+import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { Banner, Button, Chip, Field, Input } from "@/components/ui/index";
 import { backend } from "@/lib/backend";
 import "@/features/settings/settings.css";
+
+function failureMessage(failure: unknown): string {
+  return failure instanceof Error ? failure.message : String(failure);
+}
 
 export function langfuseUpdate(
   values: Record<string, unknown>,
@@ -18,8 +21,9 @@ export function langfuseUpdate(
   return next;
 }
 
-export function LangfusePage() {
+export function LangfusePanel() {
   const id = useId();
+  const first = useRef<HTMLInputElement>(null);
   const [values, setValues] = useState<Record<string, unknown> | null>(null);
   const [publicKey, setPublicKey] = useState("");
   const [secretKey, setSecretKey] = useState("");
@@ -32,8 +36,8 @@ export function LangfusePage() {
     setBusy(true);
     try {
       setValues(await backend.settings("observability"));
-    } catch {
-      setError("Could not load settings");
+    } catch (failure) {
+      setError(failureMessage(failure));
     } finally {
       setBusy(false);
     }
@@ -57,10 +61,13 @@ export function LangfusePage() {
       setPublicKey("");
       setSecretKey("");
       setSaved(true);
-    } catch {
-      setError("Could not save settings");
+    } catch (failure) {
+      setError(failureMessage(failure));
     } finally {
       setBusy(false);
+      requestAnimationFrame(() => {
+        if (document.activeElement === document.body) first.current?.focus();
+      });
     }
   };
 
@@ -68,87 +75,93 @@ export function LangfusePage() {
   const configured = values?.keys_set === true;
 
   return (
-    <Page>
-      <PageHeader title="Langfuse" />
-      <PageBody>
-        {error ? <Banner tone="danger">{error}</Banner> : null}
-        {saved ? (
-          <Banner tone="success">Saved. Restart Huddol to apply.</Banner>
-        ) : null}
-        {!values && error ? (
-          <Button disabled={busy} onClick={load}>
-            Retry
-          </Button>
-        ) : null}
-        <form
-          onChange={() => setSaved(false)}
-          onSubmit={(event) => {
-            event.preventDefault();
-            void save();
-          }}
-        >
-          <fieldset className="settings-form" disabled={busy || !values}>
-            <label className="settings-toggle" htmlFor={`${id}-enabled`}>
-              <Input
-                id={`${id}-enabled`}
-                type="checkbox"
-                checked={enabled}
-                onChange={(event) =>
-                  setValues({ ...values, enabled: event.target.checked })
-                }
-              />
-              Enabled
-            </label>
-            <Field label="Base URL" htmlFor={`${id}-url`}>
-              <Input
-                id={`${id}-url`}
-                type="url"
-                pattern="https?://.+"
-                required={enabled}
-                placeholder="https://cloud.langfuse.com"
-                value={String(values?.base_url ?? "")}
-                onChange={(event) =>
-                  setValues({ ...values, base_url: event.target.value })
-                }
-              />
-            </Field>
-            <Field label="Public key" htmlFor={`${id}-public`}>
-              <Input
-                id={`${id}-public`}
-                type="password"
-                autoComplete="off"
-                required={enabled && !configured}
-                placeholder={configured ? "Unchanged" : ""}
-                pattern=".*\S.*"
-                value={publicKey}
-                onChange={(event) => setPublicKey(event.target.value)}
-              />
-            </Field>
-            <Field
-              label="Secret key"
-              htmlFor={`${id}-secret`}
-              hint={configured ? "Leave keys blank to keep them." : undefined}
-            >
-              <Input
-                id={`${id}-secret`}
-                type="password"
-                autoComplete="off"
-                required={enabled && !configured}
-                placeholder={configured ? "Unchanged" : ""}
-                pattern=".*\S.*"
-                value={secretKey}
-                onChange={(event) => setSecretKey(event.target.value)}
-              />
-            </Field>
+    <>
+      {error ? (
+        <Banner tone="danger">
+          {error}
+          {values ? null : (
             <div className="settings-actions">
-              <Button type="submit" variant="primary">
-                Save
+              <Button disabled={busy} onClick={() => void load()}>
+                Retry
               </Button>
-              {configured ? <Chip tone="success">Keys stored</Chip> : null}
             </div>
-          </fieldset>
-        </form>
-      </PageBody>
-    </Page>
+          )}
+        </Banner>
+      ) : null}
+      {saved ? (
+        <Banner tone="success">Saved. Restart Huddol to apply.</Banner>
+      ) : null}
+      <form
+        onChange={() => setSaved(false)}
+        onSubmit={(event) => {
+          event.preventDefault();
+          void save();
+        }}
+      >
+        <fieldset className="settings-form" disabled={busy || !values}>
+          <label className="settings-toggle" htmlFor={`${id}-enabled`}>
+            <Input
+              ref={first}
+              id={`${id}-enabled`}
+              type="checkbox"
+              checked={enabled}
+              onChange={(event) =>
+                setValues({ ...values, enabled: event.target.checked })
+              }
+            />
+            Enabled
+          </label>
+          <Field label="Base URL" htmlFor={`${id}-url`}>
+            <Input
+              id={`${id}-url`}
+              type="url"
+              pattern="https?://.+"
+              required={enabled}
+              placeholder="https://cloud.langfuse.com"
+              value={String(values?.base_url ?? "")}
+              onChange={(event) =>
+                setValues({ ...values, base_url: event.target.value })
+              }
+            />
+          </Field>
+          <Field label="Public key" htmlFor={`${id}-public`}>
+            <Input
+              id={`${id}-public`}
+              type="password"
+              autoComplete="off"
+              required={enabled && !configured}
+              placeholder={configured ? "Unchanged" : ""}
+              pattern=".*\S.*"
+              value={publicKey}
+              onChange={(event) => setPublicKey(event.target.value)}
+            />
+          </Field>
+          <Field
+            label="Secret key"
+            htmlFor={`${id}-secret`}
+            hint={
+              configured ? "Leave blank to keep the stored keys." : undefined
+            }
+          >
+            <Input
+              id={`${id}-secret`}
+              type="password"
+              autoComplete="off"
+              required={enabled && !configured}
+              placeholder={configured ? "Unchanged" : ""}
+              pattern=".*\S.*"
+              value={secretKey}
+              onChange={(event) => setSecretKey(event.target.value)}
+            />
+          </Field>
+          <div className="settings-actions">
+            <Button type="submit" variant="primary">
+              Save
+            </Button>
+            {configured ? <Chip tone="success">Keys stored</Chip> : null}
+          </div>
+        </fieldset>
+      </form>
+    </>
   );
 }

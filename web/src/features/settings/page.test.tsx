@@ -1,0 +1,22 @@
+import { renderToStaticMarkup } from "react-dom/server";
+import { describe, expect, it } from "vitest";
+import { RouterProvider } from "@/app/router";
+import { SettingsPage } from "@/features/settings/page";
+
+describe("Settings page", () => {
+  it("shows one tab per section and the requested panel", () => {
+    const html = renderToStaticMarkup(
+      <RouterProvider>
+        <SettingsPage section="limits" />
+      </RouterProvider>,
+    );
+    expect(html).toContain("<h1>Settings</h1>");
+    for (const label of ["Model", "Execution", "Limits", "Langfuse"]) {
+      expect(html).toContain(`>${label}</button>`);
+    }
+    expect(html).toContain('aria-selected="true"');
+    expect(html).toContain("0 means no ceiling.");
+    expect(html).not.toContain("page-lede");
+    expect(html).not.toContain("section-lede");
+  });
+});

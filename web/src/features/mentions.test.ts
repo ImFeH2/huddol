@@ -128,8 +128,8 @@ describe("highlightMentions", () => {
     return highlightMentions(body, members, notifiable)
       .filter((node) => isValidElement(node))
       .map((node) => {
-        const element = node as ReactElement<{ className?: string }>;
-        return element.props.className ?? String(element.type);
+        const element = node as ReactElement<{ label?: string }>;
+        return element.type === "mark" ? "mark" : element.props.label;
       });
   }
 
@@ -137,16 +137,16 @@ describe("highlightMentions", () => {
     expect(kinds("hi @Main", new Set([2]))).toEqual(["mark"]);
   });
 
-  it("renders a mention of someone outside the discussion as a reference", () => {
+  it("explains a mention of someone outside the discussion in a tooltip", () => {
     expect(kinds("about @Mainframe", new Set([2]))).toEqual([
-      "mention-reference",
+      "Not in this Discussion",
     ]);
   });
 
   it("distinguishes the two inside one message", () => {
     expect(kinds("@Main please review @Mainframe work", new Set([2]))).toEqual([
       "mark",
-      "mention-reference",
+      "Not in this Discussion",
     ]);
   });
 

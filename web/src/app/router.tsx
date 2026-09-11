@@ -7,6 +7,8 @@ import {
   useState,
 } from "react";
 
+export type SettingsSection = "model" | "execution" | "limits" | "langfuse";
+
 export type Route =
   | { name: "discussions" }
   | { name: "discussion"; id: number }
@@ -14,19 +16,9 @@ export type Route =
   | { name: "member"; id: number }
   | { name: "library" }
   | { name: "document"; path: string }
-  | { name: "model" }
-  | { name: "execution" }
-  | { name: "limits" }
-  | { name: "langfuse" };
+  | { name: "settings"; section: SettingsSection };
 
-export type NavId =
-  | "discussions"
-  | "members"
-  | "library"
-  | "model"
-  | "limits"
-  | "langfuse"
-  | "execution";
+export type NavId = "discussions" | "members" | "library" | "settings";
 
 const NAV_OF: Record<Route["name"], NavId> = {
   discussions: "discussions",
@@ -35,17 +27,20 @@ const NAV_OF: Record<Route["name"], NavId> = {
   member: "members",
   library: "library",
   document: "library",
-  model: "model",
-  execution: "execution",
-  limits: "limits",
-  langfuse: "langfuse",
+  settings: "settings",
 };
 
 export function navIdOf(route: Route): NavId {
   return NAV_OF[route.name];
 }
 
-type Router = { route: Route; navigate: (next: Route) => void; back: boolean };
+export function pageKeyOf(route: Route): string {
+  if ("id" in route) return `${route.name}:${route.id}`;
+  if ("path" in route) return `${route.name}:${route.path}`;
+  return route.name;
+}
+
+type Router = { route: Route; navigate: (next: Route) => void };
 
 const RouterContext = createContext<Router | null>(null);
 
@@ -64,7 +59,6 @@ export function RouterProvider({ children }: { children: ReactNode }) {
     () => ({
       route: stack[stack.length - 1],
       navigate,
-      back: stack.length > 1,
     }),
     [stack, navigate],
   );
@@ -74,10 +68,15 @@ export function RouterProvider({ children }: { children: ReactNode }) {
   );
 }
 
+function paramOf(route: Route): string | number | null {
+  if ("id" in route) return route.id;
+  if ("path" in route) return route.path;
+  if ("section" in route) return route.section;
+  return null;
+}
+
 function sameParams(a: Route, b: Route): boolean {
-  const left = "id" in a ? a.id : "path" in a ? a.path : null;
-  const right = "id" in b ? b.id : "path" in b ? b.path : null;
-  return left === right;
+  return paramOf(a) === paramOf(b);
 }
 
 export function useRouter(): Router {

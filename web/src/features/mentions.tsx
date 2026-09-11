@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import { Tooltip } from "@/components/ui/tooltip";
 import type { Member } from "@/lib/backend";
 
 export function highlightMentions(
@@ -49,13 +50,9 @@ export function highlightMentions(
       reaches ? (
         <mark key={`m${key++}`}>{text}</mark>
       ) : (
-        <span
-          className="mention-reference"
-          key={`m${key++}`}
-          title="Mentioned but not in this discussion, so nobody was notified"
-        >
-          {text}
-        </span>
+        <Tooltip key={`m${key++}`} label="Not in this Discussion">
+          <span className="mention-reference">{text}</span>
+        </Tooltip>
       ),
     );
     index = at + 1 + matched.length;
@@ -119,15 +116,4 @@ export function completeMention(
 ): { text: string; caret: number } {
   const head = `${text.slice(0, mention.start)}@${name} `;
   return { text: head + text.slice(caret), caret: head.length };
-}
-
-export function formatTime(value: string): string {
-  const parsed = new Date(value);
-  if (Number.isNaN(parsed.getTime())) return value;
-  return parsed.toLocaleString(undefined, {
-    month: "short",
-    day: "numeric",
-    hour: "2-digit",
-    minute: "2-digit",
-  });
 }

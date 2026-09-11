@@ -3,7 +3,6 @@ import {
   ArchiveRestore,
   MessageSquare,
   Plus,
-  RefreshCw,
   Search,
   Trash2,
 } from "lucide-react";
@@ -18,7 +17,6 @@ import {
   RowLink,
   Table,
   Toolbar,
-  ToolbarSpacer,
 } from "@/components/layout/shell";
 import { ConfirmDialog } from "@/components/ui/dialog";
 import {
@@ -90,7 +88,7 @@ const RESULT_COLUMNS: Column[] = [
 export function DiscussionsPage() {
   const { members } = useOrganization();
   const navigate = useNavigate();
-  const [list, setList] = useState<DiscussionSummary[]>([]);
+  const [list, setList] = useState<DiscussionSummary[] | null>(null);
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<FoundMessage[] | null>(null);
   const [archived, setArchived] = useState(false);
@@ -151,7 +149,7 @@ export function DiscussionsPage() {
   );
 
   const topicOf = (id: number) =>
-    list.find((item) => item.id === id)?.topic ?? `Discussion ${id}`;
+    list?.find((item) => item.id === id)?.topic ?? `Discussion ${id}`;
 
   const searching = results !== null;
 
@@ -159,24 +157,10 @@ export function DiscussionsPage() {
     <Page>
       <PageHeader
         title="Discussions"
-        lede={
-          <>
-            Members work through Discussions. Writing <code>@Name</code> in a
-            message notifies that Member — for an{" "}
-            <button
-              type="button"
-              className="inline-link"
-              onClick={() => navigate({ name: "members" })}
-            >
-              Agent
-            </button>{" "}
-            it schedules a Turn.
-          </>
-        }
         actions={
           <Button variant="primary" onClick={() => setCreating(true)}>
             <Plus size={16} />
-            New discussion
+            New Discussion
           </Button>
         }
       />
@@ -184,35 +168,30 @@ export function DiscussionsPage() {
         <SearchField
           icon={<Search size={15} />}
           value={query}
-          placeholder="Search messages across every Discussion"
+          placeholder="Search messages"
           aria-label="Search messages"
           onChange={(event) => setQuery(event.target.value)}
         />
-        <Button
+        <IconButton
+          label="Show archived"
+          pressed={archived}
           onClick={() => setArchived((current) => !current)}
-          aria-pressed={archived}
         >
           <Archive size={15} />
-          {archived ? "Hiding nothing" : "Show archived"}
-        </Button>
-        <ToolbarSpacer />
-        <IconButton label="Refresh" onClick={() => void load()}>
-          <RefreshCw size={15} />
         </IconButton>
       </Toolbar>
       <PageBody>
-        <CountPill>
-          {searching
-            ? plural(results.length, "result")
-            : plural(list.length, "discussion")}
-        </CountPill>
+        {searching || list ? (
+          <CountPill>
+            {searching
+              ? plural(results.length, "result")
+              : plural(list?.length ?? 0, "Discussion")}
+          </CountPill>
+        ) : null}
 
         {searching ? (
           results.length === 0 ? (
-            <EmptyState
-              title="No messages match"
-              description={`Nothing in this organization mentions “${query.trim()}”.`}
-            />
+            <EmptyState title="No messages match" />
           ) : (
             <Table columns={RESULT_COLUMNS} label="Search results">
               {results.map((result) => (
@@ -251,14 +230,13 @@ export function DiscussionsPage() {
               ))}
             </Table>
           )
-        ) : list.length === 0 ? (
+        ) : list === null ? null : list.length === 0 ? (
           <EmptyState
             title="No Discussions yet"
-            description="A Discussion is a message space around one topic. Create one and pick who belongs in it."
             action={
               <Button variant="primary" onClick={() => setCreating(true)}>
                 <Plus size={16} />
-                New discussion
+                New Discussion
               </Button>
             }
           />
@@ -284,16 +262,13 @@ export function DiscussionsPage() {
       <CreateDiscussionDialog
         open={creating}
         onOpenChange={setCreating}
-        onCreated={async (id) => {
-          await load();
-          navigate({ name: "discussion", id });
-        }}
+        onCreated={(id) => navigate({ name: "discussion", id })}
       />
       <ConfirmDialog
         open={doomed !== null}
         onOpenChange={(next) => !next && setDoomed(null)}
         title={`Delete “${doomed?.topic ?? ""}”?`}
-        description="The Discussion and every message in it are removed for good. Archiving keeps the history instead."
+        description="Every message in it is removed."
         confirmLabel="Delete Discussion"
         onConfirm={async () => {
           if (doomed) await backend.deleteDiscussion(doomed.id);
@@ -331,11 +306,7 @@ function DiscussionRow({
           <span className="topic-glyph" aria-hidden="true">
             <MessageSquare size={15} />
           </span>
-          <RowLink
-            primary={item.topic}
-            secondary={plural(item.member_ids.length, "member")}
-            onSelect={onOpen}
-          />
+          <RowLink primary={item.topic} onSelect={onOpen} />
         </div>
       </td>
       <td data-hide-below="md">

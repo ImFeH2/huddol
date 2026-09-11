@@ -41,8 +41,7 @@ export function OverflowMenu({
     buttons?.[active]?.focus();
   }, [open, active]);
 
-  const enabled = actions.filter((action) => !action.disabled);
-  if (enabled.length === 0) return null;
+  if (actions.length === 0) return null;
 
   const step = (delta: number) => {
     setActive((current) => {
@@ -75,6 +74,8 @@ export function OverflowMenu({
             setActive(actions.findIndex((action) => !action.disabled));
             setOpen(true);
           }
+          if (open && (event.key === "Escape" || event.key === "Tab"))
+            setOpen(false);
         }}
       >
         <MoreHorizontal size={16} />

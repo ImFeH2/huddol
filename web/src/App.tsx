@@ -1,16 +1,9 @@
-import {
-  Activity,
-  BookText,
-  MessagesSquare,
-  Server,
-  SlidersHorizontal,
-  Terminal,
-  Users,
-} from "lucide-react";
+import { BookText, MessagesSquare, Plus, Settings, Users } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import { OrganizationProvider } from "@/app/organization";
 import {
   navIdOf,
+  pageKeyOf,
   type Route,
   RouterProvider,
   useNavigate,
@@ -19,26 +12,38 @@ import {
 import {
   Nav,
   NavItem,
-  NavSection,
+  NavSubItem,
   Page,
   PageBody,
   PageHeader,
+  PageTransition,
   Shell,
   Sidebar,
-  SidebarFooter,
   SidebarOrg,
 } from "@/components/layout/shell";
-import { Avatar, Badge, Banner, Spinner } from "@/components/ui/index";
+import {
+  Avatar,
+  Badge,
+  Banner,
+  IconButton,
+  Spinner,
+  StateDot,
+} from "@/components/ui/index";
+import { TooltipProvider } from "@/components/ui/tooltip";
+import { CreateDiscussionDialog } from "@/features/discussions/create";
 import { DiscussionsPage } from "@/features/discussions/list";
 import { ThreadPage } from "@/features/discussions/thread";
 import { DocumentPage } from "@/features/library/document";
 import { LibraryPage } from "@/features/library/list";
 import { MemberPage } from "@/features/members/detail";
 import { MembersPage } from "@/features/members/list";
-import { ExecutionPage } from "@/features/settings/execution";
-import { LimitsPage, ModelPage } from "@/features/settings/index";
-import { LangfusePage } from "@/features/settings/langfuse";
-import { type BackendError, backend, type Member } from "@/lib/backend";
+import { SettingsPage } from "@/features/settings/page";
+import {
+  type BackendError,
+  backend,
+  type DiscussionSummary,
+  type Member,
+} from "@/lib/backend";
 import { plural } from "@/lib/format";
 import "@/styles/App.css";
 
@@ -46,7 +51,7 @@ type Loaded = {
   members: Member[];
   humanId: number;
   tokenLimit: number;
-  unread: number;
+  discussions: DiscussionSummary[];
 };
 
 function View({ route, tokenLimit }: { route: Route; tokenLimit: number }) {
@@ -63,14 +68,8 @@ function View({ route, tokenLimit }: { route: Route; tokenLimit: number }) {
       return <LibraryPage />;
     case "document":
       return <DocumentPage path={route.path} />;
-    case "model":
-      return <ModelPage />;
-    case "execution":
-      return <ExecutionPage />;
-    case "limits":
-      return <LimitsPage />;
-    case "langfuse":
-      return <LangfusePage />;
+    case "settings":
+      return <SettingsPage section={route.section} />;
   }
 }
 
@@ -85,9 +84,20 @@ function Chrome({
 }) {
   const { route } = useRouter();
   const navigate = useNavigate();
+  const [creating, setCreating] = useState(false);
   const active = navIdOf(route);
-  const agents = loaded.members.filter((member) => member.type === "agent");
-  const running = agents.filter((member) => member.state === "running").length;
+  const unlisted =
+    route.name === "discussion" &&
+    !loaded.discussions.some((item) => item.id === route.id);
+  const running = new Set(
+    loaded.members
+      .filter((member) => member.type === "agent" && member.state === "running")
+      .map((member) => member.id),
+  );
+  const unread = loaded.discussions.reduce(
+    (total, item) => total + item.unread,
+    0,
+  );
 
   return (
     <Shell
@@ -102,76 +112,94 @@ function Chrome({
         ) : null
       }
       sidebar={
-        <Sidebar>
+        <Sidebar
+          footer={
+            <Nav label="Settings">
+              <NavItem
+                icon={<Settings size={16} />}
+                label="Settings"
+                active={active === "settings"}
+                onSelect={() => {
+                  if (route.name !== "settings")
+                    navigate({ name: "settings", section: "model" });
+                }}
+              />
+            </Nav>
+          }
+        >
           <SidebarOrg
             name="Huddol"
-            detail={`${plural(loaded.members.length, "Member")}, ${running} running`}
+            detail={`${plural(loaded.members.length, "Member")} · ${running.size} running`}
             mark={<Avatar name="Huddol" />}
           />
           <Nav label="Sections">
-            <NavSection label="Organization">
-              <NavItem
-                icon={<MessagesSquare size={16} />}
-                label="Discussions"
-                active={active === "discussions"}
-                badge={
-                  loaded.unread > 0 ? (
-                    <Badge tone="unread">{loaded.unread}</Badge>
-                  ) : undefined
-                }
-                onSelect={() => navigate({ name: "discussions" })}
-              />
-              <NavItem
-                icon={<Users size={16} />}
-                label="Members"
-                active={active === "members"}
-                onSelect={() => navigate({ name: "members" })}
-              />
-              <NavItem
-                icon={<BookText size={16} />}
-                label="Library"
-                active={active === "library"}
-                onSelect={() => navigate({ name: "library" })}
-              />
-            </NavSection>
-            <NavSection label="Settings">
-              <NavItem
-                icon={<Server size={16} />}
-                label="Model"
-                active={route.name === "model"}
-                onSelect={() => navigate({ name: "model" })}
-              />
-              <NavItem
-                icon={<Terminal size={16} />}
-                label="Execution"
-                active={route.name === "execution"}
-                onSelect={() => navigate({ name: "execution" })}
-              />
-              <NavItem
-                icon={<SlidersHorizontal size={16} />}
-                label="Limits"
-                active={active === "limits"}
-                onSelect={() => navigate({ name: "limits" })}
-              />
-              <NavItem
-                icon={<Activity size={16} />}
-                label="Langfuse"
-                active={active === "langfuse"}
-                onSelect={() => navigate({ name: "langfuse" })}
-              />
-            </NavSection>
+            <NavItem
+              icon={<MessagesSquare size={16} />}
+              label="Discussions"
+              active={route.name === "discussions" || unlisted}
+              badge={
+                unread > 0 ? (
+                  <Badge key={unread} tone="unread">
+                    {unread}
+                  </Badge>
+                ) : undefined
+              }
+              trailing={
+                <IconButton
+                  size="sm"
+                  label="New Discussion"
+                  onClick={() => setCreating(true)}
+                >
+                  <Plus size={15} />
+                </IconButton>
+              }
+              onSelect={() => navigate({ name: "discussions" })}
+            >
+              {loaded.discussions.map((item) => (
+                <NavSubItem
+                  key={item.id}
+                  label={item.topic}
+                  active={route.name === "discussion" && route.id === item.id}
+                  badge={
+                    item.unread > 0 ? (
+                      <Badge key={item.unread} tone="unread">
+                        {item.unread}
+                      </Badge>
+                    ) : undefined
+                  }
+                  indicator={
+                    item.member_ids.some((id) => running.has(id)) ? (
+                      <StateDot state="running" />
+                    ) : undefined
+                  }
+                  onSelect={() => navigate({ name: "discussion", id: item.id })}
+                />
+              ))}
+            </NavItem>
+            <NavItem
+              icon={<Users size={16} />}
+              label="Members"
+              active={active === "members"}
+              onSelect={() => navigate({ name: "members" })}
+            />
+            <NavItem
+              icon={<BookText size={16} />}
+              label="Library"
+              active={active === "library"}
+              onSelect={() => navigate({ name: "library" })}
+            />
           </Nav>
-          <SidebarFooter>
-            <Avatar name="You" />
-            <span className="sidebar-org-text">
-              <span className="sidebar-org-name">You</span>
-              <span className="sidebar-org-detail">Human Member</span>
-            </span>
-          </SidebarFooter>
         </Sidebar>
       }
     >
-      <View route={route} tokenLimit={loaded.tokenLimit} />
+      <PageTransition id={pageKeyOf(route)}>
+        <View route={route} tokenLimit={loaded.tokenLimit} />
+      </PageTransition>
+      <CreateDiscussionDialog
+        open={creating}
+        onOpenChange={setCreating}
+        onCreated={(id) => navigate({ name: "discussion", id })}
+      />
     </Shell>
   );
 }
@@ -189,7 +217,7 @@ export default function App() {
       members: organization.members,
       humanId: organization.human_id,
       tokenLimit: organization.token_limit ?? 0,
-      unread: discussions.reduce((total, item) => total + item.unread, 0),
+      discussions,
     });
   }, []);
 
@@ -244,20 +272,23 @@ export default function App() {
   }
 
   return (
-    <RouterProvider>
-      <OrganizationProvider
-        value={{
-          members: loaded.members,
-          humanId: loaded.humanId,
-          refresh,
-        }}
-      >
-        <Chrome
-          loaded={loaded}
-          failure={failure}
-          onDismiss={() => setFailure(null)}
-        />
-      </OrganizationProvider>
-    </RouterProvider>
+    <TooltipProvider>
+      <RouterProvider>
+        <OrganizationProvider
+          value={{
+            members: loaded.members,
+            humanId: loaded.humanId,
+            discussions: loaded.discussions,
+            refresh,
+          }}
+        >
+          <Chrome
+            loaded={loaded}
+            failure={failure}
+            onDismiss={() => setFailure(null)}
+          />
+        </OrganizationProvider>
+      </RouterProvider>
+    </TooltipProvider>
   );
 }

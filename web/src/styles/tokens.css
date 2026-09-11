@@ -99,4 +99,10 @@
 
   --leading-body: 20px;
   --leading-title: 30px;
+
+  --layer-popover: 10;
+  --layer-menu: 20;
+  --layer-overlay: 40;
+  --layer-dialog: 41;
+  --layer-tooltip: 50;
 }

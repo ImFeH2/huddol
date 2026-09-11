@@ -1,5 +1,6 @@
-import { ArrowLeft, ChevronDown } from "lucide-react";
-import { type ReactNode, useId, useRef, useState } from "react";
+import { ArrowLeft } from "lucide-react";
+import { Children, type ReactNode, useRef } from "react";
+import "@/components/ui/ui.css";
 import "@/components/layout/shell.css";
 
 export function Shell({
@@ -22,10 +23,17 @@ export function Shell({
   );
 }
 
-export function Sidebar({ children }: { children: ReactNode }) {
+export function Sidebar({
+  children,
+  footer,
+}: {
+  children: ReactNode;
+  footer?: ReactNode;
+}) {
   return (
     <div className="sidebar">
       <div className="sidebar-scroll">{children}</div>
+      {footer ? <div className="sidebar-footer">{footer}</div> : null}
     </div>
   );
 }
@@ -65,7 +73,7 @@ export function Nav({
     if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return;
     const items = Array.from(
       container.current?.querySelectorAll<HTMLButtonElement>(
-        "button:not([disabled])",
+        ".nav-item:not([disabled]), .nav-subitem:not([disabled])",
       ) ?? [],
     ).filter((item) => item.offsetParent !== null);
     if (items.length === 0) return;
@@ -78,38 +86,8 @@ export function Nav({
 
   return (
     <nav className="nav" aria-label={label} ref={container} onKeyDown={move}>
-      {children}
+      <ul className="nav-list">{children}</ul>
     </nav>
-  );
-}
-
-export function NavSection({
-  label,
-  children,
-}: {
-  label: string;
-  children: ReactNode;
-}) {
-  const [open, setOpen] = useState(true);
-  const bodyId = useId();
-  return (
-    <section className="nav-section">
-      <button
-        type="button"
-        className="nav-section-header"
-        aria-expanded={open}
-        aria-controls={bodyId}
-        onClick={() => setOpen((current) => !current)}
-      >
-        <ChevronDown className="nav-chevron" size={14} aria-hidden="true" />
-        {label}
-      </button>
-      <div className="nav-section-body" id={bodyId} data-open={open}>
-        <ul className="nav-list" hidden={!open}>
-          {children}
-        </ul>
-      </div>
-    </section>
   );
 }
 
@@ -118,25 +96,66 @@ export function NavItem({
   label,
   active,
   badge,
+  trailing,
   onSelect,
+  children,
 }: {
   icon: ReactNode;
   label: string;
   active: boolean;
   badge?: ReactNode;
+  trailing?: ReactNode;
+  onSelect: () => void;
+  children?: ReactNode;
+}) {
+  const nested = Children.toArray(children);
+  return (
+    <li>
+      <div className="nav-row" data-active={active}>
+        <button
+          type="button"
+          className="nav-item"
+          aria-current={active ? "page" : undefined}
+          onClick={onSelect}
+        >
+          <span className="nav-item-icon" aria-hidden="true">
+            {icon}
+          </span>
+          <span className="nav-item-label">{label}</span>
+          {badge}
+        </button>
+        {trailing ? <span className="nav-trailing">{trailing}</span> : null}
+      </div>
+      {nested.length > 0 ? <ul className="nav-sublist">{nested}</ul> : null}
+    </li>
+  );
+}
+
+export function NavSubItem({
+  label,
+  active,
+  badge,
+  indicator,
+  onSelect,
+}: {
+  label: string;
+  active: boolean;
+  badge?: ReactNode;
+  indicator?: ReactNode;
   onSelect: () => void;
 }) {
   return (
     <li>
       <button
         type="button"
-        className="nav-item"
+        className="nav-subitem"
         aria-current={active ? "page" : undefined}
+        data-unread={badge ? "true" : undefined}
         onClick={onSelect}
       >
-        <span className="nav-item-icon" aria-hidden="true">
-          {icon}
-        </span>
+        {indicator ? (
+          <span className="nav-subitem-indicator">{indicator}</span>
+        ) : null}
         <span className="nav-item-label">{label}</span>
         {badge}
       </button>
@@ -144,46 +163,33 @@ export function NavItem({
   );
 }
 
-export function SidebarSecondary({ children }: { children: ReactNode }) {
-  return <div className="sidebar-secondary">{children}</div>;
-}
-
-export function SidebarLink({
-  icon,
-  label,
-  onSelect,
-}: {
-  icon: ReactNode;
-  label: string;
-  onSelect: () => void;
-}) {
-  return (
-    <button type="button" className="sidebar-link" onClick={onSelect}>
-      <span className="nav-item-icon" aria-hidden="true">
-        {icon}
-      </span>
-      {label}
-    </button>
-  );
-}
-
-export function SidebarFooter({ children }: { children: ReactNode }) {
-  return <div className="sidebar-footer">{children}</div>;
-}
-
 export function Page({ children }: { children: ReactNode }) {
   return <main className="page">{children}</main>;
 }
 
+export function PageTransition({
+  id,
+  children,
+}: {
+  id: string;
+  children: ReactNode;
+}) {
+  return (
+    <div className="page-transition" key={id}>
+      {children}
+    </div>
+  );
+}
+
 export function PageHeader({
   title,
-  lede,
+  status,
   actions,
   crumb,
   leading,
 }: {
   title: ReactNode;
-  lede?: ReactNode;
+  status?: ReactNode;
   actions?: ReactNode;
   crumb?: { label: string; onSelect: () => void };
   leading?: ReactNode;
@@ -200,7 +206,7 @@ export function PageHeader({
         {leading}
         <div className="page-heading">
           <h1>{title}</h1>
-          {lede ? <p className="page-lede">{lede}</p> : null}
+          {status ? <div className="page-status">{status}</div> : null}
         </div>
         {actions ? <div className="page-actions">{actions}</div> : null}
       </div>
@@ -210,10 +216,6 @@ export function PageHeader({
 
 export function Toolbar({ children }: { children: ReactNode }) {
   return <div className="toolbar">{children}</div>;
-}
-
-export function ToolbarSpacer() {
-  return <span className="toolbar-spacer" />;
 }
 
 export function PageBody({
@@ -263,7 +265,7 @@ export function Table({
                 {column.label ? (
                   column.label
                 ) : (
-                  <span className="sr-only">Actions</span>
+                  <span className="visually-hidden">Actions</span>
                 )}
               </th>
             ))}
@@ -294,12 +296,10 @@ export function RowLink({
 
 export function Section({
   title,
-  description,
   actions,
   children,
 }: {
   title: string;
-  description?: ReactNode;
   actions?: ReactNode;
   children: ReactNode;
 }) {
@@ -308,7 +308,6 @@ export function Section({
       <div className="section-head">
         <div className="section-heading">
           <h2>{title}</h2>
-          {description ? <p className="section-lede">{description}</p> : null}
         </div>
         {actions ? <div className="section-actions">{actions}</div> : null}
       </div>

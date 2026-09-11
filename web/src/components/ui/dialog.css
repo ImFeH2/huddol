@@ -1,7 +1,7 @@
 .dialog-overlay {
   position: fixed;
   inset: 0;
-  z-index: 40;
+  z-index: var(--layer-overlay);
   background: rgb(var(--gray-1100) / 0.6);
   animation: fade-in var(--duration-fast) var(--ease-out);
 }
@@ -10,7 +10,7 @@
   position: fixed;
   top: 50%;
   left: 50%;
-  z-index: 41;
+  z-index: var(--layer-dialog);
   display: flex;
   flex-direction: column;
   gap: var(--space-5);

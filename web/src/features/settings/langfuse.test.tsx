@@ -1,6 +1,6 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
-import { LangfusePage, langfuseUpdate } from "@/features/settings/langfuse";
+import { LangfusePanel, langfuseUpdate } from "@/features/settings/langfuse";
 
 const stored = {
   enabled: true,
@@ -30,7 +30,7 @@ describe("Langfuse settings", () => {
   });
 
   it("renders labelled password fields and disables saving before load", () => {
-    const html = renderToStaticMarkup(<LangfusePage />);
+    const html = renderToStaticMarkup(<LangfusePanel />);
     expect(html).toContain("Public key");
     expect(html).toContain("Secret key");
     expect(html.match(/type="password"/g)).toHaveLength(2);
