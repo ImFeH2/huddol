@@ -151,25 +151,19 @@ class Api:
             return self._human().read_library(str(params["path"]))
 
         def library_write(params: dict[str, Any]) -> Any:
-            result = self._human().write_library(
+            return self._human().write_library(
                 str(params["path"]),
                 str(params.get("content", "")),
                 params.get("expected_hash"),
             )
-            self._changed("library.updated", result)
-            return result
 
         def library_delete(params: dict[str, Any]) -> Any:
-            result = self._human().delete_library(str(params["path"]))
-            self._changed("library.updated", result)
-            return result
+            return self._human().delete_library(str(params["path"]))
 
         def library_move(params: dict[str, Any]) -> Any:
-            result = self._human().move_library(
+            return self._human().move_library(
                 str(params["path"]), str(params["destination"])
             )
-            self._changed("library.updated", result)
-            return result
 
         def agent_detail(params: dict[str, Any]) -> Any:
             agent_id = int(params["agent_id"])

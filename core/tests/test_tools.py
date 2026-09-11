@@ -406,6 +406,20 @@ def test_library_conflict_returns_the_current_content(world) -> None:
     assert result["current_content"] == "first"
 
 
+def test_agent_library_write_emits_one_update_and_conflicts_emit_none(world) -> None:
+    emitted = []
+    author = tools_for(
+        world, MAIN, on_change=lambda name, payload: emitted.append((name, payload))
+    )
+    written = author.write_library("shared.md", "first")
+    assert emitted == [("library.updated", written)]
+    assert emitted[0][1]["path"] == "shared.md"
+
+    conflict = author.write_library("shared.md", "second", expected_hash="0" * 16)
+    assert conflict["conflict"] is True
+    assert len(emitted) == 1
+
+
 def test_memory_is_private_to_each_agent(world) -> None:
     tools_for(world, MAIN).write_memory("notes.md", "mine")
     assert tools_for(world, OTHER).list_memory() == []

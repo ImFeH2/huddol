@@ -549,19 +549,23 @@ class AgentTools:
                 "current_content": current,
             }
         self._record("library.write", entry.path)
-        return {"path": entry.path, "hash": entry.content_hash}
+        return self._changed(
+            "library.updated", {"path": entry.path, "hash": entry.content_hash}
+        )
 
     def delete_library(self, path: str) -> dict[str, Any]:
         self._check("library.delete", path)
         self._library().delete(path)
         self._record("library.delete", path)
-        return {"path": path, "deleted": True}
+        return self._changed("library.updated", {"path": path, "deleted": True})
 
     def move_library(self, source: str, destination: str) -> dict[str, Any]:
         self._check("library.move", source)
         entry = self._library().move(source, destination)
         self._record("library.move", f"{source} to {entry.path}")
-        return {"path": entry.path, "hash": entry.content_hash}
+        return self._changed(
+            "library.updated", {"path": entry.path, "hash": entry.content_hash}
+        )
 
     def _history(self) -> History:
         return History(self._deps.history, self._actor.member_id)
