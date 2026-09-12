@@ -10,11 +10,7 @@
     "frontendDist": "../web/dist"
   },
   "app": {
-    "windows": [
-      {
-        "title": "Huddol"
-      }
-    ],
+    "windows": [],
     "security": {
       "csp": null
     }

@@ -1,12 +1,19 @@
 from __future__ import annotations
 
+import json
+import logging
 import os
+import secrets
 import sys
 from io import TextIOWrapper
+from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from typing import cast
+from urllib.parse import quote
 
 DATA_DIRECTORY_ENV = "HUDDOL_DATA_DIR"
+PORT_ENV = "HUDDOL_PORT"
+TOKEN_ENV = "HUDDOL_TOKEN"
 
 
 def data_directory() -> Path:
@@ -14,6 +21,32 @@ def data_directory() -> Path:
     if override:
         return Path(override).expanduser().resolve()
     return Path.home() / ".huddol"
+
+
+def configure_logging(directory: Path) -> list[logging.Handler]:
+    logs = directory / "logs"
+    logs.mkdir(parents=True, exist_ok=True)
+    handlers: list[logging.Handler] = [
+        RotatingFileHandler(
+            logs / "huddol.log", maxBytes=1 << 20, backupCount=3, encoding="utf-8"
+        ),
+        logging.StreamHandler(sys.stderr),
+    ]
+    formatter = logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s")
+    root = logging.getLogger()
+    root.setLevel(logging.INFO)
+    for handler in handlers:
+        handler.setFormatter(formatter)
+        root.addHandler(handler)
+    return handlers
+
+
+def write_run_file(path: Path, port: int, token: str) -> None:
+    payload = json.dumps({"port": port, "token": token, "pid": os.getpid()})
+    descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+        handle.write(payload)
+    os.chmod(path, 0o600)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -35,15 +68,18 @@ def main(argv: list[str] | None = None) -> int:
     from huddol.adapters.execution.manager import ExecutionManager
     from huddol.adapters.files.tree import MarkdownTree
     from huddol.adapters.jsonl.api import HUMAN_ID, Api
-    from huddol.adapters.jsonl.protocol import Dispatcher, JsonLineWriter, serve
+    from huddol.adapters.jsonl.protocol import Dispatcher, wait_for_shutdown
     from huddol.adapters.model.config import ModelConfig
     from huddol.adapters.sqlite.agent import SqliteAgentStore
     from huddol.adapters.sqlite.store import SqliteStore
+    from huddol.adapters.websocket.server import WebServer, web_directory
     from huddol.runtime.scheduler import Scheduler
     from huddol.tools import Dependencies
 
     directory = data_directory()
     directory.mkdir(parents=True, exist_ok=True)
+    handlers = configure_logging(directory)
+    log = logging.getLogger("huddol")
     workspace = directory / "workspace"
     workspace.mkdir(parents=True, exist_ok=True)
     store = SqliteStore(directory / "huddol.sqlite3")
@@ -71,8 +107,7 @@ def main(argv: list[str] | None = None) -> int:
         ),
     )
 
-    writer = JsonLineWriter(sys.stdout)
-    dispatcher = Dispatcher(writer)
+    dispatcher = Dispatcher()
 
     from huddol.adapters.model.observability import ObservabilityConfig
 
@@ -102,34 +137,48 @@ def main(argv: list[str] | None = None) -> int:
     )
     Api(scheduler, dispatcher)
 
-    scheduler.start()
-
-    execution_status = execution.status()
-    dispatcher.emit(
-        "ready",
-        {
-            "working_directory": execution_status["working_directory"],
-            "data_directory": str(directory),
-            "human_id": HUMAN_ID,
-            "model_configured": config is not None,
-            "tracing_enabled": bool(
-                ObservabilityConfig.restore(agent_store.get_settings("observability"))
-            ),
-            "write_directories": list(execution.snapshot().write_directories)
-            if execution_status["error"] is None
-            else [],
-            "unusable_write_directories": execution_status[
-                "unusable_write_directories"
-            ],
-            "methods": list(dispatcher.methods()),
-        },
+    token = os.environ.get(TOKEN_ENV) or secrets.token_urlsafe(24)
+    server = WebServer(
+        dispatcher,
+        token,
+        web_directory(),
+        port=int(os.environ.get(PORT_ENV) or 0),
     )
+    run_file = directory / "run.json"
+
+    scheduler.start()
+    server.start()
+    write_run_file(run_file, server.port, token)
+    log.info(
+        "Listening on http://127.0.0.1:%d with data directory %s",
+        server.port,
+        directory,
+    )
+    sys.stdout.write(
+        json.dumps(
+            {
+                "type": "ready",
+                "port": server.port,
+                "token": token,
+                "url": f"http://127.0.0.1:{server.port}/?token={quote(token, safe='')}",
+            },
+            separators=(",", ":"),
+        )
+        + "\n"
+    )
+    sys.stdout.flush()
 
     try:
-        serve(dispatcher)
+        reason = wait_for_shutdown()
+        log.info("Shutting down (%s)", reason)
     finally:
+        server.stop()
         scheduler.stop()
         store.close()
+        run_file.unlink(missing_ok=True)
+        for handler in handlers:
+            logging.getLogger().removeHandler(handler)
+            handler.close()
     return 0
 
 

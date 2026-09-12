@@ -299,7 +299,6 @@ def test_discussion_notifications_do_not_depend_on_the_caller_type(
 
 
 def test_compaction_setting_applies_to_the_next_runner(world, monkeypatch) -> None:
-    import io
 
     from pydantic_ai import ModelMessagesTypeAdapter, models
     from pydantic_ai.messages import (
@@ -311,7 +310,7 @@ def test_compaction_setting_applies_to_the_next_runner(world, monkeypatch) -> No
     from pydantic_ai.models.function import FunctionModel
 
     from huddol.adapters.jsonl.api import Api
-    from huddol.adapters.jsonl.protocol import Dispatcher, JsonLineWriter, parse
+    from huddol.adapters.jsonl.protocol import Dispatcher, parse
     from huddol.adapters.model.config import ModelConfig
     from huddol.adapters.model.runner import PydanticModelRunner
 
@@ -340,8 +339,8 @@ def test_compaction_setting_applies_to_the_next_runner(world, monkeypatch) -> No
     assert config is not None
     running = PydanticModelRunner(config)
     scheduler = Scheduler(world, running)
-    output = io.StringIO()
-    dispatcher = Dispatcher(JsonLineWriter(output))
+    output: list[dict] = []
+    dispatcher = Dispatcher()
     Api(scheduler, dispatcher)
     update = parse(
         json.dumps(
@@ -353,11 +352,8 @@ def test_compaction_setting_applies_to_the_next_runner(world, monkeypatch) -> No
         )
     )
     assert update is not None
-    dispatcher.handle(update)
-    assert (
-        json.loads(output.getvalue().splitlines()[-1])["result"]["compaction_threshold"]
-        == 1
-    )
+    dispatcher.handle(update, output.append)
+    assert output[-1]["result"]["compaction_threshold"] == 1
     history = []
     for _ in range(8):
         history.extend(

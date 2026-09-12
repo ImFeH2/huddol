@@ -18,10 +18,6 @@
               {
                 "group": ["@radix-ui/**"],
                 "message": "Radix primitives are wrapped in web/src/components/ui."
-              },
-              {
-                "group": ["@tauri-apps/**"],
-                "message": "Tauri is reached through web/src/lib/backend.ts."
               }
             ]
           }
@@ -31,7 +27,7 @@
   },
   "overrides": [
     {
-      "includes": ["web/src/components/ui/**", "web/src/lib/backend.ts"],
+      "includes": ["web/src/components/ui/**"],
       "linter": {
         "rules": {
           "style": {

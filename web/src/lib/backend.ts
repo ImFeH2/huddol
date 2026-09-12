@@ -1,5 +1,3 @@
-import { Channel, invoke } from "@tauri-apps/api/core";
-
 export type Member = {
   id: number;
   type: "human" | "agent";
@@ -108,87 +106,109 @@ export type Frame = {
   error?: { code: string; message: string };
 } & Record<string, unknown>;
 
-export type Transport = {
-  open(receive: (frame: Frame) => void): Promise<void>;
-  send(request: {
-    id: number;
-    method: string;
-    params: Record<string, unknown>;
-  }): Promise<void>;
-};
+export type Connection = { url: string } | { error: string };
 
-type Hot = {
-  on(event: string, listener: (payload: Frame) => void): void;
-  send(event: string, data?: unknown): void;
+export type Socket = {
+  onopen: ((event: Event) => void) | null;
+  onmessage: ((event: MessageEvent) => void) | null;
+  onclose: ((event: CloseEvent) => void) | null;
+  onerror: ((event: Event) => void) | null;
+  send(data: string): void;
+  close(): void;
 };
 
 const REQUEST_TIMEOUT = 60_000;
 
-function tauriTransport(): Transport {
-  return {
-    async open(receive) {
-      const channel = new Channel<Frame>();
-      channel.onmessage = receive;
-      await invoke("subscribe", { channel });
-    },
-    async send(request) {
-      await invoke("send", { message: request });
-    },
-  };
+export function connectionFrom(search: string, origin: string): Connection {
+  const params = new URLSearchParams(search);
+  const error = params.get("error");
+  if (error !== null) return { error };
+  const ws =
+    params.get("ws") ??
+    `${origin.replace(/^https:/, "wss:").replace(/^http:/, "ws:")}/ws`;
+  const url = new URL(ws);
+  url.searchParams.set("token", params.get("token") ?? "");
+  return { url: url.toString() };
 }
 
-function devTransport(hot: Hot): Transport {
-  return {
-    async open(receive) {
-      hot.on("huddol:frame", receive);
-    },
-    async send(request) {
-      hot.send("huddol:request", request);
-    },
-  };
+function pageConnection(): Connection {
+  return connectionFrom(location.search, location.origin);
 }
 
-export function selectTransport(
-  tauri = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window,
-  hot: Hot | undefined = import.meta.hot,
-): Transport {
-  if (tauri) return tauriTransport();
-  if (hot) return devTransport(hot);
-  throw new BackendError(
-    "no_transport",
-    "No Huddol backend is available. Open Huddol from the desktop app or the Vite dev server.",
-    true,
-  );
+function browserSocket(url: string): Socket {
+  return new WebSocket(url);
 }
 
 export class Backend {
-  #select: () => Transport;
+  #locate: () => Connection;
+  #socket: (url: string) => Socket;
   #nextId = 1;
   #pending = new Map<number, Pending>();
   #listeners = new Set<(event: BackendEvent) => void>();
-  #ready: Promise<Transport> | null = null;
+  #ready: Promise<Socket> | null = null;
   #closed: BackendError | null = null;
   #rejectConnection: ((error: BackendError) => void) | null = null;
   #failures = new Set<(error: BackendError) => void>();
 
-  constructor(select: () => Transport = selectTransport) {
-    this.#select = select;
+  constructor(
+    locate: () => Connection = pageConnection,
+    socket: (url: string) => Socket = browserSocket,
+  ) {
+    this.#locate = locate;
+    this.#socket = socket;
   }
 
   async connect(): Promise<void> {
     await this.#open();
   }
 
-  async #attach(): Promise<Transport> {
-    const transport = this.#select();
-    await transport.open((frame) => this.#receive(frame));
-    return transport;
+  #attach(): Promise<Socket> {
+    const connection = this.#locate();
+    if ("error" in connection)
+      throw new BackendError("startup_failed", connection.error, true);
+    return new Promise<Socket>((resolve, reject) => {
+      const socket = this.#socket(connection.url);
+      let opened = false;
+      socket.onopen = () => {
+        opened = true;
+        resolve(socket);
+      };
+      socket.onmessage = (event) => {
+        let frame: Frame;
+        try {
+          frame = JSON.parse(String(event.data));
+        } catch {
+          return;
+        }
+        this.#receive(frame);
+      };
+      socket.onerror = () => {};
+      socket.onclose = () => {
+        if (opened) {
+          this.#disconnect(
+            new BackendError(
+              "disconnected",
+              "Connection lost. Restart Huddol.",
+              true,
+            ),
+          );
+          return;
+        }
+        reject(
+          new BackendError(
+            "connection_failed",
+            "Could not connect to Huddol. Restart Huddol.",
+            true,
+          ),
+        );
+      };
+    });
   }
 
-  async #open(): Promise<Transport> {
+  async #open(): Promise<Socket> {
     if (this.#closed) throw this.#closed;
     if (this.#ready) return this.#ready;
-    this.#ready = new Promise<Transport>((resolve, reject) => {
+    this.#ready = new Promise<Socket>((resolve, reject) => {
       const timer = setTimeout(() => {
         this.#disconnect(
           new BackendError(
@@ -203,24 +223,20 @@ export class Backend {
         this.#rejectConnection = null;
         reject(error);
       };
-      this.#attach().then(
-        (transport) => {
+      let attached: Promise<Socket>;
+      try {
+        attached = this.#attach();
+      } catch (error) {
+        this.#disconnect(error as BackendError);
+        return;
+      }
+      attached.then(
+        (socket) => {
           clearTimeout(timer);
           this.#rejectConnection = null;
-          resolve(transport);
+          resolve(socket);
         },
-        (error: unknown) =>
-          this.#disconnect(
-            error instanceof BackendError
-              ? error
-              : new BackendError(
-                  "connection_failed",
-                  typeof error === "string"
-                    ? error
-                    : "Could not connect to Huddol. Restart Huddol.",
-                  true,
-                ),
-          ),
+        (error: BackendError) => this.#disconnect(error),
       );
     });
     return this.#ready;
@@ -269,16 +285,6 @@ export class Backend {
 
   #receive(frame: Frame): void {
     if (this.#closed) return;
-    if (frame.type === "bridge.disconnected") {
-      this.#disconnect(
-        new BackendError(
-          "disconnected",
-          "Connection lost. Restart Huddol.",
-          true,
-        ),
-      );
-      return;
-    }
     if (frame.type === "response" && typeof frame.id === "number") {
       const pending = this.#pending.get(frame.id);
       if (!pending) return;
@@ -296,7 +302,7 @@ export class Backend {
     method: string,
     params: Record<string, unknown> = {},
   ): Promise<T> {
-    const transport = await this.#open();
+    const socket = await this.#open();
     if (this.#closed) throw this.#closed;
     const id = this.#nextId++;
     return new Promise<T>((resolve, reject) => {
@@ -325,17 +331,17 @@ export class Backend {
           reject(error);
         },
       });
-      transport.send({ id, method, params }).catch(() => {
-        const pending = this.#pending.get(id);
-        if (!pending) return;
+      try {
+        socket.send(JSON.stringify({ id, method, params }));
+      } catch {
         const error = new BackendError(
           "send_failed",
           "Could not send request. Check before retrying.",
           true,
         );
-        pending.reject(error);
+        this.#pending.get(id)?.reject(error);
         this.#notify(error);
-      });
+      }
     });
   }
 

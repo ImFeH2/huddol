@@ -10,7 +10,7 @@ import pytest
 from huddol.adapters.execution.manager import ExecutionManager
 from huddol.adapters.files.tree import MarkdownTree
 from huddol.adapters.jsonl.api import HUMAN_ID, Api
-from huddol.adapters.jsonl.protocol import Dispatcher, JsonLineWriter, parse, serve
+from huddol.adapters.jsonl.protocol import Dispatcher, parse, wait_for_shutdown
 from huddol.adapters.model.unavailable import UnavailableRunner
 from huddol.adapters.sqlite.agent import SqliteAgentStore
 from huddol.adapters.sqlite.store import SqliteStore
@@ -18,9 +18,15 @@ from huddol.runtime.scheduler import Scheduler
 from huddol.tools import Dependencies
 
 
-class Capture(io.StringIO):
+class Capture:
+    def __init__(self) -> None:
+        self._frames: list[dict[str, Any]] = []
+
+    def __call__(self, payload: dict[str, Any]) -> None:
+        self._frames.append(json.loads(json.dumps(payload)))
+
     def frames(self) -> list[dict[str, Any]]:
-        return [json.loads(line) for line in self.getvalue().splitlines() if line]
+        return list(self._frames)
 
 
 @pytest.fixture
@@ -44,7 +50,8 @@ def server(tmp_path: Path):
         ),
     )
     output = Capture()
-    dispatcher = Dispatcher(JsonLineWriter(output))
+    dispatcher = Dispatcher()
+    dispatcher.attach(output)
     scheduler = Scheduler(deps, UnavailableRunner("no model"), on_event=dispatcher.emit)
     Api(scheduler, dispatcher)
     yield dispatcher, output, deps
@@ -55,7 +62,7 @@ def call(dispatcher: Dispatcher, output: Capture, method: str, **params: Any) ->
     before = len(output.frames())
     request = parse(json.dumps({"id": 99, "method": method, "params": params}))
     assert request is not None
-    dispatcher.handle(request)
+    dispatcher.handle(request, output)
     frames = output.frames()[before:]
     responses = [item for item in frames if item.get("type") == "response"]
     assert responses, f"no response for {method}"
@@ -64,24 +71,57 @@ def call(dispatcher: Dispatcher, output: Capture, method: str, **params: Any) ->
 
 def test_bad_json_produces_an_error_event_not_a_crash(server) -> None:
     dispatcher, output, _ = server
-    serve(dispatcher, io.StringIO("{not json}\n"))
+    dispatcher.receive("{not json}", output)
     assert output.frames()[-1]["code"] == "invalid_frame"
 
 
 def test_internal_methods_are_refused_from_outside(server) -> None:
     dispatcher, output, _ = server
-    serve(
-        dispatcher, io.StringIO(json.dumps({"id": 1, "method": "system.secret"}) + "\n")
-    )
+    dispatcher.receive(json.dumps({"id": 1, "method": "system.secret"}), output)
     assert output.frames()[-1]["error"]["code"] == "internal_method"
 
 
-def test_shutdown_stops_the_loop(server) -> None:
-    dispatcher, _, _ = server
+def test_shutdown_is_refused_over_a_connection(server) -> None:
+    dispatcher, output, _ = server
+    dispatcher.receive(json.dumps({"id": 1, "method": "system.shutdown"}), output)
+    assert output.frames()[-1]["error"]["code"] == "internal_method"
+
+
+def test_shutdown_on_stdin_stops_the_loop() -> None:
     assert (
-        serve(dispatcher, io.StringIO(json.dumps({"method": "system.shutdown"}) + "\n"))
+        wait_for_shutdown(io.StringIO(json.dumps({"method": "system.shutdown"}) + "\n"))
         == "shutdown"
     )
+
+
+def test_other_stdin_input_is_ignored_until_eof() -> None:
+    assert (
+        wait_for_shutdown(io.StringIO('garbage\n{"id":1,"method":"ping"}\n')) == "eof"
+    )
+
+
+def test_responses_go_to_the_requesting_connection_only(server) -> None:
+    dispatcher, output, _ = server
+    other = Capture()
+    dispatcher.attach(other)
+    dispatcher.receive(json.dumps({"id": 1, "method": "ping"}), other)
+    assert [frame["type"] for frame in other.frames()] == ["response"]
+    assert output.frames() == []
+
+
+def test_events_reach_every_connection(server) -> None:
+    dispatcher, output, _ = server
+    other = Capture()
+    dispatcher.attach(other)
+    call(dispatcher, output, "organization.create_agent", name="Main")
+    assert [frame["type"] for frame in other.frames()] == ["member.created"]
+    assert [frame["type"] for frame in output.frames()] == [
+        "member.created",
+        "response",
+    ]
+    dispatcher.detach(other)
+    dispatcher.emit("noop")
+    assert len(other.frames()) == 1
 
 
 def test_unknown_methods_return_a_named_error(server) -> None:
@@ -99,7 +139,7 @@ def test_notifications_without_an_id_emit_an_error_event(server) -> None:
     dispatcher, output, _ = server
     request = parse(json.dumps({"method": "organization.create_agent", "params": {}}))
     assert request is not None
-    dispatcher.handle(request)
+    dispatcher.handle(request, output)
     last = output.frames()[-1]
     assert last["type"] == "error"
     assert last["code"] == "invalid_name"
@@ -308,17 +348,6 @@ def test_library_round_trips_over_the_protocol(server) -> None:
     read = call(dispatcher, output, "library.read", path="notes.md")["result"]
     assert read["content"] == "shared"
     assert read["hash"] == written["hash"]
-
-
-def test_shutdown_answers_a_request_that_carries_an_id(server) -> None:
-    dispatcher, output, _ = server
-    reason = serve(
-        dispatcher,
-        io.StringIO(json.dumps({"id": 7, "method": "system.shutdown"}) + "\n"),
-    )
-    assert reason == "shutdown"
-    last = output.frames()[-1]
-    assert last == {"type": "response", "id": 7, "result": {"stopped": True}}
 
 
 def test_rejected_write_directories_are_not_persisted(server, tmp_path: Path) -> None:

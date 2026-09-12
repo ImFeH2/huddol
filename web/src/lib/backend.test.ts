@@ -1,76 +1,161 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   Backend,
   BackendError,
+  type Connection,
+  connectionFrom,
   type Frame,
-  selectTransport,
-  type Transport,
+  type Socket,
 } from "@/lib/backend";
-
-const invoke = vi.fn();
-const channels: { onmessage?: (frame: unknown) => void }[] = [];
-
-vi.mock("@tauri-apps/api/core", () => ({
-  invoke: (...args: unknown[]) => invoke(...args),
-  Channel: class {
-    onmessage?: (frame: unknown) => void;
-    constructor() {
-      channels.push(this);
-    }
-  },
-}));
 
 type Sent = { id: number; method: string; params: Record<string, unknown> };
 
-function harness() {
-  const sent: Sent[] = [];
-  let receive: (frame: Frame) => void = () => {};
-  const transport: Transport = {
-    open: vi.fn(async (deliver: (frame: Frame) => void) => {
-      receive = deliver;
-    }),
-    async send(request) {
-      sent.push(request);
-    },
-  };
-  return {
-    transport,
-    sent,
-    reply: (frame: Frame) => receive(frame),
-    backend: (overrides: Partial<Transport> = {}) =>
-      new Backend(() => ({ ...transport, ...overrides })),
-  };
+class FakeSocket implements Socket {
+  static instances: FakeSocket[] = [];
+  onopen: Socket["onopen"] = null;
+  onmessage: Socket["onmessage"] = null;
+  onclose: Socket["onclose"] = null;
+  onerror: Socket["onerror"] = null;
+  sent: Sent[] = [];
+  closed = false;
+
+  constructor(readonly url: string) {
+    FakeSocket.instances.push(this);
+  }
+
+  send(data: string): void {
+    if (this.closed) throw new Error("socket is closed");
+    this.sent.push(JSON.parse(data));
+  }
+
+  close(): void {
+    this.closed = true;
+  }
+
+  open(): void {
+    this.onopen?.(new Event("open"));
+  }
+
+  reply(frame: Frame): void {
+    this.onmessage?.(
+      new MessageEvent("message", { data: JSON.stringify(frame) }),
+    );
+  }
+
+  fail(): void {
+    this.onerror?.(new Event("error"));
+    this.closed = true;
+    this.onclose?.(new CloseEvent("close"));
+  }
 }
 
-function fakeHot() {
-  const listeners = new Map<string, (payload: Frame) => void>();
-  const sent: { event: string; data: unknown }[] = [];
-  return {
-    context: {
-      on: vi.fn((event: string, listener: (payload: Frame) => void) => {
-        listeners.set(event, listener);
-      }),
-      send: vi.fn((event: string, data?: unknown) => {
-        sent.push({ event, data });
-      }),
-    },
-    sent,
-    emit: (event: string, payload: Frame) => listeners.get(event)?.(payload),
+const URL = "ws://127.0.0.1:4321/ws?token=secret";
+
+function harness(connection: Connection = { url: URL }) {
+  FakeSocket.instances = [];
+  const backend = new Backend(
+    () => connection,
+    (url) => new FakeSocket(url),
+  );
+  const socket = () => {
+    const last = FakeSocket.instances[FakeSocket.instances.length - 1];
+    if (!last) throw new Error("no socket");
+    return last;
   };
+  const connected = async () => {
+    const pending = backend.connect();
+    await vi.waitFor(() => socket());
+    socket().open();
+    await pending;
+    return socket();
+  };
+  return { backend, socket, connected };
 }
+
+describe("connectionFrom", () => {
+  it("derives the same-origin socket for the full-stack page", () => {
+    expect(connectionFrom("?token=abc", "http://127.0.0.1:8000")).toEqual({
+      url: "ws://127.0.0.1:8000/ws?token=abc",
+    });
+  });
+
+  it("uses the ws parameter from the Vite dev page", () => {
+    expect(
+      connectionFrom(
+        "?ws=ws://127.0.0.1:4321/ws&token=abc",
+        "http://127.0.0.1:1420",
+      ),
+    ).toEqual({ url: "ws://127.0.0.1:4321/ws?token=abc" });
+  });
+
+  it("uses the ws parameter from the Tauri page", () => {
+    expect(
+      connectionFrom(
+        "?ws=ws://127.0.0.1:4321/ws&token=abc",
+        "tauri://localhost",
+      ),
+    ).toEqual({ url: "ws://127.0.0.1:4321/ws?token=abc" });
+    expect(
+      connectionFrom(
+        "?ws=ws://127.0.0.1:4321/ws&token=abc",
+        "http://tauri.localhost",
+      ),
+    ).toEqual({ url: "ws://127.0.0.1:4321/ws?token=abc" });
+  });
+
+  it("reports the error parameter instead of a url", () => {
+    expect(
+      connectionFrom("?error=kernel%20did%20not%20start", "tauri://localhost"),
+    ).toEqual({ error: "kernel did not start" });
+  });
+});
 
 describe("Backend", () => {
   afterEach(() => vi.useRealTimers());
 
-  it("ends concurrent requests once on disconnect without waiting for send completion", async () => {
+  it("does not connect when the page carries an error", async () => {
     vi.useFakeTimers();
-    const { sent, reply, backend: connect } = harness();
-    const backend = connect({
-      send: (request) => {
-        sent.push(request);
-        return new Promise(() => {});
-      },
+    const { backend } = harness({ error: "kernel did not start" });
+    const failure = vi.fn();
+    backend.onFailure(failure);
+    await expect(backend.connect()).rejects.toMatchObject({
+      code: "startup_failed",
+      message: "kernel did not start",
+      transport: true,
     });
+    expect(FakeSocket.instances).toHaveLength(0);
+    expect(failure).toHaveBeenCalledTimes(1);
+    expect(backend.disconnected).toBe(true);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("opens a socket at the resolved url", async () => {
+    const { connected } = harness();
+    const socket = await connected();
+    expect(socket.url).toBe(URL);
+  });
+
+  it("reports a socket refused before opening, as with a wrong token, as a connection failure", async () => {
+    vi.useFakeTimers();
+    const { backend, socket } = harness();
+    const failure = vi.fn();
+    backend.onFailure(failure);
+    const pending = backend.connect().catch((error) => error);
+    await vi.advanceTimersByTimeAsync(0);
+    socket().fail();
+    expect(await pending).toMatchObject({
+      code: "connection_failed",
+      transport: true,
+    });
+    expect(failure).toHaveBeenCalledTimes(1);
+    expect(backend.disconnected).toBe(true);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("ends concurrent requests once when the socket closes", async () => {
+    vi.useFakeTimers();
+    const { backend, connected } = harness();
+    const socket = await connected();
     const failures = vi.fn();
     const events = vi.fn();
     backend.onFailure(failures);
@@ -78,9 +163,9 @@ describe("Backend", () => {
     const first = backend.organization().catch((error) => error);
     const second = backend.discussions().catch((error) => error);
     await vi.advanceTimersByTimeAsync(0);
-    expect(sent).toHaveLength(2);
-    reply({ type: "bridge.disconnected" });
-    reply({ type: "bridge.disconnected" });
+    expect(socket.sent).toHaveLength(2);
+    socket.fail();
+    socket.onclose?.(new CloseEvent("close"));
     expect(await first).toMatchObject({ code: "disconnected" });
     expect(await second).toMatchObject({ code: "disconnected" });
     backend.reportFailure(new Error("late failure"));
@@ -90,40 +175,18 @@ describe("Backend", () => {
     await expect(backend.organization()).rejects.toMatchObject({
       code: "disconnected",
     });
-    expect(sent).toHaveLength(2);
+    expect(socket.sent).toHaveLength(2);
   });
 
-  it("ends a connection handshake when its transport disconnects", async () => {
+  it("bounds a silent handshake and ignores a late open", async () => {
     vi.useFakeTimers();
-    const { transport, reply, backend: connect } = harness();
-    const backend = connect({
-      open: (deliver) => {
-        void transport.open(deliver);
-        return new Promise(() => {});
-      },
-    });
-    const result = backend.organization().catch((error) => error);
-    reply({ type: "bridge.disconnected" });
-    expect(await result).toMatchObject({ code: "disconnected" });
-    expect(vi.getTimerCount()).toBe(0);
-  });
-
-  it("bounds a silent handshake and ignores a late open completion", async () => {
-    vi.useFakeTimers();
-    let complete = () => {};
-    const { backend: connect } = harness();
-    const backend = connect({
-      open: () =>
-        new Promise<void>((resolve) => {
-          complete = resolve;
-        }),
-    });
+    const { backend, socket } = harness();
     const failure = vi.fn();
     backend.onFailure(failure);
     const result = backend.organization().catch((error) => error);
     await vi.advanceTimersByTimeAsync(60_000);
     expect(await result).toMatchObject({ code: "connection_timeout" });
-    complete();
+    socket().open();
     await expect(backend.connect()).rejects.toMatchObject({
       code: "connection_timeout",
     });
@@ -131,25 +194,11 @@ describe("Backend", () => {
     expect(vi.getTimerCount()).toBe(0);
   });
 
-  it("reports a failed open as a transport failure", async () => {
-    vi.useFakeTimers();
-    const { backend: connect } = harness();
-    const backend = connect({ open: async () => Promise.reject("no bridge") });
-    await expect(backend.connect()).rejects.toMatchObject({
-      code: "connection_failed",
-      message: "no bridge",
-      transport: true,
-    });
-    expect(vi.getTimerCount()).toBe(0);
-  });
-
   it("cleans up a rejected send immediately", async () => {
     vi.useFakeTimers();
-    const { backend: connect } = harness();
-    const backend = connect({
-      send: async () => Promise.reject(new Error("write failed")),
-    });
-    await backend.connect();
+    const { backend, connected } = harness();
+    const socket = await connected();
+    socket.closed = true;
     await expect(backend.organization()).rejects.toMatchObject({
       code: "send_failed",
     });
@@ -158,8 +207,8 @@ describe("Backend", () => {
 
   it("reports a request timeout without declaring the connection dead", async () => {
     vi.useFakeTimers();
-    const { sent, reply, backend: connect } = harness();
-    const backend = connect();
+    const { backend, connected } = harness();
+    const socket = await connected();
     const failures = vi.fn();
     backend.onFailure(failures);
     const result = backend.organization().catch((error) => error);
@@ -168,70 +217,76 @@ describe("Backend", () => {
     expect(failures).toHaveBeenCalledTimes(1);
     const next = backend.organization();
     await vi.advanceTimersByTimeAsync(0);
-    expect(sent).toHaveLength(2);
-    reply({ type: "response", id: sent[0].id, result: "late" });
-    reply({ type: "response", id: sent[1].id, result: { members: [] } });
+    expect(socket.sent).toHaveLength(2);
+    socket.reply({ type: "response", id: socket.sent[0].id, result: "late" });
+    socket.reply({
+      type: "response",
+      id: socket.sent[1].id,
+      result: { members: [] },
+    });
     await expect(next).resolves.toEqual({ members: [] });
     expect(vi.getTimerCount()).toBe(0);
   });
 
-  it("opens the transport once and reuses it", async () => {
-    const { transport, backend: connect } = harness();
-    const backend = connect();
+  it("opens one socket and reuses it", async () => {
+    const { backend, connected } = harness();
+    await connected();
     await backend.connect();
-    await backend.connect();
-    expect(transport.open).toHaveBeenCalledTimes(1);
+    expect(FakeSocket.instances).toHaveLength(1);
   });
 
   it("correlates a response with its request id", async () => {
-    const { sent, reply, backend: connect } = harness();
-    const backend = connect();
+    const { backend, connected } = harness();
+    const socket = await connected();
     const promise = backend.createAgent("Main");
-    await vi.waitFor(() => expect(sent).toHaveLength(1));
-    expect(sent[0].method).toBe("organization.create_agent");
-    reply({
+    await vi.waitFor(() => expect(socket.sent).toHaveLength(1));
+    expect(socket.sent[0].method).toBe("organization.create_agent");
+    socket.reply({
       type: "response",
-      id: sent[0].id,
+      id: socket.sent[0].id,
       result: { id: 2, name: "Main" },
     });
     await expect(promise).resolves.toMatchObject({ name: "Main" });
   });
 
   it("rejects with a typed error carrying the backend code", async () => {
-    const { sent, reply, backend: connect } = harness();
-    const backend = connect();
+    const { backend, connected } = harness();
+    const socket = await connected();
     const promise = backend.createAgent("  ");
-    await vi.waitFor(() => expect(sent).toHaveLength(1));
-    reply({
+    await vi.waitFor(() => expect(socket.sent).toHaveLength(1));
+    socket.reply({
       type: "response",
-      id: sent[0].id,
+      id: socket.sent[0].id,
       error: { code: "invalid_name", message: "Member name must not be empty" },
     });
     await expect(promise).rejects.toBeInstanceOf(BackendError);
     await expect(promise).rejects.toMatchObject({ code: "invalid_name" });
   });
 
-  it("keeps concurrent requests independent", async () => {
-    const { sent, reply, backend: connect } = harness();
-    const backend = connect();
+  it("matches responses by id regardless of order", async () => {
+    const { backend, connected } = harness();
+    const socket = await connected();
     const first = backend.discussions();
     const second = backend.organization();
-    await vi.waitFor(() => expect(sent).toHaveLength(2));
-    expect(sent[0].id).not.toBe(sent[1].id);
-    reply({ type: "response", id: sent[1].id, result: { members: [] } });
-    reply({ type: "response", id: sent[0].id, result: [] });
+    await vi.waitFor(() => expect(socket.sent).toHaveLength(2));
+    expect(socket.sent[0].id).not.toBe(socket.sent[1].id);
+    socket.reply({
+      type: "response",
+      id: socket.sent[1].id,
+      result: { members: [] },
+    });
+    socket.reply({ type: "response", id: socket.sent[0].id, result: [] });
     await expect(first).resolves.toEqual([]);
     await expect(second).resolves.toMatchObject({ members: [] });
   });
 
   it("delivers non-response frames to event listeners", async () => {
-    const { reply, backend: connect } = harness();
-    const backend = connect();
+    const { backend, connected } = harness();
     const seen: unknown[] = [];
     backend.onEvent((event) => seen.push(event));
-    await backend.connect();
-    reply({ type: "message.created", discussion_id: 1, id: 4 });
-    reply({ type: "turn.started", agent_id: 2 });
+    const socket = await connected();
+    socket.reply({ type: "message.created", discussion_id: 1, id: 4 });
+    socket.reply({ type: "turn.started", agent_id: 2 });
     expect(seen).toHaveLength(2);
     expect(seen[0]).toMatchObject({
       type: "message.created",
@@ -240,165 +295,65 @@ describe("Backend", () => {
   });
 
   it("does not leak responses into the event stream", async () => {
-    const { sent, reply, backend: connect } = harness();
-    const backend = connect();
+    const { backend, connected } = harness();
     const seen: unknown[] = [];
     backend.onEvent((event) => seen.push(event));
+    const socket = await connected();
     const promise = backend.discussions();
-    await vi.waitFor(() => expect(sent).toHaveLength(1));
-    reply({ type: "response", id: sent[0].id, result: [] });
+    await vi.waitFor(() => expect(socket.sent).toHaveLength(1));
+    socket.reply({ type: "response", id: socket.sent[0].id, result: [] });
     await promise;
     expect(seen).toHaveLength(0);
   });
 
-  it("ignores a response for an unknown id", async () => {
-    const { reply, backend: connect } = harness();
-    const backend = connect();
-    await backend.connect();
+  it("ignores a response for an unknown id and unreadable frames", async () => {
+    const { connected } = harness();
+    const socket = await connected();
     expect(() =>
-      reply({ type: "response", id: 999, result: null }),
+      socket.reply({ type: "response", id: 999, result: null }),
+    ).not.toThrow();
+    expect(() =>
+      socket.onmessage?.(new MessageEvent("message", { data: "{" })),
     ).not.toThrow();
   });
 
   it("sends the search query under the method the core exposes", async () => {
-    const { sent, reply, backend: connect } = harness();
-    const backend = connect();
+    const { backend, connected } = harness();
+    const socket = await connected();
     const promise = backend.searchMessages("deadline");
-    await vi.waitFor(() => expect(sent).toHaveLength(1));
-    expect(sent[0]).toMatchObject({
+    await vi.waitFor(() => expect(socket.sent).toHaveLength(1));
+    expect(socket.sent[0]).toMatchObject({
       method: "discussion.search",
       params: { query: "deadline" },
     });
-    reply({ type: "response", id: sent[0].id, result: [] });
+    socket.reply({ type: "response", id: socket.sent[0].id, result: [] });
     await expect(promise).resolves.toEqual([]);
   });
 
   it("moves a library document to its destination path", async () => {
-    const { sent, reply, backend: connect } = harness();
-    const backend = connect();
+    const { backend, connected } = harness();
+    const socket = await connected();
     const promise = backend.moveLibrary("old.md", "new.md");
-    await vi.waitFor(() => expect(sent).toHaveLength(1));
-    expect(sent[0]).toMatchObject({
+    await vi.waitFor(() => expect(socket.sent).toHaveLength(1));
+    expect(socket.sent[0]).toMatchObject({
       method: "library.move",
       params: { path: "old.md", destination: "new.md" },
     });
-    reply({ type: "response", id: sent[0].id, result: { path: "new.md" } });
+    socket.reply({
+      type: "response",
+      id: socket.sent[0].id,
+      result: { path: "new.md" },
+    });
     await expect(promise).resolves.toMatchObject({ path: "new.md" });
   });
 
   it("unsubscribing stops delivery", async () => {
-    const { reply, backend: connect } = harness();
-    const backend = connect();
+    const { backend, connected } = harness();
     const seen: unknown[] = [];
     const off = backend.onEvent((event) => seen.push(event));
-    await backend.connect();
+    const socket = await connected();
     off();
-    reply({ type: "member.created", id: 3 });
+    socket.reply({ type: "member.created", id: 3 });
     expect(seen).toHaveLength(0);
-  });
-});
-
-describe("transport selection", () => {
-  beforeEach(() => {
-    invoke.mockReset();
-    channels.length = 0;
-  });
-
-  it("prefers the Tauri bridge when it is present", async () => {
-    invoke.mockResolvedValue(undefined);
-    const hot = fakeHot();
-    await selectTransport(true, hot.context).open(() => {});
-    expect(invoke).toHaveBeenCalledWith("subscribe", expect.anything());
-    expect(hot.context.on).not.toHaveBeenCalled();
-  });
-
-  it("uses the dev bridge outside Tauri when Vite HMR is present", async () => {
-    const hot = fakeHot();
-    await selectTransport(false, hot.context).open(() => {});
-    expect(hot.context.on).toHaveBeenCalledWith(
-      "huddol:frame",
-      expect.any(Function),
-    );
-    expect(invoke).not.toHaveBeenCalled();
-  });
-
-  it("rejects connecting when neither bridge exists", async () => {
-    vi.useFakeTimers();
-    const backend = new Backend(() => selectTransport(false, undefined));
-    const failure = vi.fn();
-    backend.onFailure(failure);
-    await expect(backend.connect()).rejects.toMatchObject({
-      code: "no_transport",
-      transport: true,
-    });
-    expect(failure).toHaveBeenCalledTimes(1);
-    expect(backend.disconnected).toBe(true);
-    expect(vi.getTimerCount()).toBe(0);
-    vi.useRealTimers();
-  });
-});
-
-describe("dev transport", () => {
-  afterEach(() => vi.useRealTimers());
-
-  it("round-trips a request over Vite HMR", async () => {
-    const hot = fakeHot();
-    const backend = new Backend(() => selectTransport(false, hot.context));
-    const promise = backend.searchMessages("deadline");
-    await vi.waitFor(() => expect(hot.sent).toHaveLength(1));
-    const { event, data } = hot.sent[0];
-    const request = data as Sent;
-    expect(event).toBe("huddol:request");
-    expect(request).toMatchObject({
-      method: "discussion.search",
-      params: { query: "deadline" },
-    });
-    hot.emit("huddol:frame", { type: "response", id: request.id, result: [] });
-    await expect(promise).resolves.toEqual([]);
-  });
-
-  it("treats a bridge.disconnected frame as a lost connection", async () => {
-    vi.useFakeTimers();
-    const hot = fakeHot();
-    const backend = new Backend(() => selectTransport(false, hot.context));
-    const events = vi.fn();
-    backend.onEvent(events);
-    const promise = backend.organization().catch((error) => error);
-    await vi.advanceTimersByTimeAsync(0);
-    hot.emit("huddol:frame", { type: "bridge.disconnected" });
-    expect(await promise).toMatchObject({ code: "disconnected" });
-    expect(backend.disconnected).toBe(true);
-    expect(events).not.toHaveBeenCalled();
-    expect(vi.getTimerCount()).toBe(0);
-  });
-});
-
-describe("Tauri transport", () => {
-  beforeEach(() => {
-    invoke.mockReset();
-    channels.length = 0;
-  });
-
-  it("subscribes through a channel and sends through invoke", async () => {
-    invoke.mockResolvedValue(undefined);
-    const backend = new Backend(() => selectTransport(true, undefined));
-    const promise = backend.createAgent("Main");
-    await vi.waitFor(() =>
-      expect(invoke.mock.calls.some(([name]) => name === "send")).toBe(true),
-    );
-    expect(
-      invoke.mock.calls.filter(([name]) => name === "subscribe"),
-    ).toHaveLength(1);
-    const sent = invoke.mock.calls.find(([name]) => name === "send");
-    if (!sent) throw new Error("no send call");
-    const { message } = sent[1] as { message: Sent };
-    expect(message.method).toBe("organization.create_agent");
-    for (const channel of channels)
-      channel.onmessage?.({
-        type: "response",
-        id: message.id,
-        result: { id: 2, name: "Main" },
-      });
-    await expect(promise).resolves.toMatchObject({ name: "Main" });
   });
 });

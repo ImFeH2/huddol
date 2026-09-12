@@ -1,4 +1,4 @@
-from pathlib import PurePosixPath
+from pathlib import Path, PurePosixPath
 
 from PyInstaller.utils.hooks import copy_metadata
 
@@ -9,6 +9,9 @@ datas.extend(
     (f"src/{source}", str(PurePosixPath("execution", source).parent))
     for source in COMPONENT_SOURCES
 )
+web = Path(SPECPATH, "..", "web", "dist")
+if web.is_dir():
+    datas.append((str(web), "web"))
 
 
 a = Analysis(

@@ -4,13 +4,153 @@ import json
 import os
 import subprocess
 import sys
-from collections.abc import Sequence
+import threading
+from collections.abc import Callable, Iterator, Sequence
+from http.client import HTTPConnection
 from pathlib import Path
-from typing import Any
+from types import TracebackType
+from typing import Any, Self
 
 import pytest
+from websockets.exceptions import InvalidStatus
+from websockets.sync.client import ClientConnection, connect
 
 TIMEOUT = 90
+SOURCE = str(Path(__file__).resolve().parents[1] / "src")
+
+
+class Kernel:
+    def __init__(
+        self,
+        data_directory: Path,
+        *,
+        cwd: Path | None = None,
+        env: dict[str, str] | None = None,
+        web_directory: Path | None = None,
+    ) -> None:
+        self.data_directory = data_directory
+        self._cwd = cwd
+        self._env = {
+            "HUDDOL_DATA_DIR": str(data_directory),
+            "HUDDOL_WEB_DIR": str(web_directory or data_directory / "no-web"),
+            "PATH": "/usr/bin:/bin:/usr/local/bin",
+            "PYTHONPATH": SOURCE,
+            **(env or {}),
+        }
+        self.ready: dict[str, Any] = {}
+        self.raw_ready = b""
+        self.stdout = b""
+        self.stderr = ""
+        self.returncode: int | None = None
+
+    def __enter__(self) -> Self:
+        self._process = subprocess.Popen(
+            [sys.executable, "-m", "huddol"],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            cwd=self._cwd or Path.cwd(),
+            env=self._env,
+        )
+        assert self._process.stdout is not None
+        stdout = self._process.stdout
+        line: list[bytes] = []
+        reader = threading.Thread(target=lambda: line.append(stdout.readline()))
+        reader.start()
+        reader.join(TIMEOUT)
+        if reader.is_alive() or not line or not line[0]:
+            self._process.kill()
+            reader.join()
+            self._finish()
+            raise AssertionError(f"kernel did not announce itself: {self.stderr}")
+        self.raw_ready = line[0]
+        self.ready = json.loads(self.raw_ready.decode("utf-8"))
+        return self
+
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        traceback: TracebackType | None,
+    ) -> None:
+        if self.returncode is None:
+            self.shutdown()
+
+    @property
+    def port(self) -> int:
+        return int(self.ready["port"])
+
+    @property
+    def token(self) -> str:
+        return str(self.ready["token"])
+
+    @property
+    def pid(self) -> int:
+        return self._process.pid
+
+    def ws_url(self, token: str | None = None) -> str:
+        query = (
+            f"?token={self.token if token is None else token}" if token != "" else ""
+        )
+        return f"ws://127.0.0.1:{self.port}/ws{query}"
+
+    def connect(self, token: str | None = None) -> ClientConnection:
+        return connect(self.ws_url(token), open_timeout=TIMEOUT)
+
+    def http(self, path: str) -> tuple[int, str | None, bytes]:
+        connection = HTTPConnection("127.0.0.1", self.port, timeout=TIMEOUT)
+        try:
+            connection.request("GET", path)
+            response = connection.getresponse()
+            return response.status, response.getheader("Content-Type"), response.read()
+        finally:
+            connection.close()
+
+    def send_stdin(self, text: str) -> None:
+        assert self._process.stdin is not None
+        self._process.stdin.write(text.encode("utf-8"))
+        self._process.stdin.flush()
+
+    def shutdown(self, *, close_only: bool = False) -> int:
+        if not close_only:
+            self.send_stdin(json.dumps({"method": "system.shutdown"}) + "\n")
+        self._finish()
+        assert self.returncode is not None
+        return self.returncode
+
+    def _finish(self) -> None:
+        stdout, stderr = self._process.communicate(timeout=TIMEOUT)
+        self.stdout = stdout
+        self.stderr = stderr.decode("utf-8", errors="replace")
+        self.returncode = self._process.returncode
+
+
+class Client:
+    def __init__(self, connection: ClientConnection) -> None:
+        self._connection = connection
+        self.frames: list[dict[str, Any]] = []
+
+    def send(self, payload: dict[str, Any] | str) -> None:
+        self._connection.send(
+            payload if isinstance(payload, str) else json.dumps(payload)
+        )
+
+    def wait_for(
+        self, predicate: Callable[[dict[str, Any]], bool], timeout: float = 60
+    ) -> dict[str, Any]:
+        while True:
+            frame = json.loads(self._connection.recv(timeout=timeout))
+            self.frames.append(frame)
+            if predicate(frame):
+                return frame
+
+    def call(self, request: dict[str, Any]) -> dict[str, Any]:
+        self.send(request)
+        return self.wait_for(
+            lambda frame: (
+                frame.get("type") == "response" and frame.get("id") == request["id"]
+            )
+        )
 
 
 def drive(
@@ -18,29 +158,15 @@ def drive(
     requests: Sequence[dict[str, Any]],
     *,
     cwd: Path | None = None,
-    shutdown: bool = True,
 ) -> tuple[list[dict[str, Any]], int, str]:
-    lines = list(requests)
-    if shutdown:
-        lines.append({"id": 9999, "method": "system.shutdown"})
-    completed = subprocess.run(
-        [sys.executable, "-m", "huddol"],
-        input="".join(json.dumps(item) + "\n" for item in lines),
-        capture_output=True,
-        text=True,
-        timeout=TIMEOUT,
-        cwd=cwd or Path.cwd(),
-        env={
-            "HUDDOL_DATA_DIR": str(data_directory),
-            "PATH": "/usr/bin:/bin:/usr/local/bin",
-            "PYTHONPATH": str(Path(__file__).resolve().parents[1] / "src"),
-        },
-        check=False,
-    )
-    frames = [
-        json.loads(line) for line in completed.stdout.splitlines() if line.strip()
-    ]
-    return frames, completed.returncode, completed.stderr
+    with Kernel(data_directory, cwd=cwd) as kernel:
+        with kernel.connect() as connection:
+            client = Client(connection)
+            for request in requests:
+                client.call(request)
+        code = kernel.shutdown()
+        assert kernel.stdout == b"", kernel.stdout
+        return client.frames, code, kernel.stderr
 
 
 def response(frames: list[dict[str, Any]], request_id: int) -> dict[str, Any]:
@@ -54,18 +180,21 @@ def events(frames: list[dict[str, Any]], kind: str) -> list[dict[str, Any]]:
     return [frame for frame in frames if frame.get("type") == kind]
 
 
+@pytest.fixture
+def dist(tmp_path: Path) -> Iterator[Path]:
+    directory = tmp_path / "dist"
+    (directory / "assets").mkdir(parents=True)
+    (directory / "index.html").write_text("<!doctype html><title>Huddol</title>")
+    (directory / "assets" / "app.js").write_text("console.log(1)")
+    yield directory
+
+
 @pytest.mark.parametrize("escaped", [True, False])
-def test_jsonl_uses_utf8_independently_of_stdio_defaults(
+def test_frames_use_utf8_independently_of_stdio_defaults(
     tmp_path: Path, escaped: bool
 ) -> None:
     name = "启动验证😀"
-    env = {
-        **os.environ,
-        "HUDDOL_DATA_DIR": str(tmp_path / "data"),
-        "PYTHONPATH": str(Path(__file__).resolve().parents[1] / "src"),
-        "PYTHONIOENCODING": "gbk",
-        "PYTHONUTF8": "0",
-    }
+    env = {"PYTHONIOENCODING": "gbk", "PYTHONUTF8": "0"}
     for requests in (
         [
             {
@@ -77,28 +206,19 @@ def test_jsonl_uses_utf8_independently_of_stdio_defaults(
         ],
         [{"id": 2, "method": "organization.get"}],
     ):
-        completed = subprocess.run(
-            [sys.executable, "-m", "huddol"],
-            input="".join(
-                json.dumps(item, ensure_ascii=escaped) + "\n"
-                for item in [*requests, {"id": 3, "method": "system.shutdown"}]
-            ).encode("utf-8"),
-            capture_output=True,
-            cwd=tmp_path,
-            env=env,
-            timeout=30,
-            check=False,
-        )
-        assert completed.returncode == 0, completed.stderr.decode(
-            "utf-8", errors="replace"
-        )
-        assert not completed.stdout.startswith(b"\xef\xbb\xbf")
-        frames = [
-            json.loads(line) for line in completed.stdout.decode("utf-8").splitlines()
-        ]
-        assert not any("error" in frame for frame in frames)
-        assert response(frames, 2)["result"]["members"][0]["name"] == name
-        assert response(frames, 3)["result"] == {"stopped": True}
+        with Kernel(tmp_path / "data", cwd=tmp_path, env=env) as kernel:
+            assert not kernel.raw_ready.startswith(b"\xef\xbb\xbf")
+            with kernel.connect() as connection:
+                client = Client(connection)
+                for request in requests:
+                    client.send(json.dumps(request, ensure_ascii=escaped))
+                    expected = request["id"]
+                    client.wait_for(
+                        lambda frame, expected=expected: frame.get("id") == expected
+                    )
+            assert kernel.shutdown() == 0, kernel.stderr
+        assert not any("error" in frame for frame in client.frames)
+        assert response(client.frames, 2)["result"]["members"][0]["name"] == name
 
 
 def test_discussion_list_limits_are_optional_for_the_desktop(
@@ -244,7 +364,7 @@ def test_compaction_settings_work_without_model_credentials(tmp_path: Path) -> N
         ],
     )
     assert code == 0, stderr
-    assert events(frames, "ready")[0]["model_configured"] is False
+    assert response(frames, 1)["result"]["api_key_set"] is False
     assert response(frames, 1)["result"]["compaction_threshold"] == 12345
 
 
@@ -336,32 +456,164 @@ def test_compaction_updates_preserve_model_credentials(tmp_path: Path) -> None:
         store.close()
 
 
-def test_the_process_starts_and_announces_itself(tmp_path: Path) -> None:
-    frames, code, stderr = drive(tmp_path / "data", [])
-    assert code == 0, stderr
-    ready = events(frames, "ready")
-    assert len(ready) == 1
-    assert ready[0]["human_id"] == 1
-    assert ready[0]["model_configured"] is False
-    assert len(ready[0]["methods"]) > 20
+def test_the_process_announces_itself_once_on_stdout(tmp_path: Path) -> None:
+    with Kernel(tmp_path / "data") as kernel:
+        assert set(kernel.ready) == {"type", "port", "token", "url"}
+        assert kernel.ready["type"] == "ready"
+        assert kernel.ready["url"] == (
+            f"http://127.0.0.1:{kernel.port}/?token={kernel.token}"
+        )
+        with kernel.connect() as connection:
+            client = Client(connection)
+            organization = client.call({"id": 1, "method": "organization.get"})
+        assert organization["result"]["human_id"] == 1
+        assert kernel.shutdown() == 0, kernel.stderr
+        assert kernel.stdout == b""
+
+
+def test_port_and_token_can_be_pinned_by_the_environment(tmp_path: Path) -> None:
+    with Kernel(tmp_path / "data", env={"HUDDOL_PORT": "0"}) as probe:
+        port = probe.port
+        assert probe.shutdown() == 0
+    env = {"HUDDOL_PORT": str(port), "HUDDOL_TOKEN": "pinned-token"}
+    with Kernel(tmp_path / "data", env=env) as kernel:
+        assert kernel.port == port
+        assert kernel.token == "pinned-token"
+        with kernel.connect() as connection:
+            assert Client(connection).call({"id": 1, "method": "ping"})["result"] == {
+                "pong": None
+            }
+        assert kernel.shutdown() == 0, kernel.stderr
 
 
 def test_the_data_directory_variable_is_honoured(tmp_path: Path) -> None:
     target = tmp_path / "somewhere" / "else"
-    frames, code, stderr = drive(target, [])
-    assert code == 0, stderr
-    assert events(frames, "ready")[0]["data_directory"] == str(target)
-    assert (target / "huddol.sqlite3").is_file()
+    with Kernel(target) as kernel:
+        assert (target / "huddol.sqlite3").is_file()
+        assert kernel.shutdown() == 0, kernel.stderr
 
 
 def test_the_working_root_is_a_workspace_inside_the_data_directory(
     tmp_path: Path,
 ) -> None:
     target = tmp_path / "somewhere" / "else"
-    frames, code, stderr = drive(target, [], cwd=tmp_path)
+    frames, code, stderr = drive(
+        target,
+        [{"id": 1, "method": "settings.get", "params": {"section": "execution"}}],
+        cwd=tmp_path,
+    )
     assert code == 0, stderr
-    assert events(frames, "ready")[0]["working_directory"] == str(target / "workspace")
+    assert response(frames, 1)["result"]["working_directory"] == str(
+        target / "workspace"
+    )
     assert (target / "workspace").is_dir()
+
+
+def test_run_file_lives_only_while_the_kernel_runs(tmp_path: Path) -> None:
+    data = tmp_path / "data"
+    run_file = data / "run.json"
+    with Kernel(data) as kernel:
+        assert run_file.is_file()
+        assert oct(run_file.stat().st_mode & 0o777) == "0o600"
+        assert json.loads(run_file.read_text()) == {
+            "port": kernel.port,
+            "token": kernel.token,
+            "pid": kernel.pid,
+        }
+        assert kernel.shutdown() == 0, kernel.stderr
+    assert not run_file.exists()
+
+
+def test_closing_stdin_shuts_the_kernel_down(tmp_path: Path) -> None:
+    data = tmp_path / "data"
+    with Kernel(data) as kernel:
+        assert kernel.shutdown(close_only=True) == 0, kernel.stderr
+    assert not (data / "run.json").exists()
+    assert (data / "logs" / "huddol.log").is_file()
+    assert "Shutting down (eof)" in kernel.stderr
+
+
+def test_wrong_or_missing_tokens_get_401_without_an_upgrade(tmp_path: Path) -> None:
+    with Kernel(tmp_path / "data") as kernel:
+        for token in ("wrong", ""):
+            status, _content_type, body = kernel.http(
+                f"/ws?token={token}" if token else "/ws"
+            )
+            assert (status, body) == (401, b"Unauthorized")
+            with pytest.raises(InvalidStatus) as rejected, kernel.connect(token):
+                pass
+            assert rejected.value.response.status_code == 401
+        with kernel.connect() as connection:
+            assert Client(connection).call({"id": 1, "method": "ping"})["result"] == {
+                "pong": None
+            }
+        assert kernel.shutdown() == 0, kernel.stderr
+
+
+def test_responses_stay_on_their_own_connection(tmp_path: Path) -> None:
+    with Kernel(tmp_path / "data") as kernel:
+        with kernel.connect() as first, kernel.connect() as second:
+            one, two = Client(first), Client(second)
+            one.send({"id": 1, "method": "ping", "params": {"token": "one"}})
+            two.send({"id": 1, "method": "ping", "params": {"token": "two"}})
+            assert one.wait_for(lambda frame: frame.get("id") == 1)["result"] == {
+                "pong": "one"
+            }
+            assert two.wait_for(lambda frame: frame.get("id") == 1)["result"] == {
+                "pong": "two"
+            }
+            with pytest.raises(TimeoutError):
+                one.wait_for(lambda frame: True, timeout=0.5)
+            assert len(one.frames) == 1
+            assert len(two.frames) == 1
+        assert kernel.shutdown() == 0, kernel.stderr
+
+
+def test_events_are_broadcast_to_every_connection(tmp_path: Path) -> None:
+    with Kernel(tmp_path / "data") as kernel:
+        with kernel.connect() as first, kernel.connect() as second:
+            one, two = Client(first), Client(second)
+            created = one.call(
+                {
+                    "id": 1,
+                    "method": "organization.create_agent",
+                    "params": {"name": "Main"},
+                }
+            )
+            assert created["result"]["name"] == "Main"
+            assert events(one.frames, "member.created")[0]["name"] == "Main"
+            echoed = two.wait_for(lambda frame: frame.get("type") == "member.created")
+            assert echoed == events(one.frames, "member.created")[0]
+            with pytest.raises(TimeoutError):
+                two.wait_for(lambda frame: True, timeout=0.5)
+        assert kernel.shutdown() == 0, kernel.stderr
+
+
+def test_the_frontend_is_served_when_it_is_built(tmp_path: Path, dist: Path) -> None:
+    with Kernel(tmp_path / "data", web_directory=dist) as kernel:
+        index = dist.joinpath("index.html").read_bytes()
+        for path in ("/", "/settings", "/discussions/3?x=1"):
+            status, content_type, body = kernel.http(path)
+            assert (status, body) == (200, index), path
+            assert content_type == "text/html; charset=utf-8"
+        status, content_type, body = kernel.http("/assets/app.js")
+        assert (status, body) == (200, b"console.log(1)")
+        assert content_type is not None
+        assert content_type.startswith("text/javascript")
+        assert kernel.http("/assets/missing.js")[0] == 404
+        assert kernel.http("/assets/")[0] == 200
+        assert kernel.http("/../huddol.spec")[0] == 404
+        assert kernel.shutdown() == 0, kernel.stderr
+
+
+def test_a_missing_frontend_build_answers_503(tmp_path: Path) -> None:
+    with Kernel(tmp_path / "data") as kernel:
+        assert kernel.http("/") == (
+            503,
+            "text/plain; charset=utf-8",
+            b"Frontend not built",
+        )
+        assert kernel.shutdown() == 0, kernel.stderr
 
 
 def test_discussion_ids_are_not_reused_after_deletion_or_restart(
@@ -402,12 +654,6 @@ def test_discussion_ids_are_not_reused_after_deletion_or_restart(
     assert code == 0, stderr
     assert response(frames, 1)["result"]["id"] == 4
     assert response(frames, 2)["error"]["code"] == "not_found"
-
-
-def test_shutdown_answers_and_exits_cleanly(tmp_path: Path) -> None:
-    frames, code, _ = drive(tmp_path / "data", [])
-    assert code == 0
-    assert response(frames, 9999)["result"] == {"stopped": True}
 
 
 def test_a_full_conversation_survives_the_real_pipe(tmp_path: Path) -> None:
@@ -593,27 +839,17 @@ def test_errors_arrive_as_structured_responses(tmp_path: Path) -> None:
 
 
 def test_malformed_frames_do_not_kill_the_process(tmp_path: Path) -> None:
-    data = tmp_path / "data"
-    completed = subprocess.run(
-        [sys.executable, "-m", "huddol"],
-        input='not json at all\n{"id":1,"method":"organization.get","params":{}}\n'
-        '{"method":"system.shutdown"}\n',
-        capture_output=True,
-        text=True,
-        timeout=TIMEOUT,
-        env={
-            "HUDDOL_DATA_DIR": str(data),
-            "PATH": "/usr/bin:/bin",
-            "PYTHONPATH": str(Path(__file__).resolve().parents[1] / "src"),
-        },
-        check=False,
-    )
-    frames = [
-        json.loads(line) for line in completed.stdout.splitlines() if line.strip()
-    ]
-    assert completed.returncode == 0
-    assert any(frame.get("code") == "invalid_frame" for frame in frames)
-    assert response(frames, 1)["result"]["human_id"] == 1
+    with Kernel(tmp_path / "data") as kernel:
+        with kernel.connect() as connection:
+            client = Client(connection)
+            client.send("not json at all")
+            client.wait_for(lambda frame: frame.get("code") == "invalid_frame")
+            client.send({"id": 1, "method": "system.shutdown"})
+            refused = client.wait_for(lambda frame: frame.get("id") == 1)
+            assert refused["error"]["code"] == "internal_method"
+            got = client.call({"id": 2, "method": "organization.get", "params": {}})
+            assert got["result"]["human_id"] == 1
+        assert kernel.shutdown() == 0, kernel.stderr
 
 
 def test_unusable_write_directories_are_reported_not_fatal(tmp_path: Path) -> None:
@@ -648,11 +884,12 @@ def test_unusable_write_directories_are_reported_not_fatal(tmp_path: Path) -> No
     connection.commit()
     connection.close()
 
-    frames, code, stderr = drive(data, [])
+    frames, code, stderr = drive(
+        data, [{"id": 1, "method": "settings.get", "params": {"section": "execution"}}]
+    )
     assert code == 0, stderr
-    ready = events(frames, "ready")[0]
-    assert ready["write_directories"] == []
-    assert ready["unusable_write_directories"] == [
+    status = response(frames, 1)["result"]
+    assert status["unusable_write_directories"] == [
         {"path": "relative/bad", "reason": "invalid_directory"}
     ]
 
@@ -692,75 +929,39 @@ def test_internal_methods_are_refused_over_the_pipe(tmp_path: Path) -> None:
     assert response(frames, 1)["error"]["code"] == "internal_method"
 
 
-def test_agents_wake_and_report_turns_over_the_pipe(tmp_path: Path) -> None:
-    with subprocess.Popen(
-        [sys.executable, "-m", "huddol"],
-        stdin=subprocess.PIPE,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-        bufsize=1,
-        env={
-            "HUDDOL_DATA_DIR": str(tmp_path / "data"),
-            "PATH": "/usr/bin:/bin",
-            "PYTHONPATH": str(Path(__file__).resolve().parents[1] / "src"),
-        },
-    ) as process:
-        assert process.stdin is not None
-        assert process.stdout is not None
-
-        def send(payload: dict[str, Any]) -> None:
-            assert process.stdin is not None
-            process.stdin.write(json.dumps(payload) + "\n")
-            process.stdin.flush()
-
-        def wait_for(predicate: Any, limit: int = 60) -> dict[str, Any]:
-            assert process.stdout is not None
-            for _ in range(limit):
-                line = process.stdout.readline()
-                if not line:
-                    break
-                frame = json.loads(line)
-                if predicate(frame):
-                    return frame
-            raise AssertionError("expected frame never arrived")
-
-        try:
-            wait_for(lambda frame: frame.get("type") == "ready")
-            send(
+def test_agents_wake_and_report_turns_over_the_socket(tmp_path: Path) -> None:
+    with Kernel(tmp_path / "data") as kernel:
+        with kernel.connect() as connection:
+            client = Client(connection)
+            client.call(
                 {
                     "id": 1,
                     "method": "organization.create_agent",
                     "params": {"name": "Main"},
                 }
             )
-            wait_for(lambda frame: frame.get("id") == 1)
-            send(
+            client.call(
                 {
                     "id": 2,
                     "method": "discussion.create",
                     "params": {"topic": "wake up", "member_ids": [2]},
                 }
             )
-            wait_for(lambda frame: frame.get("id") == 2)
-            send(
+            client.send(
                 {
                     "id": 3,
                     "method": "discussion.send",
                     "params": {"discussion_id": 1, "body": "@Main go"},
                 }
             )
-
-            started = wait_for(lambda frame: frame.get("type") == "turn.started")
+            started = client.wait_for(lambda frame: frame.get("type") == "turn.started")
             assert started["agent_id"] == 2
             assert started["items"] == 1
-
-            finished = wait_for(lambda frame: frame.get("type") == "turn.finished")
+            finished = client.wait_for(
+                lambda frame: frame.get("type") == "turn.finished"
+            )
             assert finished["agent_id"] == 2
-        finally:
-            send({"method": "system.shutdown"})
-            process.stdin.close()
-            process.wait(timeout=TIMEOUT)
+        assert kernel.shutdown() == 0, kernel.stderr
 
 
 @pytest.mark.parametrize("section", ["model", "observability"])
@@ -937,12 +1138,11 @@ def test_ping_works_without_a_token(tmp_path: Path) -> None:
 
 
 def test_the_packaging_smoke_sequence_holds(tmp_path: Path) -> None:
-    frames, code, stderr = drive(
-        tmp_path / "data",
-        [{"id": 1, "method": "ping", "params": {"token": "huddol-smoke"}}],
-    )
-    assert code == 0, stderr
-    ready = events(frames, "ready")
-    assert ready and ready[0]["methods"]
-    assert response(frames, 1)["result"]["pong"] == "huddol-smoke"
-    assert response(frames, 9999)["result"] == {"stopped": True}
+    with Kernel(tmp_path / "data") as kernel:
+        assert kernel.ready["type"] == "ready"
+        with kernel.connect() as connection:
+            pong = Client(connection).call(
+                {"id": 1, "method": "ping", "params": {"token": "huddol-smoke"}}
+            )
+        assert pong["result"]["pong"] == "huddol-smoke"
+        assert kernel.shutdown() == 0, kernel.stderr
