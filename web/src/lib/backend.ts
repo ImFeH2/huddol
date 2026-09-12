@@ -131,8 +131,81 @@ export function connectionFrom(search: string, origin: string): Connection {
   return { url: url.toString() };
 }
 
+export type Resolved = {
+  connection: Connection;
+  remember: string | null;
+  scrub: boolean;
+};
+
+export function resolveConnection(
+  search: string,
+  origin: string,
+  remembered: string | null,
+): Resolved {
+  const params = new URLSearchParams(search);
+  if (params.has("error")) {
+    return {
+      connection: connectionFrom(search, origin),
+      remember: null,
+      scrub: false,
+    };
+  }
+  if (params.has("token") || params.has("ws")) {
+    const connection = connectionFrom(search, origin);
+    return {
+      connection,
+      remember: "url" in connection ? connection.url : null,
+      scrub: true,
+    };
+  }
+  if (remembered) {
+    return { connection: { url: remembered }, remember: null, scrub: false };
+  }
+  return {
+    connection: connectionFrom(search, origin),
+    remember: null,
+    scrub: false,
+  };
+}
+
+export function withoutConnectionParams(href: string): string {
+  const url = new URL(href);
+  url.searchParams.delete("ws");
+  url.searchParams.delete("token");
+  return url.toString();
+}
+
+const STORAGE_KEY = "huddol.connection";
+
+function recall(): string | null {
+  try {
+    return sessionStorage.getItem(STORAGE_KEY);
+  } catch {
+    return null;
+  }
+}
+
+function remember(url: string): void {
+  try {
+    sessionStorage.setItem(STORAGE_KEY, url);
+  } catch {}
+}
+
 function pageConnection(): Connection {
-  return connectionFrom(location.search, location.origin);
+  const resolved = resolveConnection(
+    location.search,
+    location.origin,
+    recall(),
+  );
+  if (resolved.remember) remember(resolved.remember);
+  if (resolved.scrub) {
+    history.replaceState(
+      history.state,
+      "",
+      withoutConnectionParams(location.href),
+    );
+  }
+  return resolved.connection;
 }
 
 function browserSocket(url: string): Socket {

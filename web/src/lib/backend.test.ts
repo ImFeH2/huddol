@@ -5,7 +5,9 @@ import {
   type Connection,
   connectionFrom,
   type Frame,
+  resolveConnection,
   type Socket,
+  withoutConnectionParams,
 } from "@/lib/backend";
 
 type Sent = { id: number; method: string; params: Record<string, unknown> };
@@ -107,6 +109,79 @@ describe("connectionFrom", () => {
     expect(
       connectionFrom("?error=kernel%20did%20not%20start", "tauri://localhost"),
     ).toEqual({ error: "kernel did not start" });
+  });
+});
+
+describe("resolveConnection", () => {
+  it("remembers a connection given in the page address and asks to scrub it", () => {
+    expect(
+      resolveConnection("?token=abc", "http://127.0.0.1:8000", null),
+    ).toEqual({
+      connection: { url: "ws://127.0.0.1:8000/ws?token=abc" },
+      remember: "ws://127.0.0.1:8000/ws?token=abc",
+      scrub: true,
+    });
+    expect(
+      resolveConnection(
+        "?ws=ws://127.0.0.1:4321/ws&token=abc",
+        "http://127.0.0.1:1420",
+        "ws://stale/ws?token=old",
+      ),
+    ).toEqual({
+      connection: { url: "ws://127.0.0.1:4321/ws?token=abc" },
+      remember: "ws://127.0.0.1:4321/ws?token=abc",
+      scrub: true,
+    });
+  });
+
+  it("reuses the remembered connection after the address was scrubbed", () => {
+    expect(
+      resolveConnection(
+        "",
+        "http://127.0.0.1:8000",
+        "ws://127.0.0.1:8000/ws?token=abc",
+      ),
+    ).toEqual({
+      connection: { url: "ws://127.0.0.1:8000/ws?token=abc" },
+      remember: null,
+      scrub: false,
+    });
+  });
+
+  it("falls back to the same-origin socket without a token when nothing is known", () => {
+    expect(resolveConnection("", "http://127.0.0.1:8000", null)).toEqual({
+      connection: { url: "ws://127.0.0.1:8000/ws?token=" },
+      remember: null,
+      scrub: false,
+    });
+  });
+
+  it("keeps the error page address untouched", () => {
+    expect(
+      resolveConnection(
+        "?error=boom",
+        "tauri://localhost",
+        "ws://x/ws?token=y",
+      ),
+    ).toEqual({ connection: { error: "boom" }, remember: null, scrub: false });
+  });
+});
+
+describe("withoutConnectionParams", () => {
+  it("drops the socket and token parameters and keeps the rest", () => {
+    expect(
+      withoutConnectionParams(
+        "http://127.0.0.1:1420/?ws=ws://127.0.0.1:4321/ws&token=abc&tab=x",
+      ),
+    ).toBe("http://127.0.0.1:1420/?tab=x");
+    expect(
+      withoutConnectionParams(
+        "tauri://localhost/index.html?ws=ws://127.0.0.1:4321/ws&token=abc",
+      ),
+    ).toBe("tauri://localhost/index.html");
+    expect(withoutConnectionParams("http://127.0.0.1:8000/?token=abc")).toBe(
+      "http://127.0.0.1:8000/",
+    );
   });
 });
 
