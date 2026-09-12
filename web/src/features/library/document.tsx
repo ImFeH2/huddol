@@ -1,14 +1,15 @@
-import { AlertTriangle, Check, Save, SquarePen, Trash2 } from "lucide-react";
+import { Check, Save, SquarePen, Trash2 } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import { useNavigate } from "@/app/router";
 import { Page, PageBody, PageHeader, Toolbar } from "@/components/layout/shell";
 import { ConfirmDialog, PromptDialog } from "@/components/ui/dialog";
 import {
-  Banner,
   Button,
   Chip,
+  dismissToast,
   EmptyState,
   Textarea,
+  toast,
 } from "@/components/ui/index";
 import { OverflowMenu } from "@/components/ui/menu";
 import { BackendError, backend } from "@/lib/backend";
@@ -21,12 +22,15 @@ type Saved = "shown" | "fading" | null;
 
 const SAVED_HOLD_MS = 2000;
 
+function conflictToastId(path: string): string {
+  return `document-conflict:${path}`;
+}
+
 export function DocumentPage({ path }: { path: string }) {
   const navigate = useNavigate();
   const [loaded, setLoaded] = useState<Loaded | null>(null);
   const [draft, setDraft] = useState("");
   const [missing, setMissing] = useState(false);
-  const [conflict, setConflict] = useState(false);
   const [saved, setSaved] = useState<Saved>(null);
   const [busy, setBusy] = useState(false);
   const [renaming, setRenaming] = useState(false);
@@ -38,7 +42,7 @@ export function DocumentPage({ path }: { path: string }) {
       setLoaded({ content: document.content, hash: document.hash });
       setDraft(document.content);
       setMissing(false);
-      setConflict(false);
+      dismissToast(conflictToastId(path));
     } catch (failure) {
       if (failure instanceof BackendError && failure.code === "not_found") {
         setMissing(true);
@@ -51,6 +55,8 @@ export function DocumentPage({ path }: { path: string }) {
   useEffect(() => {
     void load();
   }, [load]);
+
+  useEffect(() => () => dismissToast(conflictToastId(path)), [path]);
 
   useEffect(() => {
     if (saved !== "shown") return;
@@ -71,11 +77,19 @@ export function DocumentPage({ path }: { path: string }) {
     try {
       const result = await backend.writeLibrary(path, draft, loaded.hash);
       if (result.conflict) {
-        setConflict(true);
+        toast({
+          id: conflictToastId(path),
+          tone: "danger",
+          title: "Saved elsewhere",
+          description: path,
+          duration: null,
+          action: { label: "Reopen", onClick: () => void load() },
+        });
         return;
       }
       setLoaded({ content: draft, hash: result.hash });
       setSaved("shown");
+      toast({ tone: "success", title: "Saved" });
     } catch (failure) {
       backend.reportFailure(failure);
     } finally {
@@ -147,16 +161,6 @@ export function DocumentPage({ path }: { path: string }) {
       </Toolbar>
       <PageBody variant="flush">
         <div className="editor-shell">
-          {conflict ? (
-            <Banner
-              tone="warning"
-              icon={<AlertTriangle size={16} />}
-              onDismiss={() => setConflict(false)}
-            >
-              Someone saved this document while you were editing. Reopen it to
-              see their version.
-            </Banner>
-          ) : null}
           <div className="editor">
             <Textarea
               aria-label="Document"

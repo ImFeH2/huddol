@@ -10,6 +10,14 @@ import {
 import { Tooltip } from "@/components/ui/tooltip";
 import "@/components/ui/ui.css";
 
+export {
+  dismissToast,
+  Toaster,
+  type ToastOptions,
+  type ToastTone,
+  toast,
+} from "@/components/ui/toast";
+
 type ButtonProps = ButtonHTMLAttributes<HTMLButtonElement> & {
   variant?: "default" | "primary" | "ghost" | "danger";
   size?: "md" | "sm";
@@ -324,34 +332,6 @@ export function AvatarStack({
         </span>
       ) : null}
     </span>
-  );
-}
-
-export function Banner({
-  tone = "info",
-  icon,
-  children,
-  onDismiss,
-}: {
-  tone?: "info" | "success" | "warning" | "danger";
-  icon?: ReactNode;
-  children: ReactNode;
-  onDismiss?: () => void;
-}) {
-  return (
-    <div className="banner" data-tone={tone} role="status">
-      {icon ? (
-        <span className="banner-icon" aria-hidden="true">
-          {icon}
-        </span>
-      ) : null}
-      <div className="banner-body">{children}</div>
-      {onDismiss ? (
-        <button type="button" className="banner-dismiss" onClick={onDismiss}>
-          Dismiss
-        </button>
-      ) : null}
-    </div>
   );
 }
 

@@ -39,5 +39,7 @@ describe("Langfuse settings", () => {
     const enabledId = html.match(/<input[^>]*id="([^"]+-enabled)"/)?.[1];
     expect(enabledId).toBeDefined();
     expect(html).toContain(`for="${enabledId}"`);
+    expect(html).not.toContain("banner");
+    expect(html).not.toContain("Restart Huddol");
   });
 });

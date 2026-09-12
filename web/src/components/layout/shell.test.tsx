@@ -10,23 +10,20 @@ import {
   Sidebar,
   Table,
 } from "@/components/layout/shell";
-import { Badge, Banner, Chip, IconButton } from "@/components/ui/index";
+import { Badge, Chip, IconButton } from "@/components/ui/index";
 import { TooltipProvider } from "@/components/ui/tooltip";
 
-describe("Shell feedback", () => {
-  it("keeps the page and navigation alongside one live failure notice", () => {
+describe("Shell", () => {
+  it("places the sidebar beside the page without a notice slot", () => {
     const html = renderToStaticMarkup(
-      <Shell
-        sidebar={<nav>Navigation</nav>}
-        notice={<Banner tone="danger">Connection lost. Restart Huddol.</Banner>}
-      >
+      <Shell sidebar={<nav>Navigation</nav>}>
         <main>Draft editor</main>
       </Shell>,
     );
     expect(html).toContain("<nav>Navigation</nav>");
     expect(html).toContain("<main>Draft editor</main>");
-    expect(html.match(/role="status"/g)).toHaveLength(1);
-    expect(html).toContain("Connection lost. Restart Huddol.");
+    expect(html).not.toContain("banner");
+    expect(html).not.toContain('role="status"');
   });
 });
 

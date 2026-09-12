@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { Choices } from "@/components/ui/choices";
-import { Banner, Button, Chip, Field, Textarea } from "@/components/ui/index";
+import { Button, Chip, Field, Textarea, toast } from "@/components/ui/index";
+import { reportLoadFailure } from "@/features/settings/saver";
 import { backend } from "@/lib/backend";
 import "@/features/settings/settings.css";
 
@@ -85,8 +86,6 @@ export function ExecutionForm({
     directoryDrafts(initial.directories),
   );
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [saved, setSaved] = useState(false);
   const draft = drafts[selected] ?? "";
   const changed = executionChanged(info, selected, draft);
   const options = [
@@ -110,16 +109,19 @@ export function ExecutionForm({
   const save = async () => {
     if (busy || !changed || !selected) return;
     setBusy(true);
-    setError(null);
-    setSaved(false);
     try {
       const result = await onSave(executionUpdate(selected, draft));
       setInfo(result);
       setSelected(environmentKey(result.environment));
       setDrafts(directoryDrafts(result.directories));
-      setSaved(true);
+      toast({ tone: "success", title: "Saved" });
     } catch (failure) {
-      setError(failure instanceof Error ? failure.message : String(failure));
+      toast({
+        tone: "danger",
+        title: "Could not save",
+        description:
+          failure instanceof Error ? failure.message : String(failure),
+      });
     } finally {
       setBusy(false);
       requestAnimationFrame(() => {
@@ -136,27 +138,29 @@ export function ExecutionForm({
         void save();
       }}
     >
-      {error || info.error ? (
-        <Banner tone="danger">{error || info.error}</Banner>
-      ) : null}
-      {info.probe_error ? (
-        <Banner tone="warning">{info.probe_error}</Banner>
-      ) : null}
-      {saved ? (
-        <Banner tone="success">Saved. Applies to new Turns.</Banner>
-      ) : null}
-      {info.unusable_write_directories.length ? (
-        <Banner tone="warning">
-          Some configured directories are unavailable.
-          <ul className="unusable-list">
-            {info.unusable_write_directories.map((item) => (
-              <li key={item.path}>
-                <span className="directory-path">{item.path}</span>
-                <Chip tone="warning">{item.reason}</Chip>
-              </li>
-            ))}
-          </ul>
-        </Banner>
+      {info.error ||
+      info.probe_error ||
+      info.unusable_write_directories.length ? (
+        <ul className="settings-facts">
+          {info.error ? (
+            <li>
+              <Chip tone="danger">Unavailable</Chip>
+              <span className="settings-fact">{info.error}</span>
+            </li>
+          ) : null}
+          {info.probe_error ? (
+            <li>
+              <Chip tone="warning">Probe failed</Chip>
+              <span className="settings-fact">{info.probe_error}</span>
+            </li>
+          ) : null}
+          {info.unusable_write_directories.map((item) => (
+            <li key={item.path}>
+              <Chip tone="warning">{item.reason}</Chip>
+              <span className="settings-fact directory-path">{item.path}</span>
+            </li>
+          ))}
+        </ul>
       ) : null}
       <fieldset className="settings-form" disabled={busy}>
         <legend>Environment</legend>
@@ -164,10 +168,7 @@ export function ExecutionForm({
           label="Execution environment"
           value={selected}
           options={options}
-          onChange={(value) => {
-            setSelected(value);
-            setSaved(false);
-          }}
+          onChange={setSelected}
         />
         <Field
           label={
@@ -185,7 +186,6 @@ export function ExecutionForm({
             onChange={(event) => {
               const value = event.target.value;
               setDrafts((current) => ({ ...current, [selected]: value }));
-              setSaved(false);
             }}
           />
         </Field>
@@ -205,39 +205,23 @@ export function ExecutionForm({
 
 export function ExecutionPanel() {
   const [info, setInfo] = useState<ExecutionSettings | null>(null);
-  const [error, setError] = useState<string | null>(null);
   const load = useCallback(async () => {
-    setError(null);
     try {
       setInfo((await backend.settings("execution")) as ExecutionSettings);
     } catch (failure) {
-      setError(failure instanceof Error ? failure.message : String(failure));
+      reportLoadFailure("settings-execution", failure, () => void load());
     }
   }, []);
   useEffect(() => {
     void load();
   }, [load]);
+  if (!info) return null;
   return (
-    <>
-      {error ? (
-        <Banner tone="danger">
-          {error}
-          <div className="settings-actions">
-            <Button onClick={() => void load()}>Retry</Button>
-          </div>
-        </Banner>
-      ) : null}
-      {info ? (
-        <ExecutionForm
-          initial={info}
-          onSave={async (values) =>
-            (await backend.updateSettings(
-              "execution",
-              values,
-            )) as ExecutionSettings
-          }
-        />
-      ) : null}
-    </>
+    <ExecutionForm
+      initial={info}
+      onSave={async (values) =>
+        (await backend.updateSettings("execution", values)) as ExecutionSettings
+      }
+    />
   );
 }

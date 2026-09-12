@@ -25,7 +25,6 @@ import {
 import { ConfirmDialog } from "@/components/ui/dialog";
 import {
   Avatar,
-  Banner,
   Button,
   Chip,
   Dot,
@@ -130,7 +129,22 @@ function AgentPage({
     <Page>
       <PageHeader
         title={member.name}
-        status={<AgentState member={member} tokenLimit={tokenLimit} />}
+        status={
+          <>
+            <AgentState member={member} tokenLimit={tokenLimit} />
+            {detail?.over_token_limit ? (
+              <Chip tone="danger">
+                <CircleAlert size={12} />
+                Token ceiling
+              </Chip>
+            ) : null}
+            {detail && detail.idle_streak >= 3 ? (
+              <Chip tone="warning">
+                {plural(detail.idle_streak, "idle Turn")}
+              </Chip>
+            ) : null}
+          </>
+        }
         crumb={{
           label: "Members",
           onSelect: () => navigate({ name: "members" }),
@@ -169,17 +183,6 @@ function AgentPage({
       <PageBody>
         {detail ? (
           <>
-            {detail.over_token_limit ? (
-              <Banner tone="danger" icon={<CircleAlert size={16} />}>
-                Token ceiling reached. Not scheduled until the limit is raised.
-              </Banner>
-            ) : null}
-            {detail.idle_streak >= 3 ? (
-              <Banner tone="warning" icon={<CircleAlert size={16} />}>
-                The last {detail.idle_streak} Turns produced nothing.
-              </Banner>
-            ) : null}
-
             <div className="stat-grid">
               <Stat
                 label="Token spend"

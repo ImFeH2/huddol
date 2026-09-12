@@ -14,10 +14,10 @@ import { ConfirmDialog } from "@/components/ui/dialog";
 import {
   Avatar,
   AvatarStack,
-  Banner,
   Button,
   Chip,
   EmptyState,
+  toast,
 } from "@/components/ui/index";
 import { OverflowMenu } from "@/components/ui/menu";
 import { Tooltip } from "@/components/ui/tooltip";
@@ -41,7 +41,6 @@ export function ThreadPage({ id }: { id: number }) {
   const [loadFailed, setLoadFailed] = useState(false);
   const [busy, setBusy] = useState(false);
   const [ackBusy, setAckBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
   const [doomed, setDoomed] = useState(false);
   const [editingMembers, setEditingMembers] = useState(false);
   const [fresh, setFresh] = useState<ReadonlySet<number>>(new Set());
@@ -125,14 +124,18 @@ export function ThreadPage({ id }: { id: number }) {
 
   const send = async (body: string) => {
     setBusy(true);
-    setError(null);
     try {
       await backend.send(id, body);
       await load();
       return true;
     } catch (failure) {
       if (!(failure instanceof BackendError && failure.transport)) {
-        setError(failure instanceof Error ? failure.message : String(failure));
+        toast({
+          tone: "danger",
+          title: "Could not send",
+          description:
+            failure instanceof Error ? failure.message : String(failure),
+        });
       }
       return false;
     } finally {
@@ -143,13 +146,17 @@ export function ThreadPage({ id }: { id: number }) {
   const ack = async (messageIds: number[], revoke = false) => {
     if (ackBusy) return;
     setAckBusy(true);
-    setError(null);
     try {
       if (revoke) await backend.revokeAck(id, messageIds);
       else await backend.ack(id, messageIds);
       await load();
     } catch (failure) {
-      setError(failure instanceof Error ? failure.message : String(failure));
+      toast({
+        tone: "danger",
+        title: revoke ? "Could not undo" : "Could not mark handled",
+        description:
+          failure instanceof Error ? failure.message : String(failure),
+      });
     } finally {
       setAckBusy(false);
     }
@@ -289,14 +296,6 @@ export function ThreadPage({ id }: { id: number }) {
           </ol>
           <div ref={bottom} />
         </div>
-
-        {error ? (
-          <div className="thread-banner">
-            <Banner tone="danger" onDismiss={() => setError(null)}>
-              {error}
-            </Banner>
-          </div>
-        ) : null}
 
         <Composer
           members={members}

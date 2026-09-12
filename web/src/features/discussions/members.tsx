@@ -1,7 +1,7 @@
 import { useId, useState } from "react";
 import { useOrganization } from "@/app/organization";
 import { Modal } from "@/components/ui/dialog";
-import { Avatar, Banner, Button, Chip, Input } from "@/components/ui/index";
+import { Avatar, Button, Chip, Input, toast } from "@/components/ui/index";
 import { backend, type Member } from "@/lib/backend";
 
 export function MemberPicker({
@@ -66,7 +66,6 @@ export function DiscussionMembersDialog({
   const { members } = useOrganization();
   const [selected, setSelected] = useState(memberIds);
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
   const changed =
     selected.length !== memberIds.length ||
     selected.some((id) => !memberIds.includes(id));
@@ -74,7 +73,6 @@ export function DiscussionMembersDialog({
   const save = async () => {
     if (!changed || busy) return;
     setBusy(true);
-    setError(null);
     try {
       const updated = await backend.setDiscussionMembers(
         discussionId,
@@ -83,7 +81,12 @@ export function DiscussionMembersDialog({
       await onSaved(updated.member_ids);
       onClose();
     } catch (failure) {
-      setError(failure instanceof Error ? failure.message : String(failure));
+      toast({
+        tone: "danger",
+        title: "Could not save",
+        description:
+          failure instanceof Error ? failure.message : String(failure),
+      });
     } finally {
       setBusy(false);
     }
@@ -107,7 +110,6 @@ export function DiscussionMembersDialog({
         </>
       }
     >
-      {error ? <Banner tone="danger">{error}</Banner> : null}
       <MemberPicker
         members={members}
         selected={selected}

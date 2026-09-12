@@ -51,9 +51,12 @@ describe("model compaction settings", () => {
     const html = renderToStaticMarkup(<ModelPanel />);
     expect(html).toContain("Compaction threshold (bytes)");
     expect(html).toContain('type="number"');
+    expect(html).toContain('inputMode="numeric"');
     expect(html).toContain('min="1"');
     expect(html).toContain('step="1"');
     expect(html).toContain('type="submit"');
     expect(html).toContain('disabled=""');
+    expect(html).not.toContain("banner");
+    expect(html).not.toContain("Restart Huddol");
   });
 });

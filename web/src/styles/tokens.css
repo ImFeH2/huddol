@@ -104,5 +104,6 @@
   --layer-menu: 20;
   --layer-overlay: 40;
   --layer-dialog: 41;
+  --layer-toast: 45;
   --layer-tooltip: 50;
 }

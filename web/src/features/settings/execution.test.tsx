@@ -125,5 +125,19 @@ describe("Execution settings", () => {
     expect(html).toContain("WSL command failed");
     expect(html).toContain("/missing");
     expect(html).toContain("invalid_directory");
+    expect(html).not.toContain("banner");
+    expect(html).not.toContain('role="status"');
+    expect(html).toContain('<span class="chip" data-tone="danger">');
+    expect(html.match(/<span class="chip" data-tone="warning">/g)).toHaveLength(
+      2,
+    );
+  });
+
+  it("shows no fact list for a healthy environment", () => {
+    const html = renderToStaticMarkup(
+      <ExecutionForm initial={initial} onSave={async () => initial} />,
+    );
+    expect(html).not.toContain("settings-facts");
+    expect(html).not.toContain("Restart Huddol");
   });
 });

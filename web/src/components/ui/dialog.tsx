@@ -1,13 +1,7 @@
 import * as Dialog from "@radix-ui/react-dialog";
 import { X } from "lucide-react";
 import { type ReactNode, useEffect, useId, useRef, useState } from "react";
-import {
-  Banner,
-  Button,
-  Field,
-  IconButton,
-  Input,
-} from "@/components/ui/index";
+import { Button, Field, IconButton, Input, toast } from "@/components/ui/index";
 import "@/components/ui/dialog.css";
 
 export function dialogFocusTarget<
@@ -20,8 +14,12 @@ export function dialogFocusTarget<
   return enabled.length > 0 ? enabled[enabled.length - 1] : null;
 }
 
-function failureMessage(failure: unknown): string {
-  return failure instanceof Error ? failure.message : String(failure);
+function reportFailure(title: string, failure: unknown) {
+  toast({
+    tone: "danger",
+    title,
+    description: failure instanceof Error ? failure.message : String(failure),
+  });
 }
 
 function refocus(target: { focus: () => void } | null) {
@@ -124,27 +122,22 @@ export function PromptDialog({
 }) {
   const [value, setValue] = useState(initial);
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
   const input = useRef<HTMLInputElement>(null);
   const inputId = useId();
 
   useEffect(() => {
-    if (open) {
-      setValue(initial);
-      setError(null);
-    }
+    if (open) setValue(initial);
   }, [open, initial]);
 
   const commit = async () => {
     const trimmed = value.trim();
     if (!trimmed || busy) return;
     setBusy(true);
-    setError(null);
     try {
       await onSubmit(trimmed);
       onOpenChange(false);
     } catch (failure) {
-      setError(failureMessage(failure));
+      reportFailure(`Could not ${submitLabel.toLowerCase()}`, failure);
       refocus(input.current);
     } finally {
       setBusy(false);
@@ -171,7 +164,6 @@ export function PromptDialog({
         </>
       }
     >
-      {error ? <Banner tone="danger">{error}</Banner> : null}
       <Field label={label} htmlFor={inputId}>
         <Input
           ref={input}
@@ -207,22 +199,16 @@ export function ConfirmDialog({
   onConfirm: () => void | Promise<void>;
 }) {
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
   const action = useRef<HTMLButtonElement>(null);
-
-  useEffect(() => {
-    if (open) setError(null);
-  }, [open]);
 
   const confirm = async () => {
     if (busy) return;
     setBusy(true);
-    setError(null);
     try {
       await onConfirm();
       onOpenChange(false);
     } catch (failure) {
-      setError(failureMessage(failure));
+      reportFailure(`Could not ${confirmLabel.toLowerCase()}`, failure);
       refocus(action.current);
     } finally {
       setBusy(false);
@@ -250,8 +236,6 @@ export function ConfirmDialog({
           </Button>
         </>
       }
-    >
-      {error ? <Banner tone="danger">{error}</Banner> : null}
-    </Modal>
+    />
   );
 }

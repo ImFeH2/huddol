@@ -103,6 +103,7 @@ describe("thread page", () => {
     expect(html).toContain('data-auto-grow="true"');
     expect(html).not.toContain("crumb");
     expect(html).not.toContain("thread-strip");
+    expect(html).not.toContain("thread-banner");
     expect(html).not.toContain("composer-hint");
   });
 

@@ -1,7 +1,7 @@
 import { useEffect, useId, useState } from "react";
 import { useOrganization } from "@/app/organization";
 import { Modal } from "@/components/ui/dialog";
-import { Banner, Button, Field, Input } from "@/components/ui/index";
+import { Button, Field, Input, toast } from "@/components/ui/index";
 import { MemberPicker } from "@/features/discussions/members";
 import { backend } from "@/lib/backend";
 
@@ -18,14 +18,12 @@ export function CreateDiscussionDialog({
   const [topic, setTopic] = useState("");
   const [chosen, setChosen] = useState<number[]>([]);
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
   const topicId = useId();
 
   useEffect(() => {
     if (open) {
       setTopic("");
       setChosen([]);
-      setError(null);
     }
   }, [open]);
 
@@ -35,13 +33,17 @@ export function CreateDiscussionDialog({
   const create = async () => {
     if (!ready || busy) return;
     setBusy(true);
-    setError(null);
     try {
       const created = await backend.createDiscussion(topic.trim(), chosen);
       onOpenChange(false);
       await onCreated(created.id);
     } catch (failure) {
-      setError(failure instanceof Error ? failure.message : String(failure));
+      toast({
+        tone: "danger",
+        title: "Could not create Discussion",
+        description:
+          failure instanceof Error ? failure.message : String(failure),
+      });
     } finally {
       setBusy(false);
     }
@@ -61,7 +63,6 @@ export function CreateDiscussionDialog({
         </>
       }
     >
-      {error ? <Banner tone="danger">{error}</Banner> : null}
       <Field label="Topic" htmlFor={topicId}>
         <Input
           id={topicId}

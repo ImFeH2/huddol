@@ -88,11 +88,6 @@
   padding: var(--space-5) var(--space-7) var(--space-6);
 }
 
-.thread-banner {
-  flex: none;
-  padding: var(--space-4) var(--space-7) 0;
-}
-
 .messages {
   display: flex;
   flex-direction: column;
@@ -287,7 +282,6 @@
 
 @media (max-width: 940px) {
   .thread-scroll,
-  .thread-banner,
   .composer {
     padding-left: var(--space-6);
     padding-right: var(--space-6);

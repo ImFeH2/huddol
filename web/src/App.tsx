@@ -1,5 +1,11 @@
 import { BookText, MessagesSquare, Plus, Settings, Users } from "lucide-react";
-import { useCallback, useEffect, useState } from "react";
+import {
+  type ReactNode,
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+} from "react";
 import { OrganizationProvider } from "@/app/organization";
 import {
   navIdOf,
@@ -24,10 +30,11 @@ import {
 import {
   Avatar,
   Badge,
-  Banner,
   IconButton,
   Spinner,
   StateDot,
+  Toaster,
+  toast,
 } from "@/components/ui/index";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { CreateDiscussionDialog } from "@/features/discussions/create";
@@ -73,15 +80,20 @@ function View({ route, tokenLimit }: { route: Route; tokenLimit: number }) {
   }
 }
 
-function Chrome({
-  loaded,
-  failure,
-  onDismiss,
-}: {
-  loaded: Loaded;
-  failure: string | null;
-  onDismiss: () => void;
-}) {
+const CONNECTION_TOAST = "connection";
+
+function reportBackendFailure(error: BackendError) {
+  toast({
+    id: error.transport ? CONNECTION_TOAST : undefined,
+    tone: "danger",
+    title: error.transport ? "Connection lost" : "Request failed",
+    description: error.message,
+    duration: backend.disconnected ? null : undefined,
+    closable: !backend.disconnected,
+  });
+}
+
+function Chrome({ loaded }: { loaded: Loaded }) {
   const { route } = useRouter();
   const navigate = useNavigate();
   const [creating, setCreating] = useState(false);
@@ -101,16 +113,6 @@ function Chrome({
 
   return (
     <Shell
-      notice={
-        failure ? (
-          <Banner
-            tone="danger"
-            onDismiss={backend.disconnected ? undefined : onDismiss}
-          >
-            {failure}
-          </Banner>
-        ) : null
-      }
       sidebar={
         <Sidebar
           footer={
@@ -207,6 +209,7 @@ function Chrome({
 export default function App() {
   const [loaded, setLoaded] = useState<Loaded | null>(null);
   const [failure, setFailure] = useState<string | null>(null);
+  const booted = useRef(false);
 
   const refresh = useCallback(async () => {
     const [organization, discussions] = await Promise.all([
@@ -219,10 +222,15 @@ export default function App() {
       tokenLimit: organization.token_limit ?? 0,
       discussions,
     });
+    booted.current = true;
   }, []);
 
   useEffect(
-    () => backend.onFailure((error: BackendError) => setFailure(error.message)),
+    () =>
+      backend.onFailure((error) => {
+        if (booted.current) reportBackendFailure(error);
+        else setFailure(error.message);
+      }),
     [],
   );
 
@@ -252,27 +260,25 @@ export default function App() {
     });
   }, [refresh]);
 
-  if (failure && !loaded)
-    return (
+  let body: ReactNode;
+  if (failure && !loaded) {
+    body = (
       <Page>
         <PageHeader title="Unable to start Huddol" />
         <PageBody>
-          <Banner tone="danger">{failure}</Banner>
+          <p>{failure}</p>
         </PageBody>
       </Page>
     );
-
-  if (!loaded) {
-    return (
+  } else if (!loaded) {
+    body = (
       <div className="boot">
         <Spinner label="Starting Huddol" />
         <p className="muted">Starting Huddol…</p>
       </div>
     );
-  }
-
-  return (
-    <TooltipProvider>
+  } else {
+    body = (
       <RouterProvider>
         <OrganizationProvider
           value={{
@@ -282,13 +288,16 @@ export default function App() {
             refresh,
           }}
         >
-          <Chrome
-            loaded={loaded}
-            failure={failure}
-            onDismiss={() => setFailure(null)}
-          />
+          <Chrome loaded={loaded} />
         </OrganizationProvider>
       </RouterProvider>
+    );
+  }
+
+  return (
+    <TooltipProvider>
+      {body}
+      <Toaster />
     </TooltipProvider>
   );
 }

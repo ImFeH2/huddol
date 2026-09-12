@@ -1,0 +1,96 @@
+.toast-viewport {
+  position: fixed;
+  right: var(--space-6);
+  bottom: var(--space-6);
+  z-index: var(--layer-toast);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  width: min(360px, calc(100vw - 48px));
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  outline: none;
+}
+
+.toast {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-4);
+  padding: var(--space-4) var(--space-4) var(--space-4) var(--space-5);
+  border: 1px solid rgb(var(--border-base));
+  border-radius: var(--radius-md);
+  background: rgb(var(--bg-raised));
+  color: rgb(var(--text-base));
+  font-size: var(--text-sm);
+  box-shadow: var(--shadow-popover);
+  transform-origin: bottom right;
+}
+
+.toast[data-state="open"] {
+  animation: rise-in var(--duration-base) var(--ease-out);
+}
+
+.toast[data-state="closed"] {
+  animation: fade-in var(--duration-base) var(--ease-standard) reverse;
+}
+
+.toast[data-swipe="move"] {
+  transform: translateX(var(--radix-toast-swipe-move-x));
+}
+
+.toast[data-swipe="cancel"] {
+  transform: translateX(0);
+  transition: transform var(--duration-base) var(--ease-out);
+}
+
+.toast[data-swipe="end"] {
+  animation: fade-in var(--duration-base) var(--ease-standard) reverse;
+}
+
+.toast-icon {
+  display: flex;
+  flex: none;
+  padding-top: 2px;
+  color: rgb(var(--text-muted));
+}
+
+.toast[data-tone="success"] .toast-icon {
+  color: rgb(var(--text-success));
+}
+
+.toast[data-tone="danger"] .toast-icon {
+  color: rgb(var(--text-danger));
+}
+
+.toast[data-tone="info"] .toast-icon {
+  color: rgb(var(--text-primary));
+}
+
+.toast-body {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: var(--space-1);
+  min-width: 0;
+  padding-top: 3px;
+}
+
+.toast-title {
+  margin: 0;
+  font-weight: var(--weight-medium);
+  line-height: var(--leading-body);
+}
+
+.toast-description {
+  margin: 0;
+  color: rgb(var(--text-muted));
+  font-size: var(--text-xs);
+  line-height: 16px;
+  overflow-wrap: anywhere;
+}
+
+.toast .button,
+.toast .icon-button {
+  flex: none;
+}

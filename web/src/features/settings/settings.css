@@ -40,22 +40,26 @@
   font-size: var(--text-sm);
 }
 
-.unusable-list {
+.settings-facts {
   display: flex;
   flex-direction: column;
-  gap: var(--space-2);
-  margin: var(--space-3) 0 0;
+  gap: var(--space-3);
+  margin: 0;
   padding: 0;
   list-style: none;
 }
 
-.unusable-list li {
+.settings-facts li {
   display: flex;
   align-items: center;
   gap: var(--space-3);
   min-width: 0;
 }
 
-.unusable-list .directory-path {
-  flex: 0 1 auto;
+.settings-fact {
+  flex: 1;
+  min-width: 0;
+  color: rgb(var(--text-muted));
+  font-size: var(--text-sm);
+  overflow-wrap: anywhere;
 }

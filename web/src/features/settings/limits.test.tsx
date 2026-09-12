@@ -24,7 +24,10 @@ describe("token limit settings", () => {
       '<fieldset class="settings-form" aria-label="Limits settings" disabled="">',
     );
     expect(html).toMatch(/<input[^>]*type="number"[^>]*value=""/);
+    expect(html).toMatch(/<input[^>]*inputMode="numeric"/);
     expect(html).not.toMatch(/value="0"/);
     expect(html).toContain('type="submit"');
+    expect(html).not.toContain("banner");
+    expect(html).not.toContain('role="status"');
   });
 });
