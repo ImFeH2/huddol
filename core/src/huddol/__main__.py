@@ -4,7 +4,10 @@ import json
 import logging
 import os
 import secrets
+import signal
+import stat
 import sys
+import threading
 from io import TextIOWrapper
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
@@ -14,6 +17,8 @@ from urllib.parse import quote
 DATA_DIRECTORY_ENV = "HUDDOL_DATA_DIR"
 PORT_ENV = "HUDDOL_PORT"
 TOKEN_ENV = "HUDDOL_TOKEN"
+DEVELOPMENT_PORT = 2461
+ALREADY_RUNNING = 2
 
 
 def data_directory() -> Path:
@@ -21,6 +26,74 @@ def data_directory() -> Path:
     if override:
         return Path(override).expanduser().resolve()
     return Path.home() / ".huddol"
+
+
+def default_port() -> int:
+    return 0 if getattr(sys, "frozen", False) else DEVELOPMENT_PORT
+
+
+def write_private(path: Path, payload: str) -> None:
+    descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+        handle.write(payload)
+    os.chmod(path, 0o600)
+
+
+def load_token(directory: Path) -> str:
+    override = os.environ.get(TOKEN_ENV)
+    if override:
+        return override
+    path = directory / "token"
+    if path.is_file():
+        stored = path.read_text(encoding="utf-8").strip()
+        if stored:
+            return stored
+    token = secrets.token_urlsafe(24)
+    write_private(path, token)
+    return token
+
+
+def running_instance(run_file: Path) -> int | None:
+    import psutil
+
+    try:
+        payload = json.loads(run_file.read_text(encoding="utf-8"))
+        pid, port = int(payload["pid"]), int(payload["port"])
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+    return port if psutil.pid_exists(pid) else None
+
+
+def stdin_is_piped() -> bool:
+    try:
+        mode = os.fstat(0).st_mode
+    except OSError:
+        return False
+    return stat.S_ISFIFO(mode) or stat.S_ISSOCK(mode)
+
+
+def wait_for_signal_or_stdin() -> str:
+    from huddol.adapters.jsonl.protocol import wait_for_shutdown
+
+    done = threading.Event()
+    reason: list[str] = []
+
+    def finish(why: str) -> None:
+        if not reason:
+            reason.append(why)
+        done.set()
+
+    for name in ("sigint", "sigterm"):
+        number = getattr(signal, name.upper(), None)
+        if number is not None:
+            signal.signal(number, lambda *_, why=name: finish(why))
+    if stdin_is_piped():
+        threading.Thread(
+            target=lambda: finish(wait_for_shutdown()), daemon=True
+        ).start()
+    while not done.wait(0.5):
+        pass
+    return reason[0]
 
 
 def configure_logging(directory: Path) -> list[logging.Handler]:
@@ -42,11 +115,7 @@ def configure_logging(directory: Path) -> list[logging.Handler]:
 
 
 def write_run_file(path: Path, port: int, token: str) -> None:
-    payload = json.dumps({"port": port, "token": token, "pid": os.getpid()})
-    descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
-        handle.write(payload)
-    os.chmod(path, 0o600)
+    write_private(path, json.dumps({"port": port, "token": token, "pid": os.getpid()}))
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -68,7 +137,7 @@ def main(argv: list[str] | None = None) -> int:
     from huddol.adapters.execution.manager import ExecutionManager
     from huddol.adapters.files.tree import MarkdownTree
     from huddol.adapters.jsonl.api import HUMAN_ID, Api
-    from huddol.adapters.jsonl.protocol import Dispatcher, wait_for_shutdown
+    from huddol.adapters.jsonl.protocol import Dispatcher
     from huddol.adapters.model.config import ModelConfig
     from huddol.adapters.sqlite.agent import SqliteAgentStore
     from huddol.adapters.sqlite.store import SqliteStore
@@ -77,6 +146,13 @@ def main(argv: list[str] | None = None) -> int:
     from huddol.tools import Dependencies
 
     directory = data_directory()
+    run_file = directory / "run.json"
+    occupied = running_instance(run_file)
+    if occupied is not None:
+        sys.stderr.write(
+            f"Huddol is already running on port {occupied} for {directory}\n"
+        )
+        return ALREADY_RUNNING
     directory.mkdir(parents=True, exist_ok=True)
     handlers = configure_logging(directory)
     log = logging.getLogger("huddol")
@@ -137,14 +213,13 @@ def main(argv: list[str] | None = None) -> int:
     )
     Api(scheduler, dispatcher)
 
-    token = os.environ.get(TOKEN_ENV) or secrets.token_urlsafe(24)
+    token = load_token(directory)
     server = WebServer(
         dispatcher,
         token,
         web_directory(),
-        port=int(os.environ.get(PORT_ENV) or 0),
+        port=int(os.environ.get(PORT_ENV) or default_port()),
     )
-    run_file = directory / "run.json"
 
     scheduler.start()
     server.start()
@@ -169,7 +244,7 @@ def main(argv: list[str] | None = None) -> int:
     sys.stdout.flush()
 
     try:
-        reason = wait_for_shutdown()
+        reason = wait_for_signal_or_stdin()
         log.info("Shutting down (%s)", reason)
     finally:
         server.stop()

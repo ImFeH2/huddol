@@ -17,9 +17,11 @@ const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
 pub struct Launcher {
     pub program: PathBuf,
     pub args: Vec<String>,
+    pub env: Vec<(String, String)>,
 }
 
 pub fn launcher(development: bool, project: &Path, resources: &Path) -> Launcher {
+    let env = vec![("HUDDOL_PORT".to_string(), "0".to_string())];
     if development {
         Launcher {
             program: "uv".into(),
@@ -31,6 +33,7 @@ pub fn launcher(development: bool, project: &Path, resources: &Path) -> Launcher
                 "-m".into(),
                 "huddol".into(),
             ],
+            env,
         }
     } else {
         Launcher {
@@ -40,6 +43,7 @@ pub fn launcher(development: bool, project: &Path, resources: &Path) -> Launcher
                 "core/huddol"
             }),
             args: Vec::new(),
+            env,
         }
     }
 }
@@ -98,6 +102,7 @@ fn spawn_kernel(launcher: Launcher) -> Result<(Child, Ready), String> {
     let mut command = Command::new(&launcher.program);
     command
         .args(&launcher.args)
+        .envs(launcher.env.iter().map(|(key, value)| (key, value)))
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::inherit());
@@ -204,6 +209,14 @@ mod tests {
         };
         assert_eq!(launcher.program, Path::new("resources").join(expected));
         assert!(launcher.args.is_empty());
+    }
+
+    #[test]
+    fn every_launcher_lets_the_system_pick_the_port() {
+        for development in [true, false] {
+            let launcher = launcher(development, Path::new("repo/core"), Path::new("resources"));
+            assert_eq!(launcher.env, [("HUDDOL_PORT".to_string(), "0".to_string())]);
+        }
     }
 
     #[test]

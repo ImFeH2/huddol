@@ -27,11 +27,14 @@ class Kernel:
         cwd: Path | None = None,
         env: dict[str, str] | None = None,
         web_directory: Path | None = None,
+        stdin: int = subprocess.PIPE,
     ) -> None:
         self.data_directory = data_directory
         self._cwd = cwd
+        self._stdin = stdin
         self._env = {
             "HUDDOL_DATA_DIR": str(data_directory),
+            "HUDDOL_PORT": "0",
             "HUDDOL_WEB_DIR": str(web_directory or data_directory / "no-web"),
             "PATH": "/usr/bin:/bin:/usr/local/bin",
             "PYTHONPATH": SOURCE,
@@ -46,7 +49,7 @@ class Kernel:
     def __enter__(self) -> Self:
         self._process = subprocess.Popen(
             [sys.executable, "-m", "huddol"],
-            stdin=subprocess.PIPE,
+            stdin=self._stdin,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             cwd=self._cwd or Path.cwd(),
@@ -117,6 +120,22 @@ class Kernel:
         self._finish()
         assert self.returncode is not None
         return self.returncode
+
+    def signal(self, signum: int) -> int:
+        os.kill(self.pid, signum)
+        self._finish()
+        assert self.returncode is not None
+        return self.returncode
+
+    def run_second_instance(self) -> subprocess.CompletedProcess[bytes]:
+        return subprocess.run(
+            [sys.executable, "-m", "huddol"],
+            cwd=self._cwd or Path.cwd(),
+            env=self._env,
+            capture_output=True,
+            timeout=TIMEOUT,
+            check=False,
+        )
 
     def _finish(self) -> None:
         stdout, stderr = self._process.communicate(timeout=TIMEOUT)
@@ -531,6 +550,75 @@ def test_closing_stdin_shuts_the_kernel_down(tmp_path: Path) -> None:
     assert not (data / "run.json").exists()
     assert (data / "logs" / "huddol.log").is_file()
     assert "Shutting down (eof)" in kernel.stderr
+
+
+@pytest.mark.skipif(os.name != "posix", reason="SIGTERM is a POSIX signal")
+def test_sigterm_shuts_the_kernel_down_when_stdin_is_not_a_pipe(
+    tmp_path: Path,
+) -> None:
+    import signal
+
+    data = tmp_path / "data"
+    with Kernel(data, stdin=subprocess.DEVNULL) as kernel:
+        with kernel.connect() as connection:
+            assert Client(connection).call({"id": 1, "method": "ping"})["result"] == {
+                "pong": None
+            }
+        assert (data / "run.json").is_file()
+        assert kernel.signal(signal.SIGTERM) == 0, kernel.stderr
+    assert not (data / "run.json").exists()
+    assert "Shutting down (sigterm)" in kernel.stderr
+    assert kernel.stdout == b""
+
+
+def test_the_token_is_stable_across_starts_of_the_same_data_directory(
+    tmp_path: Path,
+) -> None:
+    data = tmp_path / "data"
+    token_file = data / "token"
+    with Kernel(data) as first:
+        assert token_file.read_text(encoding="utf-8") == first.token
+        if os.name != "nt":
+            assert oct(token_file.stat().st_mode & 0o777) == "0o600"
+        assert first.shutdown() == 0, first.stderr
+    assert token_file.is_file()
+    with Kernel(data) as second:
+        assert second.token == first.token
+        assert second.shutdown() == 0, second.stderr
+    assert token_file.read_text(encoding="utf-8") == first.token
+
+
+def test_a_second_instance_on_the_same_data_directory_refuses_to_start(
+    tmp_path: Path,
+) -> None:
+    data = tmp_path / "data"
+    run_file = data / "run.json"
+    with Kernel(data) as kernel:
+        before = run_file.read_bytes()
+        second = kernel.run_second_instance()
+        assert second.returncode == 2
+        assert second.stdout == b""
+        assert second.stderr.decode("utf-8").splitlines() == [
+            f"Huddol is already running on port {kernel.port} for {data}"
+        ]
+        assert run_file.read_bytes() == before
+        with kernel.connect() as connection:
+            assert Client(connection).call({"id": 1, "method": "ping"})["result"] == {
+                "pong": None
+            }
+        assert kernel.shutdown() == 0, kernel.stderr
+    assert not run_file.exists()
+
+
+def test_a_stale_run_file_does_not_block_startup(tmp_path: Path) -> None:
+    data = tmp_path / "data"
+    data.mkdir()
+    run_file = data / "run.json"
+    run_file.write_text(json.dumps({"port": 1, "token": "old", "pid": 2**22 + 7}))
+    with Kernel(data) as kernel:
+        assert json.loads(run_file.read_text())["pid"] == kernel.pid
+        assert kernel.shutdown() == 0, kernel.stderr
+    assert not run_file.exists()
 
 
 def test_wrong_or_missing_tokens_get_401_without_an_upgrade(tmp_path: Path) -> None:
