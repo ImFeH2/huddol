@@ -138,7 +138,7 @@ def main(argv: list[str] | None = None) -> int:
     from huddol.adapters.files.tree import MarkdownTree
     from huddol.adapters.jsonl.api import HUMAN_ID, Api
     from huddol.adapters.jsonl.protocol import Dispatcher
-    from huddol.adapters.model.config import ModelConfig
+    from huddol.adapters.model.live import LiveModelRunner
     from huddol.adapters.sqlite.agent import SqliteAgentStore
     from huddol.adapters.sqlite.store import SqliteStore
     from huddol.adapters.websocket.server import WebServer, web_directory
@@ -185,30 +185,9 @@ def main(argv: list[str] | None = None) -> int:
 
     dispatcher = Dispatcher()
 
-    from huddol.adapters.model.observability import ObservabilityConfig
-
-    config = ModelConfig.restore(agent_store.get_settings("model"))
-    runner: object
-    if config is None:
-        from huddol.adapters.model.unavailable import UnavailableRunner
-
-        runner = UnavailableRunner(
-            "Configure a model in Settings before running Agents"
-        )
-    else:
-        from huddol.adapters.model.runner import PydanticModelRunner
-
-        tracing = ObservabilityConfig.restore(agent_store.get_settings("observability"))
-        observability = None
-        if tracing is not None:
-            from huddol.adapters.model.langfuse import LangfuseObservability
-
-            observability = LangfuseObservability(tracing)
-        runner = PydanticModelRunner(config, observability)
-
     scheduler = Scheduler(
         deps,
-        runner,  # type: ignore[arg-type]
+        LiveModelRunner(agent_store),
         on_event=lambda name, payload: dispatcher.emit(name, payload),
     )
     Api(scheduler, dispatcher)

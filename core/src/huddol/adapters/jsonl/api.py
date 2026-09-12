@@ -1,9 +1,10 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from typing import Any
 
 from huddol.adapters.jsonl.protocol import Dispatcher
-from huddol.adapters.model.config import ModelConfig, compaction_threshold
+from huddol.adapters.model.config import API_TYPES, ModelConfig, compaction_threshold
 from huddol.core.errors import DomainError
 from huddol.core.turn import idle_streak
 from huddol.runtime.scheduler import Scheduler
@@ -12,11 +13,34 @@ from huddol.tools.authorize import Actor
 
 HUMAN_ID = 1
 
+ModelProbe = Callable[[dict[str, Any], dict[str, Any] | None], dict[str, Any]]
+
+
+def _list_models(values: dict[str, Any], stored: dict[str, Any] | None) -> Any:
+    from huddol.adapters.model.probe import list_models
+
+    return list_models(values, stored)
+
+
+def _test_model(values: dict[str, Any], stored: dict[str, Any] | None) -> Any:
+    from huddol.adapters.model.probe import try_model
+
+    return try_model(values, stored)
+
 
 class Api:
-    def __init__(self, scheduler: Scheduler, dispatcher: Dispatcher) -> None:
+    def __init__(
+        self,
+        scheduler: Scheduler,
+        dispatcher: Dispatcher,
+        *,
+        list_models: ModelProbe = _list_models,
+        test_model: ModelProbe = _test_model,
+    ) -> None:
         self._scheduler = scheduler
         self._dispatcher = dispatcher
+        self._list_models = list_models
+        self._test_model = test_model
         self._register()
 
     def _human(self) -> AgentTools:
@@ -242,6 +266,15 @@ class Api:
         def settings_update(params: dict[str, Any]) -> Any:
             section = str(params.get("section", "model"))
             values = dict(params.get("values", {}))
+            if (
+                section == "model"
+                and "api_type" in values
+                and values["api_type"] not in API_TYPES
+            ):
+                raise DomainError(
+                    "invalid_api_type",
+                    f"api_type must be one of {', '.join(API_TYPES)}",
+                )
             if section == "model" and "compaction_threshold" in values:
                 threshold = values["compaction_threshold"]
                 if type(threshold) is not int or threshold <= 0:
@@ -259,6 +292,12 @@ class Api:
             settings.set_settings(section, merged)
             self._dispatcher.emit("settings.updated", {"section": section})
             return settings_get({"section": section})
+
+        def settings_list_models(params: dict[str, Any]) -> Any:
+            return self._list_models(dict(params), settings.get_settings("model"))
+
+        def settings_test_model(params: dict[str, Any]) -> Any:
+            return self._test_model(dict(params), settings.get_settings("model"))
 
         register("organization.get", organization_get)
         register("organization.create_agent", create_agent)
@@ -287,3 +326,5 @@ class Api:
         register("agent.detail", agent_detail)
         register("settings.get", settings_get)
         register("settings.update", settings_update)
+        register("settings.list_models", settings_list_models)
+        register("settings.test_model", settings_test_model)

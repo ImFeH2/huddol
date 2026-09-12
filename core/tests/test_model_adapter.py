@@ -47,6 +47,27 @@ def test_redacted_config_never_exposes_the_key() -> None:
     assert redacted["api_key_set"] is True
 
 
+def test_build_model_returns_a_google_model_for_google() -> None:
+    from pydantic_ai.models.anthropic import AnthropicModel
+    from pydantic_ai.models.google import GoogleModel
+    from pydantic_ai.models.openai import OpenAIChatModel, OpenAIResponsesModel
+
+    from huddol.adapters.model.runner import build_model
+
+    def built(api_type: str):
+        return build_model(
+            ModelConfig(api_type, "https://example.invalid/", "unused", "name")  # type: ignore[arg-type]
+        )
+
+    google = built("google")
+    assert isinstance(google, GoogleModel)
+    assert google.model_name == "name"
+    assert google.base_url == "https://example.invalid/"
+    assert isinstance(built("anthropic"), AnthropicModel)
+    assert isinstance(built("openai"), OpenAIChatModel)
+    assert isinstance(built("openai-responses"), OpenAIResponsesModel)
+
+
 @pytest.mark.parametrize(
     "phrase",
     [

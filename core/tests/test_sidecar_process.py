@@ -475,6 +475,98 @@ def test_compaction_updates_preserve_model_credentials(tmp_path: Path) -> None:
         store.close()
 
 
+def test_model_api_type_round_trips_and_is_validated_over_the_pipe(
+    tmp_path: Path,
+) -> None:
+    data = tmp_path / "data"
+    frames, code, stderr = drive(
+        data,
+        [
+            {"id": 1, "method": "settings.get", "params": {"section": "model"}},
+            {
+                "id": 2,
+                "method": "settings.update",
+                "params": {
+                    "section": "model",
+                    "values": {
+                        "api_type": "google",
+                        "base_url": "https://generativelanguage.googleapis.invalid",
+                        "api_key": "SECRET-GOOGLE-KEY",
+                        "model": "gemini-test",
+                    },
+                },
+            },
+            {
+                "id": 3,
+                "method": "settings.update",
+                "params": {"section": "model", "values": {"api_type": "made-up"}},
+            },
+            {"id": 4, "method": "settings.get", "params": {"section": "model"}},
+        ],
+    )
+    assert code == 0, stderr
+    assert response(frames, 1)["result"]["api_key_set"] is False
+    assert response(frames, 2)["result"]["api_type"] == "google"
+    assert response(frames, 3)["error"]["code"] == "invalid_api_type"
+    assert response(frames, 4)["result"] == {
+        "api_type": "google",
+        "base_url": "https://generativelanguage.googleapis.invalid",
+        "model": "gemini-test",
+        "compaction_threshold": 400_000,
+        "api_key_set": True,
+    }
+    assert len(events(frames, "settings.updated")) == 1
+    assert "SECRET-GOOGLE-KEY" not in json.dumps(frames) + stderr
+
+    frames, code, stderr = drive(
+        data, [{"id": 1, "method": "settings.get", "params": {"section": "model"}}]
+    )
+    assert code == 0, stderr
+    assert response(frames, 1)["result"]["api_type"] == "google"
+    assert "SECRET-GOOGLE-KEY" not in json.dumps(frames) + stderr
+
+
+def test_turns_without_a_model_fail_with_guidance_and_the_kernel_keeps_running(
+    tmp_path: Path,
+) -> None:
+    with Kernel(tmp_path / "data") as kernel:
+        with kernel.connect() as connection:
+            client = Client(connection)
+            client.call(
+                {
+                    "id": 1,
+                    "method": "organization.create_agent",
+                    "params": {"name": "Main"},
+                }
+            )
+            client.call(
+                {
+                    "id": 2,
+                    "method": "discussion.create",
+                    "params": {"topic": "no model yet", "member_ids": [2]},
+                }
+            )
+            client.send(
+                {
+                    "id": 3,
+                    "method": "discussion.send",
+                    "params": {"discussion_id": 1, "body": "@Main go"},
+                }
+            )
+            finished = client.wait_for(
+                lambda frame: frame.get("type") == "turn.finished"
+            )
+            assert finished["status"] == "failed"
+            detail = client.call(
+                {"id": 4, "method": "agent.detail", "params": {"agent_id": 2}}
+            )
+            assert detail["result"]["runs"][0]["error"] == (
+                "Configure a model in Settings before running Agents"
+            )
+            assert client.call({"id": 5, "method": "ping"})["result"] == {"pong": None}
+        assert kernel.shutdown() == 0, kernel.stderr
+
+
 def test_the_process_announces_itself_once_on_stdout(tmp_path: Path) -> None:
     with Kernel(tmp_path / "data") as kernel:
         assert set(kernel.ready) == {"type", "port", "token", "url"}

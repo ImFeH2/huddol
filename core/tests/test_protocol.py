@@ -29,6 +29,23 @@ class Capture:
         return list(self._frames)
 
 
+class Probe:
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, dict[str, Any], dict[str, Any] | None]] = []
+
+    def list_models(
+        self, values: dict[str, Any], stored: dict[str, Any] | None
+    ) -> dict[str, Any]:
+        self.calls.append(("list", values, stored))
+        return {"models": ["b", "a"]}
+
+    def test_model(
+        self, values: dict[str, Any], stored: dict[str, Any] | None
+    ) -> dict[str, Any]:
+        self.calls.append(("test", values, stored))
+        return {"ok": True, "latency_ms": 12, "reply": "OK"}
+
+
 @pytest.fixture
 def server(tmp_path: Path):
     store = SqliteStore(tmp_path / "huddol.sqlite3")
@@ -53,7 +70,14 @@ def server(tmp_path: Path):
     dispatcher = Dispatcher()
     dispatcher.attach(output)
     scheduler = Scheduler(deps, UnavailableRunner("no model"), on_event=dispatcher.emit)
-    Api(scheduler, dispatcher)
+    probe = Probe()
+    Api(
+        scheduler,
+        dispatcher,
+        list_models=probe.list_models,
+        test_model=probe.test_model,
+    )
+    deps.probe = probe  # type: ignore[attr-defined]
     yield dispatcher, output, deps
     store.close()
 
@@ -259,6 +283,79 @@ def test_settings_never_return_the_api_key(server) -> None:
     assert "super-secret-value" not in json.dumps(result)
     assert result["api_key_set"] is True
     assert result["model"] == "some-model"
+
+
+def test_model_settings_reject_unknown_api_types_and_keep_the_stored_ones(
+    server,
+) -> None:
+    dispatcher, output, deps = server
+    call(
+        dispatcher,
+        output,
+        "settings.update",
+        section="model",
+        values={"api_type": "google", "base_url": "https://g.invalid", "model": "g"},
+    )
+    rejected = call(
+        dispatcher,
+        output,
+        "settings.update",
+        section="model",
+        values={"api_type": "azure", "model": "other"},
+    )
+    assert rejected["error"]["code"] == "invalid_api_type"
+    result = call(dispatcher, output, "settings.get", section="model")["result"]
+    assert result["api_type"] == "google"
+    assert result["model"] == "g"
+    assert deps.settings.get_settings("model")["api_type"] == "google"
+    assert [
+        frame for frame in output.frames() if frame.get("type") == "settings.updated"
+    ] == [{"type": "settings.updated", "section": "model"}]
+
+
+def test_model_listing_and_testing_reach_the_injected_probe(server) -> None:
+    dispatcher, output, deps = server
+    stored = {
+        "api_type": "openai",
+        "base_url": "https://stored.invalid/v1",
+        "api_key": "stored-key",
+        "model": "m",
+    }
+    call(dispatcher, output, "settings.update", section="model", values=stored)
+    listed = call(
+        dispatcher,
+        output,
+        "settings.list_models",
+        api_type="anthropic",
+        base_url="https://a.invalid",
+    )
+    assert listed["result"] == {"models": ["b", "a"]}
+    tested = call(
+        dispatcher,
+        output,
+        "settings.test_model",
+        api_type="anthropic",
+        base_url="https://a.invalid",
+        api_key="typed-key",
+        model="candidate",
+    )
+    assert tested["result"] == {"ok": True, "latency_ms": 12, "reply": "OK"}
+    assert deps.probe.calls == [
+        ("list", {"api_type": "anthropic", "base_url": "https://a.invalid"}, stored),
+        (
+            "test",
+            {
+                "api_type": "anthropic",
+                "base_url": "https://a.invalid",
+                "api_key": "typed-key",
+                "model": "candidate",
+            },
+            stored,
+        ),
+    ]
+    updated = [f for f in output.frames() if f.get("type") == "settings.updated"]
+    assert len(updated) == 1
+    assert deps.settings.get_settings("model") == stored
 
 
 def test_observability_keys_are_never_returned(server) -> None:

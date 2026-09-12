@@ -17,12 +17,14 @@ from pydantic_ai.common_tools.duckduckgo import duckduckgo_search_tool
 from pydantic_ai.messages import ModelMessage, ModelRequest, UserPromptPart
 from pydantic_ai.models import Model
 from pydantic_ai.models.anthropic import AnthropicModel, AnthropicModelName
+from pydantic_ai.models.google import GoogleModel, GoogleModelName
 from pydantic_ai.models.openai import (
     OpenAIChatModel,
     OpenAIModelName,
     OpenAIResponsesModel,
 )
 from pydantic_ai.providers.anthropic import AnthropicProvider
+from pydantic_ai.providers.google import GoogleProvider
 from pydantic_ai.providers.openai import OpenAIProvider
 
 from huddol.adapters.model.compaction import compact
@@ -41,6 +43,11 @@ def build_model(config: ModelConfig) -> Model:
             provider=AnthropicProvider(
                 base_url=config.base_url, api_key=config.api_key
             ),
+        )
+    if config.api_type == "google":
+        return GoogleModel(
+            cast(GoogleModelName, config.model),
+            provider=GoogleProvider(api_key=config.api_key, base_url=config.base_url),
         )
     provider = OpenAIProvider(base_url=config.base_url, api_key=config.api_key)
     if config.api_type == "openai-responses":
