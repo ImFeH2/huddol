@@ -69,8 +69,19 @@ def main() -> int:
             "edit",
         }:
             raise DomainError("invalid_operation", "Unknown execution operation")
+        operation = request["operation"]
+        params = request.get("params", {})
+        if not isinstance(params, dict):
+            raise DomainError(
+                "invalid_params", "Execution parameters must be an object"
+            )
+        directories = request["directories"]
+        if operation == "run":
+            override = params.pop("write_directories", None)
+            if override is not None:
+                directories = override
         environment = LocalExecution(
-            [host_path(item) for item in request["directories"]],
+            [host_path(item) for item in directories],
             tolerant=bool(request.get("tolerant", False)),
         )
 
@@ -82,7 +93,6 @@ def main() -> int:
             os._exit(1)
 
         threading.Thread(target=disconnected, daemon=True).start()
-        operation = request["operation"]
         if operation == "inspect":
             probe = environment.run(["/bin/true"], cwd="/", timeout=10)
             if probe.exit_code:
@@ -94,11 +104,6 @@ def main() -> int:
                 "write_directories": list(environment.write_directories),
                 "skipped": list(environment.skipped),
             }
-        params = request.get("params", {})
-        if not isinstance(params, dict):
-            raise DomainError(
-                "invalid_params", "Execution parameters must be an object"
-            )
         key = "cwd" if operation == "run" else "path"
         if isinstance(params.get(key), str):
             params[key] = host_path(params[key])

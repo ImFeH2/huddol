@@ -41,7 +41,7 @@ class LocalExecution:
         tolerant: bool = False,
     ) -> None:
         self._enforce = enforce
-        self._windows: WindowsWriteAccess | None = None
+        self._windows: dict[tuple[Path, ...], WindowsWriteAccess] = {}
         self._lock = threading.RLock()
         self._processes: set[subprocess.Popen[bytes]] = set()
         self._closed = False
@@ -78,9 +78,9 @@ class LocalExecution:
             for process in self._processes:
                 if process.poll() is None:
                     self._terminate(process)
-            if self._windows is not None:
-                self._windows.close()
-                self._windows = None
+            for access in self._windows.values():
+                access.close()
+            self._windows.clear()
 
     def describe_environment(self) -> str:
         listing = "\n".join(f"- {item}" for item in self.write_directories) or "- none"
@@ -89,10 +89,12 @@ class LocalExecution:
             f"Writable directories:\n{listing}"
         )
 
-    def _wrap(self, argv: Sequence[str], cwd: Path) -> list[str]:
+    def _wrap(
+        self, argv: Sequence[str], cwd: Path, roots: tuple[Path, ...]
+    ) -> list[str]:
         if not self._enforce:
             return list(argv)
-        existing = tuple(root for root in self._roots if root.is_dir())
+        existing = tuple(root for root in roots if root.is_dir())
         if sys.platform.startswith("linux"):
             return linux_command(argv, cwd, existing)
         if sys.platform == "darwin":
@@ -100,11 +102,9 @@ class LocalExecution:
         if os.name == "nt":
             from huddol.adapters.sandbox.windows import WindowsWriteAccess
 
-            if self._windows is None:
-                self._windows = WindowsWriteAccess(existing)
-            else:
-                self._windows.configure(existing)
-            return windows_command(self._windows.sid, argv, entrypoint())
+            if existing not in self._windows:
+                self._windows[existing] = WindowsWriteAccess(existing)
+            return windows_command(self._windows[existing].sid, argv, entrypoint())
         raise DomainError(
             "sandbox_unavailable",
             "Filesystem write protection is unavailable on this platform",
@@ -124,6 +124,7 @@ class LocalExecution:
         cwd: str | None,
         timeout: int | None,
         data: bytes | None = None,
+        write_directories: Sequence[str] | None = None,
     ) -> tuple[int, bytes, bytes]:
         if not argv or not all(
             isinstance(item, str) and "\0" not in item for item in argv
@@ -141,7 +142,12 @@ class LocalExecution:
                     raise DomainError(
                         "execution_closed", "Execution environment is closed"
                     )
-                command = self._wrap(argv, directory)
+                roots = (
+                    self._roots
+                    if write_directories is None
+                    else normalize_directories(write_directories)
+                )
+                command = self._wrap(argv, directory, roots)
                 process = subprocess.Popen(
                     command,
                     cwd=directory,
@@ -169,9 +175,16 @@ class LocalExecution:
                 self._processes.discard(process)
 
     def run(
-        self, argv: Sequence[str], *, cwd: str | None = None, timeout: int | None = None
+        self,
+        argv: Sequence[str],
+        *,
+        cwd: str | None = None,
+        timeout: int | None = None,
+        write_directories: Sequence[str] | None = None,
     ) -> RunResult:
-        code, output, errors = self._execute(argv, cwd, timeout)
+        code, output, errors = self._execute(
+            argv, cwd, timeout, write_directories=write_directories
+        )
         stdout, stderr = (
             output.decode("utf-8", "replace"),
             errors.decode("utf-8", "replace"),

@@ -9,7 +9,7 @@ from typing import Any
 import pytest
 
 from huddol.adapters.execution.manager import ExecutionManager
-from huddol.adapters.files.tree import MarkdownTree
+from huddol.adapters.files.tree import DirectoryTree
 from huddol.adapters.jsonl.api import HUMAN_ID, Api
 from huddol.adapters.jsonl.protocol import Dispatcher, parse, wait_for_shutdown
 from huddol.adapters.model.runner import PydanticModelRunner
@@ -69,9 +69,9 @@ def server(tmp_path: Path):
             settings={"directories": {"native": [str(tmp_path)]}},
             enforce=False,
         ),
-        library_tree=MarkdownTree(tmp_path / "library"),
-        memory_tree_for=lambda member_id: MarkdownTree(
-            tmp_path / "agents" / str(member_id) / "memory"
+        library_tree=DirectoryTree(tmp_path / "library"),
+        memory_tree_for=lambda member_id: DirectoryTree(
+            tmp_path / "agents" / str(member_id) / "memory", markdown_only=True
         ),
     )
     output = Capture()
@@ -668,3 +668,89 @@ def test_accepted_write_directories_are_stored_canonically(
     )
     result = call(dispatcher, output, "settings.get", section="execution")["result"]
     assert result["write_directories"] == [str(target.resolve())]
+
+
+def test_library_directory_operations_and_memory_read_protocol(server) -> None:
+    dispatcher, output, deps = server
+    agent_id = call(dispatcher, output, "organization.create_agent", name="Main")[
+        "result"
+    ]["id"]
+    assert call(dispatcher, output, "library.mkdir", path="folder")["result"] == {
+        "path": "folder",
+        "hash": None,
+    }
+    call(
+        dispatcher, output, "library.write", path="folder/note.txt", content="old old\n"
+    )
+    assert (
+        call(
+            dispatcher,
+            output,
+            "library.edit",
+            path="folder/note.txt",
+            old_text="old",
+            new_text="new",
+        )["error"]["code"]
+        == "ambiguous_match"
+    )
+    edited = call(
+        dispatcher,
+        output,
+        "library.edit",
+        path="folder/note.txt",
+        old_text="old",
+        new_text="new",
+        replace_all=True,
+    )["result"]
+    assert "+new new" in edited["diff"]
+    call(dispatcher, output, "library.move", path="folder", destination="renamed")
+    entries = call(dispatcher, output, "library.list")["result"]
+    assert [(entry["path"], entry["kind"]) for entry in entries] == [
+        ("renamed", "directory"),
+        ("renamed/note.txt", "file"),
+    ]
+    assert entries[1]["hash"] == edited["hash"]
+    assert call(dispatcher, output, "library.delete", path="renamed")["result"] == {
+        "path": "renamed",
+        "deleted": True,
+    }
+    assert call(dispatcher, output, "library.list")["result"] == []
+    deps.memory_tree_for(agent_id).write("topics/note.md", "private")
+    memory = call(dispatcher, output, "memory.list", agent_id=agent_id)["result"]
+    assert [(entry["path"], entry["kind"]) for entry in memory] == [
+        ("MEMORY.md", "file"),
+        ("topics", "directory"),
+        ("topics/note.md", "file"),
+    ]
+    assert (
+        call(dispatcher, output, "memory.list", agent_id=agent_id, path="topics")[
+            "result"
+        ]
+        == memory[2:]
+    )
+    assert (
+        call(
+            dispatcher, output, "memory.read", agent_id=agent_id, path="topics/note.md"
+        )["result"]["content"]
+        == "private"
+    )
+    assert (
+        call(dispatcher, output, "agent.detail", agent_id=agent_id)["result"]["memory"]
+        == memory
+    )
+    for method in (
+        "library.run",
+        "memory.write",
+        "memory.edit",
+        "memory.mkdir",
+        "memory.move",
+        "memory.delete",
+    ):
+        assert call(dispatcher, output, method)["error"]["code"] == "unknown_method"
+    updates = [frame for frame in output.frames() if frame["type"] == "library.updated"]
+    assert len(updates) == 6
+    assert updates[-3:] == [
+        {"type": "library.updated", "path": "folder", "deleted": True},
+        {"type": "library.updated", "path": "renamed", "hash": None},
+        {"type": "library.updated", "path": "renamed", "deleted": True},
+    ]

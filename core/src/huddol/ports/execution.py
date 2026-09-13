@@ -30,7 +30,12 @@ class ExecutionEnvironment(Protocol):
     def describe_environment(self) -> str: ...
 
     def run(
-        self, argv: Sequence[str], *, cwd: str, timeout: int | None = None
+        self,
+        argv: Sequence[str],
+        *,
+        cwd: str,
+        timeout: int | None = None,
+        write_directories: Sequence[str] | None = None,
     ) -> RunResult: ...
 
     def edit(

@@ -86,6 +86,17 @@ def test_worker_reuses_linux_run_edit_and_sandbox_without_business_services(
         )
         assert denied.exit_code != 0
         assert outside.read_text() == "private"
+        library = tmp_path / "library"
+        library.mkdir()
+        overridden = connection.run(
+            ["sh", "-c", 'echo created > new.txt; echo denied > "$1"', "sh", str(path)],
+            cwd=str(library),
+            write_directories=[str(library)],
+        )
+        assert overridden.exit_code != 0
+        assert (library / "new.txt").read_text().strip() == "created"
+        assert path.read_text(encoding="utf-8") == "after😀"
+        assert connection.write_directories == (str(allowed),)
         candidate = WslConnection("test", [])
         monkeypatch.setattr(
             candidate, "_command", lambda: [sys.executable, "-I", str(staged)]
@@ -254,17 +265,22 @@ def test_wsl_description_uses_cached_state_without_worker_requests(
         ("edit", "/mnt/c/allowed"),
     ],
 )
+@pytest.mark.parametrize("override", [False, True])
 def test_worker_translates_host_paths_without_a_root(
-    operation, path, monkeypatch
+    operation, path, monkeypatch, override
 ) -> None:
     params = {}
     if operation == "run":
         params = {"argv": ["pwd"], "cwd": path}
     elif operation == "edit":
         params = {"path": path, "old_text": "before", "new_text": "after"}
+    if override and operation == "run":
+        params["write_directories"] = [r"C:\allowed"]
     request = {
         "operation": operation,
-        "directories": [r"C:\allowed"],
+        "directories": ["invalid-configured-root"]
+        if override and operation == "run"
+        else [r"C:\allowed"],
         "params": params,
     }
     output = io.BytesIO()
@@ -606,3 +622,116 @@ def test_linux_execution_preserves_native_wsl_windows_interop(tmp_path: Path) ->
         assert "interop-ok" in result.stdout
     finally:
         environment.close()
+
+
+@pytest.mark.skipif(not sys.platform.startswith("linux"), reason="Linux execution")
+def test_local_run_override_replaces_roots_without_changing_configuration(
+    tmp_path, monkeypatch
+) -> None:
+    configured = tmp_path / "configured"
+    library = tmp_path / "library"
+    configured.mkdir()
+    library.mkdir()
+    environment = LocalExecution([str(configured)])
+    commands = []
+    original = environment._wrap
+
+    def wrap(argv, cwd, roots):
+        command = original(argv, cwd, roots)
+        commands.append(command)
+        return command
+
+    monkeypatch.setattr(environment, "_wrap", wrap)
+    try:
+        for override, expected in (
+            ([str(library), str(library) + "/"], [str(library)]),
+            ([], []),
+            (None, [str(configured)]),
+        ):
+            result = environment.run(
+                ["/bin/true"], cwd=str(tmp_path), write_directories=override
+            )
+            assert result.exit_code == 0, result.stderr
+            command = commands[-1]
+            assert [
+                command[index + 1 : index + 3]
+                for index, value in enumerate(command)
+                if value == "--bind"
+            ] == [[root, root] for root in expected]
+            assert environment.write_directories == (str(configured),)
+        denied = environment.run(
+            ["sh", "-c", 'echo denied > "$1"', "sh", str(configured / "denied")],
+            cwd=str(library),
+            write_directories=[str(library)],
+        )
+        assert denied.exit_code != 0 and not (configured / "denied").exists()
+    finally:
+        environment.close()
+
+
+def test_wsl_run_sends_optional_write_directories_to_the_worker(monkeypatch) -> None:
+    connection = WslConnection("test", ["configured"])
+    script = (
+        "import json, sys; request = json.loads(sys.stdin.readline()); "
+        "assert request['directories'] == ['configured']; "
+        "params = request['params']; "
+        "assert params['write_directories'] == ['C:\\\\Library']; "
+        "assert params['cwd'] == 'C:\\\\Library'; "
+        "print(json.dumps({'result': {'exit_code': 0, 'stdout': 'ok', 'stderr': '', 'truncated': False}}))"
+    )
+    monkeypatch.setattr(
+        connection, "_command", lambda: [sys.executable, "-I", "-c", script]
+    )
+    try:
+        assert (
+            connection.run(
+                ["pwd"], cwd=r"C:\Library", write_directories=[r"C:\Library"]
+            ).stdout
+            == "ok"
+        )
+        assert connection.write_directories == ("configured",)
+    finally:
+        connection.close()
+
+
+def test_windows_write_access_is_cached_separately_for_each_root_set(
+    tmp_path, monkeypatch
+) -> None:
+    from huddol.adapters.execution import local
+
+    accesses = []
+
+    class Access:
+        def __init__(self, roots):
+            self.roots = roots
+            self.sid = f"sid-{len(accesses)}"
+            self.closed = False
+            accesses.append(self)
+
+        def close(self):
+            self.closed = True
+
+    monkeypatch.setitem(
+        sys.modules,
+        "huddol.adapters.sandbox.windows",
+        SimpleNamespace(WindowsWriteAccess=Access),
+    )
+    monkeypatch.setattr(
+        local, "sys", SimpleNamespace(platform="win32", executable=sys.executable)
+    )
+    monkeypatch.setattr(local, "os", SimpleNamespace(name="nt"))
+    library = tmp_path / "library"
+    library.mkdir()
+    environment = LocalExecution([str(tmp_path)])
+    for roots, sid in (
+        ((tmp_path,), "sid-0"),
+        ((library,), "sid-1"),
+        ((tmp_path,), "sid-0"),
+    ):
+        command = environment._wrap(["command"], tmp_path, roots)
+        assert command[command.index("--windows-write-sandbox") + 1] == sid
+    assert [access.roots for access in accesses] == [(tmp_path,), (library,)]
+    assert not any(access.closed for access in accesses)
+    environment.close()
+    assert all(access.closed for access in accesses)
+    assert environment._windows == {}

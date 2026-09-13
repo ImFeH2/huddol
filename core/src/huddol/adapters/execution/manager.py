@@ -62,9 +62,16 @@ class BoundExecution:
         return self._lookup().describe_environment()
 
     def run(
-        self, argv: Sequence[str], *, cwd: str, timeout: int | None = None
+        self,
+        argv: Sequence[str],
+        *,
+        cwd: str,
+        timeout: int | None = None,
+        write_directories: Sequence[str] | None = None,
     ) -> RunResult:
-        return self._lookup().run(argv, cwd=cwd, timeout=timeout)
+        return self._lookup().run(
+            argv, cwd=cwd, timeout=timeout, write_directories=write_directories
+        )
 
     def edit(
         self, path: str, old_text: str, new_text: str, *, replace_all: bool = False

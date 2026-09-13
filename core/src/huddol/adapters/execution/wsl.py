@@ -245,11 +245,17 @@ class WslConnection:
         )
 
     def run(
-        self, argv: Sequence[str], *, cwd: str | None = None, timeout: int | None = None
+        self,
+        argv: Sequence[str],
+        *,
+        cwd: str | None = None,
+        timeout: int | None = None,
+        write_directories: Sequence[str] | None = None,
     ) -> RunResult:
-        return RunResult(
-            **self._request("run", {"argv": list(argv), "cwd": cwd, "timeout": timeout})
-        )
+        params: dict[str, Any] = {"argv": list(argv), "cwd": cwd, "timeout": timeout}
+        if write_directories is not None:
+            params["write_directories"] = list(write_directories)
+        return RunResult(**self._request("run", params))
 
     def edit(
         self, path: str, old_text: str, new_text: str, *, replace_all: bool = False

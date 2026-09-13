@@ -444,17 +444,24 @@ class PydanticModelRunner:
                 )
             raise ModelRetry(f"todo has no action {action}")
 
-        @agent.tool(sequential=True)
+        @agent.tool(
+            sequential=True,
+            description="Memory holds private Markdown files and MEMORY.md is protected from deletion or movement.",
+        )
         def memory(
             ctx: RunContext[AgentTools],
-            action: str,
+            action: Literal["list", "read", "write", "edit", "mkdir", "move", "delete"],
             path: str | None = None,
             content: str | None = None,
             expected_hash: str | None = None,
+            old_text: str | None = None,
+            new_text: str | None = None,
+            replace_all: bool = False,
+            destination: str | None = None,
         ) -> Any:
             tools = ctx.deps
             if action == "list":
-                return _guard(tools.list_memory)
+                return _guard(lambda: tools.list_memory(path))
             if action == "read":
                 return _guard(
                     lambda: tools.read_memory(_required(path, "path", action))
@@ -467,20 +474,51 @@ class PydanticModelRunner:
                         expected_hash,
                     )
                 )
+            if action == "edit":
+                return _guard(
+                    lambda: tools.edit_memory(
+                        _required(path, "path", action),
+                        _required(old_text, "old_text", action),
+                        _required(new_text, "new_text", action),
+                        replace_all,
+                    )
+                )
+            if action == "mkdir":
+                return _guard(
+                    lambda: tools.mkdir_memory(_required(path, "path", action))
+                )
+            if action == "move":
+                return _guard(
+                    lambda: tools.move_memory(
+                        _required(path, "path", action),
+                        _required(destination, "destination", action),
+                    )
+                )
             if action == "delete":
                 return _guard(
                     lambda: tools.delete_memory(_required(path, "path", action))
                 )
             raise ModelRetry(f"memory has no action {action}")
 
-        @agent.tool(sequential=True)
+        @agent.tool(
+            sequential=True,
+            description="Library holds any text file for the whole organization; run executes a command inside the Library with only the Library writable.",
+        )
         def library(
             ctx: RunContext[AgentTools],
-            action: str,
+            action: Literal[
+                "list", "read", "write", "edit", "mkdir", "move", "delete", "run"
+            ],
             path: str | None = None,
             content: str | None = None,
             expected_hash: str | None = None,
+            old_text: str | None = None,
+            new_text: str | None = None,
+            replace_all: bool = False,
             destination: str | None = None,
+            argv: list[str] | None = None,
+            cwd: str | None = None,
+            timeout: int | None = None,
         ) -> Any:
             tools = ctx.deps
             if action == "list":
@@ -495,6 +533,25 @@ class PydanticModelRunner:
                         _required(path, "path", action),
                         _required(content, "content", action),
                         expected_hash,
+                    )
+                )
+            if action == "edit":
+                return _guard(
+                    lambda: tools.edit_library(
+                        _required(path, "path", action),
+                        _required(old_text, "old_text", action),
+                        _required(new_text, "new_text", action),
+                        replace_all,
+                    )
+                )
+            if action == "mkdir":
+                return _guard(
+                    lambda: tools.mkdir_library(_required(path, "path", action))
+                )
+            if action == "run":
+                return _guard(
+                    lambda: tools.run_library(
+                        _required(argv, "argv", action), cwd, timeout
                     )
                 )
             if action == "delete":

@@ -135,7 +135,7 @@ def main(argv: list[str] | None = None) -> int:
     )
 
     from huddol.adapters.execution.manager import ExecutionManager
-    from huddol.adapters.files.tree import MarkdownTree
+    from huddol.adapters.files.tree import DirectoryTree
     from huddol.adapters.jsonl.api import HUMAN_ID, Api
     from huddol.adapters.jsonl.protocol import Dispatcher
     from huddol.adapters.model.runner import PydanticModelRunner
@@ -181,9 +181,9 @@ def main(argv: list[str] | None = None) -> int:
         settings=agent_store,
         execution=execution,
         agent_directory_for=agent_directory_for,
-        library_tree=MarkdownTree(directory / "library"),
-        memory_tree_for=lambda member_id: MarkdownTree(
-            directory / "agents" / str(member_id) / "memory"
+        library_tree=DirectoryTree(directory / "library"),
+        memory_tree_for=lambda member_id: DirectoryTree(
+            directory / "agents" / str(member_id) / "memory", markdown_only=True
         ),
     )
 

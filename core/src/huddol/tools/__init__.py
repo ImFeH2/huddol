@@ -28,7 +28,7 @@ class Dependencies:
     settings: SettingsStore
     execution: ExecutionControl
     library_tree: FileTree
-    memory_tree_for: Any
+    memory_tree_for: Callable[[int], FileTree]
     agent_directory_for: Callable[[int], Path]
 
 
@@ -496,19 +496,31 @@ class AgentTools:
         self._todos().remove(todo_id)
         return {"id": todo_id, "removed": True}
 
-    def _memory(self) -> Memory:
-        return Memory(self._deps.memory_tree_for(self._actor.member_id))
+    def _memory(self, agent_id: int | None = None) -> Memory:
+        if agent_id is None:
+            agent_id = self._actor.member_id
+        if self._actor.is_agent and agent_id != self._actor.member_id:
+            raise DomainError("not_allowed", "Memory is private")
+        return Memory(self._deps.memory_tree_for(agent_id))
 
-    def list_memory(self) -> list[dict[str, Any]]:
+    def list_memory(
+        self, path: str | None = None, *, agent_id: int | None = None
+    ) -> list[dict[str, Any]]:
         self._check("memory.list")
         return [
-            {"path": item.path, "size": item.size, "hash": item.content_hash}
-            for item in self._memory().list()
+            {
+                "path": item.path,
+                "kind": item.kind,
+                "size": item.size,
+                "modified_at": item.modified_at,
+                "hash": item.content_hash,
+            }
+            for item in self._memory(agent_id).list(path)
         ]
 
-    def read_memory(self, path: str) -> dict[str, Any]:
+    def read_memory(self, path: str, *, agent_id: int | None = None) -> dict[str, Any]:
         self._check("memory.read", path)
-        content, digest = self._memory().read(path)
+        content, digest = self._memory(agent_id).read(path)
         return {"path": path, "content": content, "hash": digest}
 
     def write_memory(
@@ -517,6 +529,28 @@ class AgentTools:
         self._check("memory.write", path)
         entry = self._memory().write(path, content, expected_hash=expected_hash)
         self._record("memory.write", entry.path)
+        return {"path": entry.path, "hash": entry.content_hash}
+
+    def edit_memory(
+        self, path: str, old_text: str, new_text: str, replace_all: bool = False
+    ) -> dict[str, Any]:
+        self._check("memory.edit", path)
+        entry, diff = self._memory().edit(
+            path, old_text, new_text, replace_all=replace_all
+        )
+        self._record("memory.edit", entry.path)
+        return {"path": entry.path, "hash": entry.content_hash, "diff": diff}
+
+    def mkdir_memory(self, path: str) -> dict[str, Any]:
+        self._check("memory.mkdir", path)
+        entry = self._memory().mkdir(path)
+        self._record("memory.mkdir", entry.path)
+        return {"path": entry.path, "hash": entry.content_hash}
+
+    def move_memory(self, source: str, destination: str) -> dict[str, Any]:
+        self._check("memory.move", source)
+        entry = self._memory().move(source, destination)
+        self._record("memory.move", f"{source} to {entry.path}")
         return {"path": entry.path, "hash": entry.content_hash}
 
     def delete_memory(self, path: str) -> dict[str, Any]:
@@ -531,7 +565,13 @@ class AgentTools:
     def list_library(self, path: str | None = None) -> list[dict[str, Any]]:
         self._check("library.list")
         return [
-            {"path": item.path, "size": item.size, "hash": item.content_hash}
+            {
+                "path": item.path,
+                "kind": item.kind,
+                "size": item.size,
+                "modified_at": item.modified_at,
+                "hash": item.content_hash,
+            }
             for item in self._library().list(path)
         ]
 
@@ -563,6 +603,63 @@ class AgentTools:
             "library.updated", {"path": entry.path, "hash": entry.content_hash}
         )
 
+    def edit_library(
+        self, path: str, old_text: str, new_text: str, replace_all: bool = False
+    ) -> dict[str, Any]:
+        self._check("library.edit", path)
+        entry, diff = self._library().edit(
+            path, old_text, new_text, replace_all=replace_all
+        )
+        self._record("library.edit", entry.path)
+        updated = self._changed(
+            "library.updated", {"path": entry.path, "hash": entry.content_hash}
+        )
+        return {**updated, "diff": diff}
+
+    def mkdir_library(self, path: str) -> dict[str, Any]:
+        self._check("library.mkdir", path)
+        entry = self._library().mkdir(path)
+        self._record("library.mkdir", entry.path)
+        return self._changed(
+            "library.updated", {"path": entry.path, "hash": entry.content_hash}
+        )
+
+    def run_library(
+        self, argv: Sequence[str], cwd: str | None = None, timeout: int | None = None
+    ) -> dict[str, Any]:
+        self._check("library.run")
+        library = self._library()
+        root = library.root
+        directory = (root / cwd).resolve() if cwd is not None else root
+        if not directory.is_relative_to(root) or not directory.is_dir():
+            raise DomainError(
+                "invalid_cwd", "cwd must be a directory inside the Library"
+            )
+        before = library.snapshot()
+        try:
+            result = self._deps.execution.snapshot().run(
+                list(argv),
+                cwd=str(directory),
+                timeout=timeout,
+                write_directories=[str(root)],
+            )
+        finally:
+            after = library.snapshot()
+            for path in library.changes(before, after):
+                self._changed(
+                    "library.updated",
+                    {"path": path, "hash": after[path]}
+                    if path in after
+                    else {"path": path, "deleted": True},
+                )
+        self._record("library.run", f"{' '.join(argv)} exited {result.exit_code}")
+        return {
+            "exit_code": result.exit_code,
+            "stdout": result.stdout,
+            "stderr": result.stderr,
+            "truncated": result.truncated,
+        }
+
     def delete_library(self, path: str) -> dict[str, Any]:
         self._check("library.delete", path)
         self._library().delete(path)
@@ -573,6 +670,7 @@ class AgentTools:
         self._check("library.move", source)
         entry = self._library().move(source, destination)
         self._record("library.move", f"{source} to {entry.path}")
+        self._changed("library.updated", {"path": source, "deleted": True})
         return self._changed(
             "library.updated", {"path": entry.path, "hash": entry.content_hash}
         )

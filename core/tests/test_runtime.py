@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 
 from huddol.adapters.execution.manager import ExecutionManager
-from huddol.adapters.files.tree import MarkdownTree
+from huddol.adapters.files.tree import DirectoryTree
 from huddol.adapters.sqlite.agent import SqliteAgentStore
 from huddol.adapters.sqlite.store import SqliteStore
 from huddol.ports.agent import WindowState
@@ -62,9 +62,9 @@ def world(tmp_path: Path):
             settings={"directories": {"native": [str(tmp_path)]}},
             enforce=False,
         ),
-        library_tree=MarkdownTree(tmp_path / "library"),
-        memory_tree_for=lambda member_id: MarkdownTree(
-            tmp_path / "agents" / str(member_id) / "memory"
+        library_tree=DirectoryTree(tmp_path / "library"),
+        memory_tree_for=lambda member_id: DirectoryTree(
+            tmp_path / "agents" / str(member_id) / "memory", markdown_only=True
         ),
     )
     yield deps
@@ -647,7 +647,11 @@ def test_resident_is_persisted_and_stays_unchanged_until_a_reset(
     )
     scheduler = Scheduler(world, runner)
     tools = scheduler.tools_for(MAIN)
-    memory = tools.write_memory("MEMORY.md", "MEMORY_STATE_OLD")
+    memory = tools.write_memory(
+        "MEMORY.md",
+        "MEMORY_STATE_OLD",
+        expected_hash=tools.read_memory("MEMORY.md")["hash"],
+    )
     old_todo = tools.add_todo("TASK_STATE_OLD")
 
     for turn, state in enumerate(("OLD", "NEW"), start=1):
@@ -784,7 +788,7 @@ def test_resident_carries_memory_todo_details_and_environment(
     world, tmp_path: Path
 ) -> None:
     mention(world)
-    MarkdownTree(world.memory_tree_for(MAIN).root).write(
+    DirectoryTree(world.memory_tree_for(MAIN).root, markdown_only=True).write(
         "MEMORY.md", "- prior knowledge"
     )
     world.todos.add_todo(MAIN, "unfinished work", "detail")

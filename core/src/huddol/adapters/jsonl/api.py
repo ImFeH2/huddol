@@ -183,6 +183,27 @@ class Api:
                 params.get("expected_hash"),
             )
 
+        def library_edit(params: dict[str, Any]) -> Any:
+            return self._human().edit_library(
+                str(params["path"]),
+                str(params["old_text"]),
+                str(params["new_text"]),
+                bool(params.get("replace_all", False)),
+            )
+
+        def library_mkdir(params: dict[str, Any]) -> Any:
+            return self._human().mkdir_library(str(params["path"]))
+
+        def memory_list(params: dict[str, Any]) -> Any:
+            return self._human().list_memory(
+                params.get("path"), agent_id=int(params["agent_id"])
+            )
+
+        def memory_read(params: dict[str, Any]) -> Any:
+            return self._human().read_memory(
+                str(params["path"]), agent_id=int(params["agent_id"])
+            )
+
         def library_delete(params: dict[str, Any]) -> Any:
             return self._human().delete_library(str(params["path"]))
 
@@ -220,7 +241,7 @@ class Api:
                 "id": agent_id,
                 "window": asdict(self._scheduler.history.window(agent_id)),
                 "todos": tools.list_todos(),
-                "memory": tools.list_memory(),
+                "memory": self._human().list_memory(agent_id=agent_id),
                 "usage": self._scheduler.history.usage_total(agent_id),
                 "token_limit": self._scheduler.token_limit(),
                 "over_token_limit": self._scheduler.over_token_limit(agent_id),
@@ -322,6 +343,10 @@ class Api:
         register("library.list", library_list)
         register("library.read", library_read)
         register("library.write", library_write)
+        register("library.edit", library_edit)
+        register("library.mkdir", library_mkdir)
+        register("memory.list", memory_list)
+        register("memory.read", memory_read)
         register("library.delete", library_delete)
         register("library.move", library_move)
         register("agent.detail", agent_detail)

@@ -4,14 +4,14 @@ from pathlib import Path
 
 import pytest
 
-from huddol.adapters.files.tree import MarkdownTree, content_hash
+from huddol.adapters.files.tree import MAX_FILE_BYTES, DirectoryTree, content_hash
 from huddol.core.errors import DomainError
 from huddol.ports.files import ConflictError
 
 
 @pytest.fixture
-def tree(tmp_path: Path) -> MarkdownTree:
-    return MarkdownTree(tmp_path / "library")
+def tree(tmp_path: Path) -> DirectoryTree:
+    return DirectoryTree(tmp_path / "library")
 
 
 def require_symlinks(tmp_path: Path) -> None:
@@ -23,92 +23,200 @@ def require_symlinks(tmp_path: Path) -> None:
     probe.unlink()
 
 
-def test_creates_reads_and_lists_nested_documents(tree: MarkdownTree) -> None:
-    tree.write("notes.md", "top level")
-    tree.write("specs/protocol.md", "nested")
-    assert [item.path for item in tree.list()] == ["notes.md", "specs/protocol.md"]
-    content, digest = tree.read("specs/protocol.md")
-    assert content == "nested"
-    assert digest == content_hash("nested")
+def test_creates_reads_and_lists_nested_files_and_empty_directories(tree) -> None:
+    tree.write("notes.txt", "top level")
+    tree.write("guides/protocol.md", "nested")
+    tree.mkdir("empty")
+    tree.write("guides.txt", "sibling")
+    entries = tree.list()
+    assert [(item.path, item.kind) for item in entries] == [
+        ("empty", "directory"),
+        ("guides", "directory"),
+        ("guides/protocol.md", "file"),
+        ("guides.txt", "file"),
+        ("notes.txt", "file"),
+    ]
+    assert all(item.size == 0 and item.content_hash is None for item in entries[:2])
+    assert all(item.modified_at.endswith("Z") for item in entries)
+    assert [item.path for item in tree.list("guides")] == ["guides/protocol.md"]
+    assert tree.read("guides/protocol.md") == ("nested", content_hash("nested"))
+    assert tree.root.is_absolute()
 
 
-def test_overwrite_requires_matching_expected_hash(tree: MarkdownTree) -> None:
+def test_overwrite_requires_matching_expected_hash(tree) -> None:
     entry = tree.write("doc.md", "first")
     with pytest.raises(DomainError) as missing:
         tree.write("doc.md", "second")
     assert missing.value.code == "expected_hash_required"
-
     with pytest.raises(ConflictError) as stale:
         tree.write("doc.md", "second", expected_hash="0" * 16)
     assert stale.value.actual == entry.content_hash
-
     updated = tree.write("doc.md", "second", expected_hash=entry.content_hash)
     assert updated.content_hash == content_hash("second")
 
 
-def test_creating_a_new_document_needs_no_expected_hash(tree: MarkdownTree) -> None:
-    assert tree.write("fresh.md", "hello").path == "fresh.md"
-
-
 @pytest.mark.parametrize(
     "path",
-    ["../escape.md", "/etc/passwd.md", "a/../../b.md", "", "   "],
+    [
+        "../escape.md",
+        "/etc/passwd.md",
+        "a/../../b.md",
+        "",
+        "   ",
+        ".",
+        "./file.md",
+        ".hidden",
+        "a/.hidden/file.md",
+        "a\\..\\b.md",
+        "C:\\file.md",
+        "bad\0.md",
+    ],
 )
-def test_rejects_paths_that_escape_the_tree(tree: MarkdownTree, path: str) -> None:
-    with pytest.raises(DomainError) as error:
-        tree.write(path, "nope")
-    assert error.value.code == "invalid_path"
+def test_rejects_invalid_and_hidden_paths(tree, path) -> None:
+    for operation in (lambda: tree.write(path, "nope"), lambda: tree.mkdir(path)):
+        with pytest.raises(DomainError) as error:
+            operation()
+        assert error.value.code == "invalid_path"
 
 
-def test_rejects_non_markdown_files(tree: MarkdownTree) -> None:
-    with pytest.raises(DomainError) as error:
-        tree.write("script.sh", "rm -rf /")
-    assert error.value.code == "invalid_path"
+def test_markdown_only_applies_to_files_not_directories(tmp_path) -> None:
+    tree = DirectoryTree(tmp_path / "memory", markdown_only=True)
+    tree.mkdir("topics")
+    tree.write("topics/note.md", "ok")
+    (tree.root / "ignored.txt").write_text("text")
+    assert [item.path for item in tree.list()] == ["topics", "topics/note.md"]
+    for operation in (
+        lambda: tree.write("script.sh", "text"),
+        lambda: tree.read("ignored.txt"),
+        lambda: tree.move("topics/note.md", "note.txt"),
+    ):
+        with pytest.raises(DomainError) as error:
+            operation()
+        assert error.value.code == "invalid_path"
 
 
-def test_symlinked_files_cannot_read_outside_the_tree(
-    tree: MarkdownTree, tmp_path: Path
-) -> None:
-    require_symlinks(tmp_path)
-    secret = tmp_path / "secret.md"
-    secret.write_text("classified", encoding="utf-8")
-    (tree.root / "link.md").symlink_to(secret)
-    with pytest.raises(DomainError) as error:
-        tree.read("link.md")
-    assert error.value.code == "invalid_path"
-    assert [item.path for item in tree.list()] == []
-
-
-def test_symlink_pointing_inside_the_tree_is_still_excluded_from_listings(
-    tree: MarkdownTree, tmp_path: Path
+def test_hidden_names_and_symlinked_files_and_directories_are_not_listed(
+    tree, tmp_path
 ) -> None:
     require_symlinks(tmp_path)
     tree.write("real.md", "content")
+    tree.mkdir("visible")
+    (tree.root / ".hidden").mkdir()
+    (tree.root / ".hidden/note.md").write_text("hidden")
+    (tree.root / ".file.md").write_text("hidden")
     (tree.root / "alias.md").symlink_to(tree.root / "real.md")
-    assert [item.path for item in tree.list()] == ["real.md"]
+    (tree.root / "alias").symlink_to(tree.root / "visible", target_is_directory=True)
+    (tree.root / "outside").symlink_to(tmp_path, target_is_directory=True)
+    assert [item.path for item in tree.list()] == ["real.md", "visible"]
+    with pytest.raises(DomainError) as error:
+        tree.write("outside/escape.md", "no")
+    assert error.value.code == "invalid_path"
+    assert not (tmp_path / "escape.md").exists()
+    (tree.root / "dangling.md").symlink_to(tree.root / "missing.md")
+    with pytest.raises(DomainError) as error:
+        tree.move("real.md", "dangling.md")
+    assert error.value.code == "already_exists"
+    assert tree.read("real.md")[0] == "content"
+    assert not (tree.root / "missing.md").exists()
 
 
-def test_delete_prunes_empty_parent_directories(tree: MarkdownTree) -> None:
+@pytest.mark.parametrize("data", [b"\xff\xfe", b"x" * (MAX_FILE_BYTES + 1)])
+def test_unreadable_files_are_listed_but_cannot_be_read_written_or_edited(
+    tree, data
+) -> None:
+    (tree.root / "unreadable.txt").write_bytes(data)
+    (entry,) = tree.list()
+    assert (
+        entry.kind == "file" and entry.content_hash is None and entry.size == len(data)
+    )
+    for operation in (
+        lambda: tree.read(entry.path),
+        lambda: tree.write(entry.path, "replacement", expected_hash="stale"),
+        lambda: tree.edit(entry.path, "x", "y"),
+    ):
+        with pytest.raises(DomainError) as error:
+            operation()
+        assert error.value.code == "not_readable"
+    assert (tree.root / entry.path).read_bytes() == data
+
+
+def test_edit_exact_replacements_and_errors(tree) -> None:
+    tree.write("doc.txt", "alpha\nbeta\nbeta\n")
+    for old, code in [("missing", "no_match"), ("beta", "ambiguous_match")]:
+        with pytest.raises(DomainError) as error:
+            tree.edit("doc.txt", old, "new")
+        assert error.value.code == code
+    entry, diff = tree.edit("doc.txt", "beta", "gamma", replace_all=True)
+    assert tree.read("doc.txt") == ("alpha\ngamma\ngamma\n", entry.content_hash)
+    assert "-beta" in diff and "+gamma" in diff
+    tree.edit("doc.txt", "alpha", "first")
+    with pytest.raises(DomainError) as error:
+        tree.edit("missing.txt", "a", "b")
+    assert error.value.code == "not_found"
+
+
+def test_size_limit_applies_to_writes_and_edit_results(tree) -> None:
+    entry = tree.write("limit.txt", "x" * MAX_FILE_BYTES)
+    assert tree.read(entry.path)[1] == entry.content_hash
+    for operation in (
+        lambda: tree.write("large.txt", "x" * (MAX_FILE_BYTES + 1)),
+        lambda: tree.edit("limit.txt", "x", "xx", replace_all=True),
+    ):
+        with pytest.raises(DomainError) as error:
+            operation()
+        assert error.value.code == "invalid_content"
+    assert tree.read(entry.path)[1] == entry.content_hash
+    assert not (tree.root / "large.txt").exists()
+
+
+def test_mkdir_is_idempotent_and_file_directory_types_are_checked(tree) -> None:
+    entry = tree.mkdir("a/b")
+    assert tree.mkdir("a/b") == entry
+    tree.write("file.txt", "content")
+    for operation in (
+        lambda: tree.mkdir("file.txt"),
+        lambda: tree.write("a/b", "content"),
+    ):
+        with pytest.raises(DomainError) as error:
+            operation()
+        assert error.value.code == "invalid_path"
+    for path in ("a/b", "missing.txt"):
+        with pytest.raises(DomainError) as error:
+            tree.read(path)
+        assert error.value.code == "not_found"
+
+
+def test_delete_keeps_empty_parents_and_removes_nonempty_directories(tree) -> None:
     tree.write("a/b/c.md", "deep")
     tree.delete("a/b/c.md")
+    assert [item.path for item in tree.list()] == ["a", "a/b"]
+    tree.write("a/b/c.txt", "deep")
+    tree.delete("a")
     assert tree.list() == ()
-    assert not (tree.root / "a").exists()
+    with pytest.raises(DomainError) as error:
+        tree.delete("a")
+    assert error.value.code == "not_found"
 
 
-def test_move_renames_and_refuses_to_clobber(tree: MarkdownTree) -> None:
+def test_move_files_and_directories_without_clobbering(tree) -> None:
     tree.write("old.md", "content")
     tree.write("taken.md", "other")
-    moved = tree.move("old.md", "folder/new.md")
-    assert moved.path == "folder/new.md"
-    assert tree.read("folder/new.md")[0] == "content"
-
-    tree.write("again.md", "x")
+    assert tree.move("old.md", "folder/new.md").path == "folder/new.md"
+    assert tree.move("folder", "parent/renamed").kind == "directory"
+    assert tree.read("parent/renamed/new.md")[0] == "content"
     with pytest.raises(DomainError) as error:
-        tree.move("again.md", "taken.md")
+        tree.move("parent/renamed/new.md", "taken.md")
     assert error.value.code == "already_exists"
+    for destination in ("parent", "parent/child"):
+        with pytest.raises(DomainError) as error:
+            tree.move("parent", destination)
+        assert error.value.code == "invalid_path"
+    assert tree.read("taken.md")[0] == "other"
 
 
-def test_writes_are_atomic_and_leave_no_temporary_files(tree: MarkdownTree) -> None:
-    tree.write("doc.md", "content")
-    leftovers = [item.name for item in tree.root.rglob("*.tmp")]
-    assert leftovers == []
+def test_writes_preserve_neighboring_temporary_names_and_exact_utf8_bytes(tree) -> None:
+    tree.write("doc.txt.tmp", "keep")
+    tree.write("doc.txt", "a\r\nb\n")
+    assert tree.read("doc.txt") == ("a\r\nb\n", content_hash("a\r\nb\n"))
+    assert tree.read("doc.txt.tmp")[0] == "keep"
+    assert [item.path for item in tree.list()] == ["doc.txt", "doc.txt.tmp"]

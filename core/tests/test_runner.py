@@ -626,3 +626,84 @@ def test_streaming_appends_ephemeral_only_to_the_outgoing_copy() -> None:
     asyncio.run(run())
     assert "EPHEMERAL" in received[0]
     assert len(original[0].parts) == 1
+
+
+@pytest.mark.parametrize("namespace", ["memory", "library"])
+@pytest.mark.parametrize(
+    "action,params,expected",
+    [
+        ("list", {"path": "topics"}, ("topics",)),
+        (
+            "edit",
+            {
+                "path": "note.md",
+                "old_text": "before",
+                "new_text": "",
+                "replace_all": True,
+            },
+            ("note.md", "before", "", True),
+        ),
+        ("mkdir", {"path": "topics"}, ("topics",)),
+        ("move", {"path": "topics", "destination": "renamed"}, ("topics", "renamed")),
+    ],
+)
+def test_model_tree_actions_forward_their_arguments(
+    settings, namespace, action, params, expected
+) -> None:
+    calls = []
+    responses = 0
+
+    class Tools:
+        def __getattr__(self, name):
+            def invoke(*args):
+                calls.append((name, args))
+                return {"ok": True}
+
+            return invoke
+
+    def respond(messages, info):
+        nonlocal responses
+        responses += 1
+        if responses == 1:
+            return ModelResponse(
+                parts=[ToolCallPart(namespace, {"action": action, **params})]
+            )
+        return ModelResponse(parts=[TextPart("Done")])
+
+    outcome = PydanticModelRunner(
+        settings, build_model=lambda config: FunctionModel(respond)
+    ).run(request(), Tools())
+    assert outcome.error is None
+    assert calls == [(f"{action}_{namespace}", expected)]
+
+
+def test_model_library_run_forwards_argv_cwd_and_timeout(settings) -> None:
+    calls = []
+
+    class Tools:
+        def run_library(self, argv, cwd, timeout):
+            calls.append((argv, cwd, timeout))
+            return {"exit_code": 0, "stdout": "", "stderr": "", "truncated": False}
+
+    def respond(messages, info):
+        if not calls:
+            return ModelResponse(
+                parts=[
+                    ToolCallPart(
+                        "library",
+                        {
+                            "action": "run",
+                            "argv": ["rg", "needle"],
+                            "cwd": "topics",
+                            "timeout": 7,
+                        },
+                    )
+                ]
+            )
+        return ModelResponse(parts=[TextPart("Done")])
+
+    outcome = PydanticModelRunner(
+        settings, build_model=lambda config: FunctionModel(respond)
+    ).run(request(), Tools())
+    assert outcome.error is None
+    assert calls == [(["rg", "needle"], "topics", 7)]

@@ -9,7 +9,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from huddol.adapters.execution.manager import environment_key
-from huddol.adapters.files.tree import MarkdownTree
+from huddol.adapters.files.tree import DirectoryTree
 from huddol.adapters.sqlite.agent import SqliteAgentStore
 from huddol.adapters.sqlite.store import SqliteStore
 from huddol.core.member import name_key
@@ -301,7 +301,7 @@ def migrate(legacy_dir: Path, target_dir: Path) -> Report:
     report.record("write_directories", len(directories))
 
     documents = list(_rows(legacy, "library_documents", present))
-    library = MarkdownTree(target_dir / "library")
+    library = DirectoryTree(target_dir / "library")
     taken: set[str] = set()
     for row in documents:
         keys = row.keys()
