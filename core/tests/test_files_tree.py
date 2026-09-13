@@ -195,6 +195,15 @@ def test_edit_exact_replacements_and_errors(tree) -> None:
     assert error.value.code == "not_found"
 
 
+@pytest.mark.parametrize("newline", [b"\r\n", b"\n"], ids=["crlf", "lf"])
+def test_edit_preserves_line_endings(tree, newline) -> None:
+    name = "doc.txt"
+    original = newline.join([b"alpha", b"beta", b""])
+    (tree.root / name).write_bytes(original)
+    tree.edit(name, "beta", "gamma")
+    assert (tree.root / name).read_bytes() == original.replace(b"beta", b"gamma")
+
+
 def test_size_limit_applies_to_writes_and_edit_results(tree) -> None:
     entry = tree.write("limit.txt", "x" * MAX_FILE_BYTES)
     assert tree.read(entry.path)[1] == entry.content_hash

@@ -33,7 +33,7 @@ def edit_file(
     if not target.is_file():
         raise DomainError("not_found", f"{path} does not exist")
     try:
-        original = target.read_text(encoding="utf-8")
+        original = target.read_bytes().decode("utf-8")
     except UnicodeDecodeError as error:
         raise DomainError("not_text", f"{path} is not valid UTF-8") from error
     occurrences = original.count(old_text)
@@ -52,14 +52,12 @@ def edit_file(
     temporary: str | None = None
     try:
         with tempfile.NamedTemporaryFile(
-            mode="w",
-            encoding="utf-8",
             dir=target.parent,
             prefix=".huddol-edit-",
             delete=False,
         ) as stream:
             temporary = stream.name
-            stream.write(updated)
+            stream.write(updated.encode("utf-8"))
         os.chmod(temporary, target.stat().st_mode)
         os.replace(temporary, target)
     finally:
