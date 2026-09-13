@@ -56,8 +56,6 @@ describe("discussion member picker", () => {
   });
 
   it("disables the selection while saving", () => {
-    expect(render(true)).toContain(
-      '<fieldset class="member-picker" disabled="">',
-    );
+    expect(render(true)).toMatch(/<fieldset\b[^>]*\bdisabled=""/);
   });
 });

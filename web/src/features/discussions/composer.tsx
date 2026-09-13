@@ -1,3 +1,4 @@
+import { clsx } from "clsx";
 import { Send } from "lucide-react";
 import { Fragment, useId, useMemo, useRef, useState } from "react";
 import { Avatar, IconButton, Textarea } from "@/components/ui/index";
@@ -104,10 +105,10 @@ export function Composer({
   };
 
   return (
-    <div className="composer">
+    <div className="relative flex flex-none items-end gap-2 border-t border-line bg-app px-8 pt-3 pb-4 max-[940px]:px-6">
       {suggesting ? (
         <div
-          className="mention-menu"
+          className="absolute bottom-[calc(100%-var(--spacing)*2)] left-8 right-8 z-(--layer-popover) max-h-66 overflow-y-auto rounded-sm bg-surface-raised p-1 shadow-popover origin-bottom animate-pop-in max-[940px]:left-6 max-[940px]:right-6"
           id={menuId}
           role="listbox"
           aria-label="Members"
@@ -117,27 +118,40 @@ export function Composer({
             return (
               <Fragment key={member.id}>
                 {index === elsewhereFrom && index > 0 ? (
-                  <div className="mention-group" role="presentation">
+                  <div
+                    className="mt-1 border-t border-line px-2 pt-3 pb-1 text-xs text-fg-muted"
+                    role="presentation"
+                  >
                     Not in this Discussion
                   </div>
                 ) : null}
                 <button
                   type="button"
-                  className="mention-option"
+                  className={clsx(
+                    "flex w-full items-center gap-2 rounded-xs border-0 px-2 py-1 text-left text-inherit cursor-pointer transition-[background-color] duration-(--duration-fast) ease-linear hover:bg-surface-hover",
+                    index === active
+                      ? "bg-surface-hover shadow-[inset_2px_0_0_var(--color-blue-300)]"
+                      : "bg-transparent",
+                  )}
                   role="option"
                   id={`${menuId}-${member.id}`}
                   aria-selected={index === active}
-                  data-active={index === active}
-                  data-reference={!inside}
                   onMouseDown={(event) => {
                     event.preventDefault();
                     accept(member);
                   }}
                 >
                   <Avatar name={member.name} size="sm" />
-                  <span className="mention-name">{member.name}</span>
+                  <span
+                    className={clsx(
+                      "min-w-0 flex-1 truncate",
+                      inside ? "font-medium" : "font-normal text-fg-muted",
+                    )}
+                  >
+                    {member.name}
+                  </span>
                   {inside ? (
-                    <span className="mention-meta">
+                    <span className="flex-none text-xs text-fg-muted">
                       {member.type === "human" ? "Human" : member.state}
                     </span>
                   ) : null}
@@ -147,7 +161,7 @@ export function Composer({
           })}
         </div>
       ) : null}
-      <div className="composer-field">
+      <div className="flex min-w-0 flex-1">
         <Textarea
           ref={input}
           value={body}
@@ -206,7 +220,7 @@ export function Composer({
           }}
         />
       </div>
-      <span className="composer-send">
+      <span className="flex h-[calc(var(--leading-body)+var(--spacing)*4+2px)] flex-none items-center">
         <IconButton
           label="Send · Enter"
           disabled={busy || !body.trim()}

@@ -18,15 +18,21 @@ export function MemberPicker({
   const id = useId();
 
   return (
-    <fieldset className="member-picker" disabled={disabled}>
-      <legend>Members</legend>
-      <ul className="member-picker-list">
+    <fieldset
+      className="m-0 flex flex-col gap-2 border-0 p-0"
+      disabled={disabled}
+    >
+      <legend className="p-0 text-xs font-medium text-fg-muted">Members</legend>
+      <ul className="flex max-h-[220px] flex-col overflow-y-auto rounded-sm border border-line bg-app">
         {members.length === 0 ? (
-          <li className="member-picker-empty muted">No other Members</li>
+          <li className="p-3 text-xs text-fg-muted">No other Members</li>
         ) : null}
         {members.map((member) => (
           <li key={member.id}>
-            <label className="member-option" htmlFor={`${id}-${member.id}`}>
+            <label
+              className="flex items-center gap-2 px-3 py-2 cursor-pointer transition-[background-color] duration-(--duration-fast) ease-linear hover:bg-surface-hover"
+              htmlFor={`${id}-${member.id}`}
+            >
               <Input
                 id={`${id}-${member.id}`}
                 type="checkbox"
@@ -40,7 +46,9 @@ export function MemberPicker({
                 }
               />
               <Avatar name={member.name} size="sm" />
-              <span className="member-option-name">{member.name}</span>
+              <span className="min-w-0 flex-1 truncate font-medium">
+                {member.name}
+              </span>
               <Chip tone={member.type === "agent" ? "blue" : "neutral"}>
                 {member.type === "agent" ? "Agent" : "Human"}
               </Chip>

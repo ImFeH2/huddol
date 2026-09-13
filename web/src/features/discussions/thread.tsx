@@ -1,3 +1,4 @@
+import { clsx } from "clsx";
 import { Archive, ArchiveRestore, Check, Users } from "lucide-react";
 import {
   Fragment,
@@ -30,7 +31,6 @@ import {
   type Message,
 } from "@/lib/backend";
 import { formatTime, relativeTime } from "@/lib/format";
-import "@/features/discussions/discussions.css";
 
 export function ThreadPage({ id }: { id: number }) {
   const { members, humanId, discussions, refresh } = useOrganization();
@@ -245,11 +245,11 @@ export function ThreadPage({ id }: { id: number }) {
       />
 
       <PageBody variant="flush">
-        <div className="thread-scroll">
+        <div className="min-h-0 flex-1 overflow-y-auto border-t border-line px-8 pt-4 pb-6 max-[940px]:px-6">
           {detail && detail.messages.length === 0 ? (
             <EmptyState title="No messages yet" />
           ) : null}
-          <ol className="messages">
+          <ol className="flex flex-col gap-4">
             {(detail?.messages ?? []).map((message, index) => {
               const previous = detail?.messages[index - 1];
               const divider =
@@ -265,7 +265,7 @@ export function ThreadPage({ id }: { id: number }) {
               return (
                 <Fragment key={message.id}>
                   {divider ? (
-                    <li className="unread-divider">
+                    <li className="flex items-center gap-3 text-xs font-medium uppercase tracking-caps text-primary before:content-[''] before:h-px before:flex-1 before:bg-blue-500/40 after:content-[''] after:h-px after:flex-1 after:bg-blue-500/40">
                       <span>New</span>
                     </li>
                   ) : null}
@@ -333,30 +333,39 @@ export function MessageRow({
   const { members } = useOrganization();
   return (
     <li
-      className="message"
-      data-pending={pending}
-      data-compact={compact}
-      data-fresh={fresh}
+      className={clsx(
+        "flex scroll-m-6 items-start gap-3",
+        compact && "-mt-3",
+        fresh && "animate-rise-in [animation-duration:var(--duration-slow)]",
+      )}
     >
-      <div className="message-gutter">
+      <div className="w-[26px] flex-none">
         {compact ? null : <Avatar name={message.sender_name} />}
       </div>
-      <div className="message-main">
+      <div
+        className={clsx(
+          "-ml-3 min-w-0 flex-1 border-l-2 pl-3",
+          pending ? "border-l-yellow-300" : "border-l-transparent",
+        )}
+      >
         {compact ? null : (
-          <div className="message-head">
-            <span className="message-sender">{message.sender_name}</span>
+          <div className="mb-0.5 flex items-baseline gap-2">
+            <span className="font-semibold">{message.sender_name}</span>
             <Tooltip label={formatTime(message.created_at)}>
-              <time className="message-time" dateTime={message.created_at}>
+              <time
+                className="text-xs text-fg-muted"
+                dateTime={message.created_at}
+              >
                 {relativeTime(message.created_at)}
               </time>
             </Tooltip>
           </div>
         )}
-        <div className="message-text">
+        <div className="whitespace-pre-wrap wrap-anywhere [&_mark]:bg-blue-500/25 [&_mark]:text-blue-100 [&_mark]:rounded-xs [&_mark]:px-[3px] [&_mark]:font-medium">
           {renderMentions(message.body, message.mentions, members)}
         </div>
         {pending ? (
-          <div className="message-actions">
+          <div className="mt-2 flex items-center gap-2">
             <Chip tone="warning">Mentions you</Chip>
             <Button size="sm" disabled={busy} onClick={onAck}>
               <Check size={13} />
@@ -364,7 +373,7 @@ export function MessageRow({
             </Button>
           </div>
         ) : acknowledged ? (
-          <div className="message-actions">
+          <div className="mt-2 flex items-center gap-2">
             <Chip tone="success">Handled</Chip>
             <Button
               size="sm"

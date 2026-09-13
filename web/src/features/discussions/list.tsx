@@ -37,7 +37,6 @@ import {
   type Member,
 } from "@/lib/backend";
 import { plural } from "@/lib/format";
-import "@/features/discussions/discussions.css";
 
 type Segment = { id: string; text: string; match: boolean };
 
@@ -191,14 +190,11 @@ export function DiscussionsPage() {
           ) : (
             <Table columns={RESULT_COLUMNS} label="Search results">
               {results.map((result) => (
-                <tr
-                  className="table-row"
-                  key={`${result.discussion_id}-${result.id}`}
-                >
+                <tr key={`${result.discussion_id}-${result.id}`}>
                   <td>
                     <RowLink
                       primary={
-                        <span className="result-body">
+                        <span className="block truncate font-normal text-fg-muted [&_mark]:bg-blue-500/30 [&_mark]:rounded-xs [&_mark]:text-fg [&_mark]:font-medium">
                           {segments(result.body, query).map((part) =>
                             part.match ? (
                               <mark key={part.id}>{part.text}</mark>
@@ -216,7 +212,7 @@ export function DiscussionsPage() {
                       }
                     />
                   </td>
-                  <td data-hide-below="sm" className="muted">
+                  <td data-hide-below="sm" className="text-fg-muted">
                     {result.sender_name}
                   </td>
                   <td>
@@ -281,17 +277,20 @@ export function DiscussionRow({
   const rest = people.length - shown.length;
 
   return (
-    <tr className="table-row" data-highlight={item.unread > 0}>
+    <tr data-highlight={item.unread > 0}>
       <td>
-        <div className="cell-lead">
-          <span className="topic-glyph" aria-hidden="true">
+        <div className="flex min-w-0 items-center gap-3">
+          <span
+            className="flex size-7 flex-none items-center justify-center rounded-sm border border-line bg-gray-800 text-fg-muted"
+            aria-hidden="true"
+          >
             <MessageSquare size={15} />
           </span>
           <RowLink primary={item.topic} onSelect={onOpen} />
         </div>
       </td>
       <td data-hide-below="md">
-        <div className="cell-chips">
+        <div className="flex flex-wrap gap-1">
           {shown.map((member) => (
             <Chip
               key={member.id}
@@ -303,17 +302,17 @@ export function DiscussionRow({
           {rest > 0 ? <Chip>+{rest}</Chip> : null}
         </div>
       </td>
-      <td data-align="end" className="numeric">
+      <td data-align="end" className="tabular-nums whitespace-nowrap">
         {item.unread > 0 ? (
           <Badge tone="unread">{item.unread}</Badge>
         ) : (
-          <span className="muted">—</span>
+          <span className="text-fg-muted">—</span>
         )}
       </td>
       <td>
         {item.archived ? (
           <StatusText dot={<Dot tone="grey" />}>
-            <span className="muted">Archived</span>
+            <span className="text-fg-muted">Archived</span>
           </StatusText>
         ) : item.unread > 0 ? (
           <StatusText dot={<Dot tone="blue" />}>
@@ -321,11 +320,11 @@ export function DiscussionRow({
           </StatusText>
         ) : (
           <StatusText dot={<Dot tone="green" />}>
-            <span className="muted">Up to date</span>
+            <span className="text-fg-muted">Up to date</span>
           </StatusText>
         )}
       </td>
-      <td className="cell-actions">
+      <td className="relative z-1 w-12 text-right">
         <OverflowMenu
           label={`Actions for ${item.topic}`}
           actions={[
