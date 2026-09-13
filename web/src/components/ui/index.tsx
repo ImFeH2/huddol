@@ -467,7 +467,7 @@ export function Meter({
   const ratio = max > 0 ? Math.min(1, value / max) : 0;
   const tone = ratio >= 1 ? "danger" : ratio >= 0.8 ? "warning" : "normal";
   return (
-    <div className="w-full h-1 rounded-full bg-gray-700 overflow-hidden [.spend-cell_&]:w-24">
+    <div className="w-full h-1 rounded-full bg-gray-700 overflow-hidden">
       <meter
         className="absolute size-px opacity-0 pointer-events-none"
         aria-label={label}

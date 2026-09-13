@@ -37,7 +37,6 @@ import { Segmented } from "@/components/ui/segmented";
 import { agentStateLabel } from "@/features/members/state";
 import { backend, type Member } from "@/lib/backend";
 import { plural } from "@/lib/format";
-import "@/features/members/members.css";
 
 const COLUMNS: Column[] = [
   { key: "member", label: "Member" },
@@ -221,14 +220,16 @@ export function MemberRow({
   const tokens = member.tokens ?? 0;
 
   return (
-    <tr className="table-row">
+    <tr>
       <td>
-        <div className="cell-lead">
+        <div className="flex min-w-0 items-center gap-3">
           <Avatar name={member.name} />
           {agent ? (
             <RowLink primary={member.name} onSelect={onOpen} />
           ) : (
-            <span className="member-name">{member.name}</span>
+            <span className="min-w-0 truncate font-semibold">
+              {member.name}
+            </span>
           )}
         </div>
       </td>
@@ -240,23 +241,28 @@ export function MemberRow({
       </td>
       <td data-align="end">
         {agent ? (
-          <div className="spend-cell">
-            <span className="numeric">
+          <div className="flex min-w-[110px] flex-col items-end gap-[5px]">
+            <span className="tabular-nums whitespace-nowrap">
               {tokens.toLocaleString()}
               {tokenLimit > 0 ? (
-                <span className="muted"> / {tokenLimit.toLocaleString()}</span>
+                <span className="text-fg-muted">
+                  {" "}
+                  / {tokenLimit.toLocaleString()}
+                </span>
               ) : null}
             </span>
             {tokenLimit > 0 ? (
-              <Meter
-                value={tokens}
-                max={tokenLimit}
-                label={`Token spend for ${member.name}`}
-              />
+              <div className="w-24">
+                <Meter
+                  value={tokens}
+                  max={tokenLimit}
+                  label={`Token spend for ${member.name}`}
+                />
+              </div>
             ) : null}
           </div>
         ) : (
-          <span className="muted">—</span>
+          <span className="text-fg-muted">—</span>
         )}
       </td>
       <td>
@@ -272,10 +278,10 @@ export function MemberRow({
             {agentStateLabel(member, tokenLimit)}
           </StatusText>
         ) : (
-          <span className="muted">—</span>
+          <span className="text-fg-muted">—</span>
         )}
       </td>
-      <td className="cell-actions">
+      <td className="relative z-1 w-12 text-right">
         <OverflowMenu
           label={`Actions for ${member.name}`}
           actions={memberActions(member, {

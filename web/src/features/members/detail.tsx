@@ -1,3 +1,4 @@
+import { clsx } from "clsx";
 import {
   Check,
   ChevronDown,
@@ -48,7 +49,6 @@ import {
   type Todo,
 } from "@/lib/backend";
 import { formatBytes, formatTime, plural, relativeTime } from "@/lib/format";
-import "@/features/members/members.css";
 
 const TODO_COLUMNS: Column[] = [
   { key: "todo", label: "Todo" },
@@ -175,7 +175,7 @@ function AgentPage({
       <PageBody>
         {detail ? (
           <>
-            <div className="stat-grid">
+            <div className="grid grid-cols-[repeat(auto-fit,minmax(180px,1fr))] gap-px overflow-hidden rounded-md border border-line bg-line flex-none">
               <Stat
                 label="Token spend"
                 value={detail.usage.total_tokens.toLocaleString("en-US")}
@@ -187,12 +187,12 @@ function AgentPage({
                         max={detail.token_limit}
                         label={`Token spend for ${member.name}`}
                       />
-                      <span className="muted">
+                      <span className="text-fg-muted">
                         of {detail.token_limit.toLocaleString("en-US")}
                       </span>
                     </>
                   ) : (
-                    <span className="muted">No ceiling</span>
+                    <span className="text-fg-muted">No ceiling</span>
                   )
                 }
               />
@@ -200,7 +200,7 @@ function AgentPage({
                 label="Model requests"
                 value={detail.usage.requests.toLocaleString("en-US")}
                 detail={
-                  <span className="muted">
+                  <span className="text-fg-muted">
                     {detail.usage.input_tokens.toLocaleString("en-US")} in ·{" "}
                     {detail.usage.output_tokens.toLocaleString("en-US")} out
                   </span>
@@ -214,7 +214,7 @@ function AgentPage({
                 label="Open Todos"
                 value={openTodos.toLocaleString("en-US")}
                 detail={
-                  <span className="muted">
+                  <span className="text-fg-muted">
                     {plural(
                       detail.memory.filter((entry) => entry.kind === "file")
                         .length,
@@ -227,7 +227,7 @@ function AgentPage({
 
             <Section title="Todos">
               {detail.todos.length === 0 ? (
-                <p className="muted">No Todos</p>
+                <p className="text-fg-muted">No Todos</p>
               ) : (
                 <Table columns={TODO_COLUMNS} label="Todos">
                   {detail.todos.map((todo) => (
@@ -241,9 +241,9 @@ function AgentPage({
 
             <Section title="Recent Turns">
               {detail.runs.length === 0 ? (
-                <p className="muted">No Turns yet</p>
+                <p className="text-fg-muted">No Turns yet</p>
               ) : (
-                <ul className="turn-list">
+                <ul className="flex flex-col gap-2">
                   {detail.runs.slice(0, 10).map((run) => (
                     <TurnCard key={run.sequence} run={run} />
                   ))}
@@ -302,7 +302,9 @@ export function MemoryContent({ file }: { file: LibraryDocument }) {
   return (
     <>
       <Chip>{formatBytes(new TextEncoder().encode(file.content).length)}</Chip>
-      <pre className="memory-content">{file.content}</pre>
+      <pre className="max-h-[50vh] overflow-auto p-3 rounded-sm border border-line bg-surface text-fg font-mono text-xs leading-body tracking-[0]">
+        {file.content}
+      </pre>
     </>
   );
 }
@@ -342,7 +344,7 @@ export function MemorySection({
   return (
     <Section title="Memory">
       {entries.length === 0 ? (
-        <p className="muted">No Memory files</p>
+        <p className="text-fg-muted">No Memory files</p>
       ) : (
         <TreeView
           entries={entries}
@@ -400,22 +402,28 @@ function Stat({
   detail?: ReactNode;
 }) {
   return (
-    <div className="stat">
-      <span className="stat-label">{label}</span>
-      <span className="stat-value">{value}</span>
-      {detail ? <span className="stat-detail">{detail}</span> : null}
+    <div className="flex flex-col gap-1 p-4 bg-surface">
+      <span className="text-xs font-bold tracking-caps uppercase text-fg-muted">
+        {label}
+      </span>
+      <span className="text-md font-semibold tabular-nums tracking-title">
+        {value}
+      </span>
+      {detail ? (
+        <span className="flex flex-col gap-1 text-xs">{detail}</span>
+      ) : null}
     </div>
   );
 }
 
 function TodoRow({ todo }: { todo: Todo }) {
   return (
-    <tr className="table-row">
+    <tr>
       <td>
-        <span className={todo.status === "done" ? "muted" : undefined}>
+        <span className={todo.status === "done" ? "text-fg-muted" : undefined}>
           {todo.title}
         </span>
-        {todo.detail ? <p className="muted">{todo.detail}</p> : null}
+        {todo.detail ? <p className="text-fg-muted">{todo.detail}</p> : null}
       </td>
       <td>
         <Chip
@@ -443,56 +451,73 @@ function TurnCard({ run }: { run: AgentRun }) {
   const tools = [...new Set(run.effects.map((effect) => effect.tool))];
 
   return (
-    <li className="turn">
+    <li className="border border-line rounded-sm bg-gray-800/50 overflow-hidden transition-[border-color] duration-(--duration-fast) ease-linear hover:border-line-interactive">
       <button
         type="button"
-        className="turn-head"
+        className="flex items-center gap-3 w-full py-3 px-4 border-0 bg-transparent text-inherit text-left cursor-pointer"
         aria-expanded={open}
         onClick={() => setOpen((current) => !current)}
       >
-        <ChevronDown className="turn-chevron" size={14} aria-hidden="true" />
-        <span className="turn-sequence mono">#{run.sequence}</span>
+        <ChevronDown
+          className={clsx(
+            "flex-none text-fg-muted transition-[rotate] duration-(--duration-base) ease-transform",
+            !open && "-rotate-90",
+          )}
+          size={14}
+          aria-hidden="true"
+        />
+        <span className="flex-none text-fg-muted font-mono text-xs tracking-[0]">
+          #{run.sequence}
+        </span>
         <StatusText dot={<Dot tone={runTone(run.status)} />}>
-          <span className="turn-status">{run.status}</span>
+          <span className="capitalize">{run.status}</span>
         </StatusText>
-        <span className="turn-summary">
+        <span className="flex-1 min-w-0 truncate text-xs text-fg-muted">
           {run.effects.length === 0 ? (
-            <span className="turn-nothing">Produced nothing</span>
+            <span className="text-warning">Produced nothing</span>
           ) : (
             `${plural(run.effects.length, "effect")} · ${tools.join(", ")}`
           )}
         </span>
         <Tooltip label={formatTime(run.started_at)}>
-          <time className="turn-time muted" dateTime={run.started_at}>
+          <time
+            className="flex-none text-xs text-fg-muted"
+            dateTime={run.started_at}
+          >
             {relativeTime(run.started_at)}
           </time>
         </Tooltip>
       </button>
       {open ? (
-        <div className="turn-body">
+        <div className="flex flex-col gap-3 pt-0 pr-4 pb-4 pl-[46px] animate-rise-in [animation-duration:var(--duration-slow)]">
           {run.error ? (
-            <p className="turn-error">
+            <p className="flex items-center gap-2 py-2 px-3 border border-red-300/40 rounded-xs bg-red-500/15 text-red-100 text-xs font-mono tracking-[0]">
               <CircleAlert size={14} aria-hidden="true" />
               {run.error}
             </p>
           ) : null}
           {run.effects.length === 0 ? (
-            <p className="muted">Nothing produced.</p>
+            <p className="text-fg-muted">Nothing produced.</p>
           ) : (
-            <ul className="effects">
+            <ul className="flex flex-col gap-1 -ml-1 border-l border-line pl-4">
               {run.effects.map((effect) => (
-                <li key={`${run.sequence}-${effect.ordinal}`}>
-                  <span className="effect-tool">
+                <li
+                  className="flex items-baseline gap-3 min-w-0"
+                  key={`${run.sequence}-${effect.ordinal}`}
+                >
+                  <span className="inline-flex items-center gap-[5px] flex-none min-w-29 text-blue-100 font-mono text-xs tracking-[0]">
                     {toolIcon(effect.tool)}
                     {effect.tool}
                   </span>
-                  <span className="effect-summary muted">{effect.summary}</span>
+                  <span className="flex-1 min-w-0 text-xs truncate text-fg-muted">
+                    {effect.summary}
+                  </span>
                 </li>
               ))}
             </ul>
           )}
           {run.completed_at ? (
-            <p className="muted turn-finished">
+            <p className="text-fg-muted text-xs">
               Finished {formatTime(run.completed_at)}
             </p>
           ) : null}
