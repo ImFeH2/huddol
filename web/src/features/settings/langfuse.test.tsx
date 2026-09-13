@@ -34,12 +34,12 @@ describe("Langfuse settings", () => {
     expect(html).toContain("Public key");
     expect(html).toContain("Secret key");
     expect(html.match(/type="password"/g)).toHaveLength(2);
-    expect(html).toContain('<fieldset class="settings-form" disabled="">');
+    expect(html).toMatch(/<fieldset\b[^>]*\bdisabled=""/);
     expect(html).toContain('type="submit"');
     const enabledId = html.match(/<input[^>]*id="([^"]+-enabled)"/)?.[1];
     expect(enabledId).toBeDefined();
     expect(html).toContain(`for="${enabledId}"`);
-    expect(html).not.toContain("banner");
+    expect(html).not.toContain('role="alert"');
     expect(html).not.toContain("Restart Huddol");
   });
 });

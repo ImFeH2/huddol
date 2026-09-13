@@ -123,7 +123,7 @@ describe("Execution settings", () => {
     expect(html).toContain("WSL command failed");
     expect(html).toContain("/missing");
     expect(html).toContain("invalid_directory");
-    expect(html).not.toContain("banner");
+    expect(html).not.toContain('role="alert"');
     expect(html).not.toContain('role="status"');
     expect(html).toContain(">Unavailable</span>");
     expect(html).toContain(">Probe failed</span>");
@@ -134,7 +134,7 @@ describe("Execution settings", () => {
     const html = renderToStaticMarkup(
       <ExecutionForm initial={initial} onSave={async () => initial} />,
     );
-    expect(html).not.toContain("settings-facts");
+    expect(html).not.toMatch(/<ul\b/);
     expect(html).not.toContain("Restart Huddol");
   });
 });

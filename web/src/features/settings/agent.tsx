@@ -10,7 +10,6 @@ import {
 import { Button, Field, Input } from "@/components/ui/index";
 import { reportLoadFailure, useSaver } from "@/features/settings/saver";
 import { backend } from "@/lib/backend";
-import "@/features/settings/settings.css";
 
 const FIELDS = [
   { key: "context_window_tokens", label: "Context window (tokens)" },
@@ -68,7 +67,7 @@ export function AgentForm({
       }}
     >
       <fieldset
-        className="settings-form"
+        className="m-0 flex min-w-0 max-w-[560px] flex-col gap-4 border-0 p-0"
         aria-label="Agent settings"
         disabled={disabled}
       >
@@ -98,7 +97,7 @@ export function AgentForm({
             />
           </Field>
         ))}
-        <div className="settings-actions">
+        <div className="flex items-center gap-3 pt-1">
           <Button
             variant="primary"
             type="submit"

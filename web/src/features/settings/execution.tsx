@@ -3,7 +3,6 @@ import { Choices } from "@/components/ui/choices";
 import { Button, Chip, Field, Textarea, toast } from "@/components/ui/index";
 import { reportLoadFailure } from "@/features/settings/saver";
 import { backend } from "@/lib/backend";
-import "@/features/settings/settings.css";
 
 export type EnvironmentTarget =
   | { kind: "native" }
@@ -131,7 +130,7 @@ export function ExecutionForm({
   };
   return (
     <form
-      className="settings-form"
+      className="m-0 flex min-w-0 max-w-[560px] flex-col gap-4 border-0 p-0"
       aria-label="Execution settings"
       onSubmit={(event) => {
         event.preventDefault();
@@ -141,29 +140,40 @@ export function ExecutionForm({
       {info.error ||
       info.probe_error ||
       info.unusable_write_directories.length ? (
-        <ul className="settings-facts">
+        <ul className="m-0 flex list-none flex-col gap-2 p-0">
           {info.error ? (
-            <li>
+            <li className="flex min-w-0 items-center gap-2">
               <Chip tone="danger">Unavailable</Chip>
-              <span className="settings-fact">{info.error}</span>
+              <span className="flex-1 min-w-0 text-fg-muted text-sm wrap-anywhere">
+                {info.error}
+              </span>
             </li>
           ) : null}
           {info.probe_error ? (
-            <li>
+            <li className="flex min-w-0 items-center gap-2">
               <Chip tone="warning">Probe failed</Chip>
-              <span className="settings-fact">{info.probe_error}</span>
+              <span className="flex-1 min-w-0 text-fg-muted text-sm wrap-anywhere">
+                {info.probe_error}
+              </span>
             </li>
           ) : null}
           {info.unusable_write_directories.map((item) => (
-            <li key={item.path}>
+            <li key={item.path} className="flex min-w-0 items-center gap-2">
               <Chip tone="warning">{item.reason}</Chip>
-              <span className="settings-fact directory-path">{item.path}</span>
+              <span className="flex-1 min-w-0 truncate font-mono text-sm text-fg-muted wrap-anywhere">
+                {item.path}
+              </span>
             </li>
           ))}
         </ul>
       ) : null}
-      <fieldset className="settings-form" disabled={busy}>
-        <legend>Environment</legend>
+      <fieldset
+        className="m-0 flex min-w-0 max-w-[560px] flex-col gap-4 border-0 p-0"
+        disabled={busy}
+      >
+        <legend className="p-0 pb-2 text-sm font-medium text-fg-muted">
+          Environment
+        </legend>
         <Choices
           label="Execution environment"
           value={selected}
@@ -189,7 +199,7 @@ export function ExecutionForm({
             }}
           />
         </Field>
-        <div className="settings-actions">
+        <div className="flex items-center gap-3 pt-1">
           <Button
             variant="primary"
             type="submit"

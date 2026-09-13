@@ -18,7 +18,11 @@ describe("Settings page", () => {
     expect(html).toContain("0 means no ceiling.");
     expect(html).toContain('aria-label="Agent settings"');
     expect(html).not.toContain(">Limits</button>");
-    expect(html).not.toContain("page-lede");
-    expect(html).not.toContain("section-lede");
+    expect(
+      Array.from(
+        html.matchAll(/<p\b[^>]*>([\s\S]*?)<\/p>/g),
+        ([, text]) => text,
+      ),
+    ).toEqual(["0 means no ceiling."]);
   });
 });

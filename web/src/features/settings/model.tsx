@@ -12,7 +12,6 @@ import {
 import { Segmented } from "@/components/ui/segmented";
 import { reportLoadFailure, useSaver } from "@/features/settings/saver";
 import { backend } from "@/lib/backend";
-import "@/features/settings/settings.css";
 
 const PROVIDERS = [
   { value: "openai", label: "OpenAI" },
@@ -166,7 +165,7 @@ export function ModelPanel() {
       }}
     >
       <fieldset
-        className="settings-form"
+        className="m-0 flex min-w-0 max-w-[560px] flex-col gap-4 border-0 p-0"
         aria-label="Model settings"
         disabled={disabled}
       >
@@ -224,7 +223,7 @@ export function ModelPanel() {
             }}
           />
         </Field>
-        <div className="settings-actions">
+        <div className="flex items-center gap-3 pt-1">
           <Button variant="primary" type="submit" disabled={disabled}>
             <Save size={16} />
             Save

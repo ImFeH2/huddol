@@ -2,7 +2,6 @@ import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { Button, Chip, Field, Input, toast } from "@/components/ui/index";
 import { reportLoadFailure } from "@/features/settings/saver";
 import { backend } from "@/lib/backend";
-import "@/features/settings/settings.css";
 
 export function langfuseUpdate(
   values: Record<string, unknown>,
@@ -78,8 +77,14 @@ export function LangfusePanel() {
         void save();
       }}
     >
-      <fieldset className="settings-form" disabled={busy || !values}>
-        <label className="settings-toggle" htmlFor={`${id}-enabled`}>
+      <fieldset
+        className="m-0 flex min-w-0 max-w-[560px] flex-col gap-4 border-0 p-0"
+        disabled={busy || !values}
+      >
+        <label
+          className="flex cursor-pointer items-center gap-2"
+          htmlFor={`${id}-enabled`}
+        >
           <Input
             ref={first}
             id={`${id}-enabled`}
@@ -132,7 +137,7 @@ export function LangfusePanel() {
             onChange={(event) => setSecretKey(event.target.value)}
           />
         </Field>
-        <div className="settings-actions">
+        <div className="flex items-center gap-3 pt-1">
           <Button type="submit" variant="primary">
             Save
           </Button>
