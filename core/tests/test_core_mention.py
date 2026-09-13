@@ -15,7 +15,7 @@ ALL = (HUMAN, MAIN, TM, PA, GONE)
 
 
 def ids(body: str) -> tuple[int, ...]:
-    return tuple(member_id for member_id, _ in find_mention_ids(body, ALL))
+    return tuple(member_id for member_id, _, _ in find_mention_ids(body, ALL))
 
 
 def test_normalizes_whitespace_and_case_for_identity() -> None:
@@ -34,7 +34,7 @@ def test_rejects_empty_at_sign_and_overlong_names() -> None:
 
 
 def test_matches_multi_word_name_over_shorter_prefix() -> None:
-    assert ids("@Technical Manager please look") == (36,)
+    assert find_mention_ids("@Technical Manager please look", ALL) == ((36, 0, 18),)
 
 
 def test_does_not_match_when_name_is_a_prefix_of_a_longer_word() -> None:
@@ -50,13 +50,13 @@ def test_deleted_members_are_not_mentionable() -> None:
 
 
 def test_matches_case_insensitively() -> None:
-    assert ids("@product advisor") == (98,)
+    assert find_mention_ids("@product advisor", ALL) == ((98, 0, 16),)
 
 
 def test_multiline_body_reports_positions_in_original_text() -> None:
     body = "first line\n\nsecond @Main here"
     found = find_mention_ids(body, ALL)
-    assert found == ((13, 19),)
+    assert found == ((13, 19, 5),)
     assert body[19:24] == "@Main"
 
 
@@ -65,6 +65,7 @@ def test_repeated_mentions_collapse_to_one_per_member() -> None:
     assert [item.member_id for item in mentions] == [13]
     assert mentions[0].discussion_id == 3
     assert mentions[0].message_id == 42
+    assert (mentions[0].position, mentions[0].length) == (0, 5)
 
 
 def test_several_distinct_members_in_one_body() -> None:

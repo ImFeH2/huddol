@@ -212,7 +212,6 @@ def test_model_can_manage_discussions_and_page_messages(world, monkeypatch) -> N
             {"action": "archive"},
             {"action": "read", "message_id": 2, "limit": 1},
             {"action": "unarchive"},
-            {"action": "delete"},
         ]
     )
     returned = []
@@ -235,10 +234,16 @@ def test_model_can_manage_discussions_and_page_messages(world, monkeypatch) -> N
             "remove_members",
             "archive",
             "unarchive",
-            "delete",
         }
         assert {"before", "after", "limit", "sender_id"} <= properties.keys()
-        assert "permanently" in definition.description
+        assert (
+            "Archive is reversible and is the only way to put a Discussion away."
+            in definition.description
+        )
+        assert (
+            "Each message lists its mentions; an @Name that is not listed there notified nobody."
+            in definition.description
+        )
         for part in messages[-1].parts:
             if isinstance(part, ToolReturnPart):
                 returned.append(part.content)
@@ -270,7 +275,6 @@ def test_model_can_manage_discussions_and_page_messages(world, monkeypatch) -> N
         "discussion.updated",
         "discussion.updated",
         "discussion.updated",
-        "discussion.deleted",
     ]
     assert emitted[-1] == "turn.finished"
     assert len(retries) == 1 and "invalid_pagination" in str(retries[0])
@@ -282,8 +286,8 @@ def test_model_can_manage_discussions_and_page_messages(world, monkeypatch) -> N
     assert returned[5]["archived"] is True
     assert [item["id"] for item in returned[6]["messages"]] == [1, 2, 3]
     assert returned[7]["archived"] is False
-    assert returned[8] == {"id": room, "deleted": True}
-    assert world.store.get_discussion(room) is None
+    assert len(returned) == 8
+    assert world.store.get_discussion(room) is not None
     assert world.history.latest_messages(MAIN) != "[]"
 
 
@@ -598,6 +602,7 @@ def test_turn_records_history_and_returns_to_idle(world) -> None:
     record = scheduler.run_turn(MAIN)
     assert record is not None
     assert record.status == "completed"
+    assert runner.requests[0].sequence == record.sequence
     assert world.store.get_member(MAIN).state == "idle"
     assert world.history.latest_messages(MAIN) == json.dumps([{"kind": "response"}])
 
@@ -853,6 +858,91 @@ def test_resident_loading_failure_preserves_history_and_returns_to_idle(
     assert "memory is unreadable" in record.error
     assert world.history.latest_messages(MAIN) == previous
     assert world.store.get_member(MAIN).state == "idle"
+
+
+def test_second_model_call_failure_keeps_saved_response_and_completed_tool_return(
+    world, monkeypatch
+) -> None:
+    from pydantic_ai import ModelMessagesTypeAdapter, models
+    from pydantic_ai.messages import (
+        ModelRequest,
+        ModelResponse,
+        ToolCallPart,
+        ToolReturnPart,
+    )
+    from pydantic_ai.models.function import FunctionModel
+
+    from huddol.adapters.model.runner import PydanticModelRunner
+
+    room = mention(world)
+    monkeypatch.setattr(models, "ALLOW_MODEL_REQUESTS", False)
+    world.settings.set_settings(
+        "model",
+        {"base_url": "https://example.invalid", "api_key": "unused", "model": "local"},
+    )
+    persisted = []
+    save = world.history.save_progress
+    calls = 0
+
+    def save_progress(agent_id, sequence, raw):
+        persisted.append(raw)
+        save(agent_id, sequence, raw)
+        run = world.history.runs(agent_id)[0]
+        assert run.sequence == sequence
+        assert run.status == "running" and run.completed_at is None
+        assert run.messages_json == raw
+
+    def respond(messages, info):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            return ModelResponse(
+                parts=[
+                    ToolCallPart(
+                        "discussion",
+                        {"action": "read", "discussion_id": room},
+                        tool_call_id="read",
+                    )
+                ]
+            )
+        assert len(persisted) == 1
+        assert world.history.latest_messages(MAIN) == persisted[0]
+        raise RuntimeError("second call failed")
+
+    monkeypatch.setattr(world.history, "save_progress", save_progress)
+    runner = PydanticModelRunner(
+        world.settings, build_model=lambda config: FunctionModel(respond)
+    )
+    scheduler = Scheduler(world, runner)
+    record = scheduler.run_turn(MAIN)
+    assert record is not None and record.status == "failed"
+    assert record.error == "RuntimeError: second call failed"
+    assert calls == 2 and len(persisted) == 1
+    saved = ModelMessagesTypeAdapter.validate_json(persisted[0])
+    run = world.history.runs(MAIN)[0]
+    captured = ModelMessagesTypeAdapter.validate_json(run.messages_json)
+    assert captured[:-1] == saved
+    assert isinstance(captured[-1], ModelRequest)
+    assert len(captured[-1].parts) == 1
+    returned = captured[-1].parts[0]
+    assert isinstance(returned, ToolReturnPart)
+    assert returned.tool_call_id == "read"
+    assert returned.content["messages"][0]["body"] == "@Main please help"
+    assert world.history.latest_messages(MAIN) == run.messages_json
+
+
+def test_scheduler_resumes_interrupted_progress(world) -> None:
+    mention(world)
+    run = world.history.start_run(MAIN)
+    partial = '[{"text":"partial"}]'
+    world.history.save_progress(MAIN, run.sequence, partial)
+    assert world.history.mark_interrupted() == 1
+    runner = RecordingRunner()
+    record = Scheduler(world, runner).run_turn(MAIN)
+    assert record is not None and record.status == "completed"
+    assert runner.requests[0].history_json == partial
+    assert runner.requests[0].sequence == run.sequence + 1
+    assert world.history.runs(MAIN)[1].messages_json == partial
 
 
 def test_a_failing_turn_is_recorded_and_the_agent_recovers(world) -> None:

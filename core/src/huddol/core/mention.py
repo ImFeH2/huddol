@@ -15,6 +15,7 @@ class Mention:
     message_id: int
     member_id: int
     position: int
+    length: int
 
 
 def _candidates(members: Iterable[Member]) -> list[tuple[str, int]]:
@@ -27,9 +28,9 @@ def _candidates(members: Iterable[Member]) -> list[tuple[str, int]]:
 
 def find_mention_ids(
     body: str, members: Iterable[Member]
-) -> tuple[tuple[int, int], ...]:
+) -> tuple[tuple[int, int, int], ...]:
     entries = _candidates(members)
-    found: list[tuple[int, int]] = []
+    found: list[tuple[int, int, int]] = []
     index = 0
     length = len(body)
     while index < length:
@@ -47,7 +48,7 @@ def find_mention_ids(
                 continue
             if end < length and _TRAILING_WORD.match(body[end]):
                 continue
-            found.append((member_id, at))
+            found.append((member_id, at, end - at))
             index = end
             matched = True
             break
@@ -66,11 +67,11 @@ def build_mentions(
 ) -> tuple[Mention, ...]:
     seen: set[int] = set() if sender_id is None else {sender_id}
     mentions: list[Mention] = []
-    for member_id, position in find_mention_ids(body, members):
+    for member_id, position, length in find_mention_ids(body, members):
         if member_id in seen:
             continue
         seen.add(member_id)
-        mentions.append(Mention(discussion_id, message_id, member_id, position))
+        mentions.append(Mention(discussion_id, message_id, member_id, position, length))
     return tuple(mentions)
 
 

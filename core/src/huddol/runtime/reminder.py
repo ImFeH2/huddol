@@ -159,6 +159,7 @@ def render_resident(
 @dataclass(frozen=True)
 class TurnRequest:
     agent_id: int
+    sequence: int
     agent_name: str
     prompt: str
     reminder: Reminder | None
@@ -166,6 +167,7 @@ class TurnRequest:
     resident: str
     environment: Callable[[], str | None]
     ephemeral: Callable[[], str]
+    persist: Callable[[str], None]
 
 
 @dataclass(frozen=True)

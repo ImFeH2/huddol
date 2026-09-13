@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -137,10 +138,45 @@ def test_windows_scope_messages_but_keep_history_usage_and_effects(agent_store) 
     assert reopened.search_runs(AGENT, "old")[0].sequence == first.sequence
 
 
+@pytest.mark.parametrize("finished", [False, True])
+def test_save_progress_updates_only_the_target_runs_messages(
+    agent_store, finished
+) -> None:
+    first = agent_store.start_run(AGENT)
+    other = agent_store.start_run(AGENT + 1)
+    if finished:
+        agent_store.finish_run(
+            AGENT,
+            first.sequence,
+            status="failed",
+            messages_json="[]",
+            usage_json='{"requests":1}',
+            error="failure",
+        )
+    original = agent_store.runs(AGENT)[0]
+    second = agent_store.start_run(AGENT)
+    for messages in ('[{"text":"first"}]', '[{"text":"second"}]'):
+        agent_store.save_progress(AGENT, first.sequence, messages)
+        assert agent_store.runs(AGENT) == (
+            second,
+            replace(original, messages_json=messages),
+        )
+        assert agent_store.runs(AGENT + 1) == (other,)
+
+
 def test_unfinished_runs_are_marked_interrupted(agent_store: SqliteAgentStore) -> None:
-    agent_store.start_run(AGENT)
+    prior = agent_store.start_run(AGENT)
+    agent_store.finish_run(
+        AGENT, prior.sequence, status="completed", messages_json='[{"text":"old"}]'
+    )
+    run = agent_store.start_run(AGENT)
+    partial = '[{"text":"partial"}]'
+    agent_store.save_progress(AGENT, run.sequence, partial)
     assert agent_store.mark_interrupted() == 1
     assert agent_store.runs(AGENT)[0].status == "interrupted"
+    assert agent_store.runs(AGENT)[0].messages_json == partial
+    agent_store.start_run(AGENT)
+    assert agent_store.latest_messages(AGENT) == partial
 
 
 def test_history_search_finds_runs_by_content(agent_store: SqliteAgentStore) -> None:

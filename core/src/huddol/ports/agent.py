@@ -67,6 +67,10 @@ class HistoryStore(Protocol):
         self, agent_id: int, keys: Sequence[tuple[int, int]]
     ) -> frozenset[int]: ...
 
+    def save_progress(
+        self, agent_id: int, sequence: int, messages_json: str
+    ) -> None: ...
+
     def finish_run(
         self,
         agent_id: int,

@@ -1,13 +1,17 @@
 from __future__ import annotations
 
 import random
+import sqlite3
+from contextlib import closing
 from pathlib import Path
 
 import pytest
 
 from huddol.adapters.sqlite.store import SqliteStore
+from huddol.core.discussion import MessageMention
 from huddol.core.mention import Mention
 from huddol.core.pending import Ack, ack_keys, pending_for
+from huddol.ports.store import OrganizationStore
 
 
 @pytest.fixture
@@ -28,7 +32,7 @@ def reference_pending(
     for discussion in discussions.values():
         for message_id, members in store.mentions_by_message(discussion.id).items():
             for other in members:
-                mentions.append(Mention(discussion.id, message_id, other, 0))
+                mentions.append(Mention(discussion.id, message_id, other, 0, 0))
         for row in store._db.execute(
             "SELECT message_id, member_id FROM acks WHERE discussion_id = ?",
             (discussion.id,),
@@ -124,9 +128,9 @@ def test_removing_a_member_clears_pending_without_touching_acks(
     assert [item.message_id for item in store.pending(agent.id)] == [2]
 
 
-@pytest.mark.parametrize("delete_all", [False, True])
-def test_discussion_ids_survive_deletion_and_restart(
-    tmp_path: Path, delete_all: bool
+@pytest.mark.parametrize("archive_all", [False, True])
+def test_discussion_ids_survive_archiving_and_restart(
+    tmp_path: Path, archive_all: bool
 ) -> None:
     path = tmp_path / "ids.sqlite3"
     initial = SqliteStore(path)
@@ -137,8 +141,8 @@ def test_discussion_ids_survive_deletion_and_restart(
             for index in range(3)
         ]
         assert [room.id for room in rooms] == [1, 2, 3]
-        for room in rooms if delete_all else rooms[-1:]:
-            initial.delete_discussion(room.id)
+        for room in rooms if archive_all else rooms[-1:]:
+            initial.set_archived(room.id, True)
     finally:
         initial.close()
     reopened = SqliteStore(path)
@@ -148,7 +152,7 @@ def test_discussion_ids_survive_deletion_and_restart(
         reopened.close()
 
 
-def test_existing_discussions_initialize_the_counter_before_deletion(
+def test_existing_discussions_initialize_the_counter(
     tmp_path: Path,
 ) -> None:
     path = tmp_path / "existing.sqlite3"
@@ -172,7 +176,7 @@ def test_existing_discussions_initialize_the_counter_before_deletion(
             (7, "Keep", True),
         ]
         assert upgraded.messages(42) == (message,)
-        upgraded.delete_discussion(42)
+        upgraded.set_archived(42, True)
         assert upgraded.create_discussion("Next", [human.id]).id == 43
         assert upgraded.get_discussion(7) == rooms[1]
     finally:
@@ -182,8 +186,6 @@ def test_existing_discussions_initialize_the_counter_before_deletion(
 def test_failed_discussion_creation_rolls_back_the_allocation(
     store: SqliteStore,
 ) -> None:
-    import sqlite3
-
     human = store.create_member("human", "You")
     first = store.create_discussion("First", [human.id])
     with pytest.raises(sqlite3.IntegrityError):
@@ -227,14 +229,23 @@ def test_concurrent_discussion_creation_allocates_unique_ids(
         shared.close()
 
 
-def test_deleting_a_discussion_leaves_no_pending(store: SqliteStore) -> None:
+def test_archiving_a_discussion_preserves_messages_and_mentions(
+    store: SqliteStore,
+) -> None:
     human = store.create_member("human", "You")
     agent = store.create_member("agent", "Main")
     room = store.create_discussion("topic", [human.id, agent.id])
     store.append_message(room.id, human.id, "@Main hello")
     assert len(store.pending(agent.id)) == 1
-    store.delete_discussion(room.id)
+    messages = store.messages(room.id)
+    pending = store.pending(agent.id)
+    store.set_archived(room.id, True)
     assert store.pending(agent.id) == ()
+    assert store.messages(room.id) == messages
+    store.set_archived(room.id, False)
+    assert store.pending(agent.id) == pending
+    assert not hasattr(store, "delete_discussion")
+    assert not hasattr(OrganizationStore, "delete_discussion")
 
 
 def test_message_ids_restart_per_discussion(store: SqliteStore) -> None:
@@ -301,3 +312,81 @@ def test_the_connection_survives_concurrent_threads(store: SqliteStore) -> None:
 
     assert failures == []
     assert store.message_count(room.id) == 40
+
+
+def test_mentions_round_trip_in_two_queries_and_stay_with_their_message(
+    store: SqliteStore, monkeypatch
+) -> None:
+    human = store.create_member("human", "You")
+    main = store.create_member("agent", "Main")
+    manager = store.create_member("agent", "Technical Manager")
+    rooms = [
+        store.create_discussion(topic, [human.id, main.id, manager.id])
+        for topic in ("A", "B")
+    ]
+    first, mentions = store.append_message(
+        rooms[0].id, human.id, "Hi @Technical Manager and @mAiN"
+    )
+    second, _ = store.append_message(rooms[1].id, human.id, "Hi @Main")
+    plain, _ = store.append_message(rooms[0].id, human.id, "Hi nobody")
+    assert first.mentions == (
+        MessageMention(manager.id, 3, 18),
+        MessageMention(main.id, 26, 5),
+    )
+    assert [(item.member_id, item.position, item.length) for item in mentions] == [
+        (manager.id, 3, 18),
+        (main.id, 26, 5),
+    ]
+    assert store.pending(manager.id) == (mentions[0],)
+    store.rename_member(manager.id, "Renamed")
+    store.delete_member(main.id)
+    calls = []
+    execute = store._db.execute
+
+    def track(sql, parameters=()):
+        calls.append(sql)
+        return execute(sql, parameters)
+
+    monkeypatch.setattr(store._db, "execute", track)
+    for params, expected in (
+        ({}, (first, plain)),
+        ({"limit": 1, "latest": True}, (plain,)),
+        ({"before": 2}, (first,)),
+        ({"after": 1}, (plain,)),
+    ):
+        calls.clear()
+        assert store.messages(rooms[0].id, **params) == expected
+        assert len(calls) == 2
+    calls.clear()
+    assert store.search_messages("Hi") == (first, plain, second)
+    assert len(calls) == 2
+
+
+def test_old_mentions_table_gains_length_without_reparsing(tmp_path: Path) -> None:
+    path = tmp_path / "old.sqlite3"
+    with closing(sqlite3.connect(path)) as db:
+        db.execute(
+            "CREATE TABLE mentions (discussion_id INTEGER NOT NULL, message_id INTEGER NOT NULL,"
+            " member_id INTEGER NOT NULL, position INTEGER NOT NULL,"
+            " PRIMARY KEY (discussion_id, message_id, member_id))"
+        )
+        db.execute("INSERT INTO mentions VALUES (1, 1, 2, 3)")
+        db.commit()
+    for _ in range(2):
+        store = SqliteStore(path)
+        try:
+            columns = {
+                row["name"]: row
+                for row in store._db.execute("PRAGMA table_info(mentions)")
+            }
+            assert columns["length"]["notnull"] == 1
+            assert columns["length"]["dflt_value"] == "0"
+            assert tuple(store._db.execute("SELECT * FROM mentions")[0]) == (
+                1,
+                1,
+                2,
+                3,
+                0,
+            )
+        finally:
+            store.close()

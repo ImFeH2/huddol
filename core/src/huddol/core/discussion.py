@@ -9,6 +9,13 @@ MAX_BODY_LENGTH = 100_000
 
 
 @dataclass(frozen=True)
+class MessageMention:
+    member_id: int
+    position: int
+    length: int
+
+
+@dataclass(frozen=True)
 class Message:
     discussion_id: int
     id: int
@@ -16,6 +23,7 @@ class Message:
     sender_name: str
     body: str
     created_at: str
+    mentions: tuple[MessageMention, ...] = ()
 
 
 @dataclass(frozen=True)

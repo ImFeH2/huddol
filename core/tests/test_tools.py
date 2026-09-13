@@ -324,13 +324,10 @@ def test_discussion_management_preserves_history_and_pending(world, actor_id) ->
     actor.archive_discussion(room, False)
     restored = actor.read_discussion(room)
     assert (restored["awaiting_ack"], restored["archived"]) == ([2], False)
-    actor.delete_discussion(room)
-    assert world.store.pending(actor_id) == ()
-    assert world.store.messages(room) == ()
-    assert world.store.acknowledged(room, actor_id) == ()
+    assert not hasattr(actor, "delete_discussion")
+    assert world.store.message_count(room) == 2
+    assert world.store.acknowledged(room, actor_id) == (1,)
     assert world.store.get_discussion(untouched) is not None
-    with pytest.raises(DomainError, match="does not exist"):
-        actor.read_discussion(room)
 
 
 @pytest.mark.parametrize(
@@ -341,7 +338,6 @@ def test_discussion_management_preserves_history_and_pending(world, actor_id) ->
         ("set_discussion_members", {"member_ids": [HUMAN]}, "discussion.set_members"),
         ("archive_discussion", {}, "discussion.archive"),
         ("archive_discussion", {"archived": False}, "discussion.unarchive"),
-        ("delete_discussion", {}, "discussion.delete"),
     ],
 )
 def test_discussion_management_is_authorized_before_mutation(
@@ -547,6 +543,67 @@ def test_running_agents_cannot_be_deleted(world) -> None:
 
     world.store.set_agent_state(MAIN, "paused")
     assert tools_for(world, HUMAN).delete_agent(MAIN)["deleted"] is True
+
+
+def test_deleting_an_agent_preserves_all_its_data(world) -> None:
+    human = tools_for(world, HUMAN)
+    agent = tools_for(world, MAIN)
+    rooms = [human.create_discussion(topic, [MAIN])["id"] for topic in ("A", "B")]
+    agent.send_message(rooms[0], "@You keep this")
+    human.send_message(rooms[0], "@Main review")
+    agent.read_discussion(rooms[0])
+    agent.ack(rooms[0], [2])
+    agent.add_todo("Keep work", "Keep details")
+    agent.write_memory("notes.md", "Keep notes")
+    world.history.start_run(MAIN)
+    window = world.history.reset_window(MAIN, "prepared")
+    runs = world.history.runs(MAIN)
+    todos = world.todos.list_todos(MAIN)
+    files = {
+        path.relative_to(world.memory_tree_for(MAIN).root): path.read_bytes()
+        for path in world.memory_tree_for(MAIN).root.rglob("*")
+        if path.is_file()
+    }
+    messages = world.store.messages(rooms[0])
+
+    assert human.delete_agent(MAIN) == {"id": MAIN, "deleted": True}
+
+    assert world.todos.list_todos(MAIN) == todos
+    assert world.history.runs(MAIN) == runs
+    assert world.history.window(MAIN) == window
+    assert {
+        path.relative_to(world.memory_tree_for(MAIN).root): path.read_bytes()
+        for path in world.memory_tree_for(MAIN).root.rglob("*")
+        if path.is_file()
+    } == files
+    assert world.store.messages(rooms[0]) == messages
+    assert world.store.acknowledged(rooms[0], MAIN) == (2,)
+    assert all(
+        MAIN not in world.store.get_discussion(room).member_ids for room in rooms
+    )
+    assert MAIN not in [item["id"] for item in human.list_members()]
+    assert MAIN in [item["id"] for item in human.list_members(include_deleted=True)]
+    assert world.store.get_member(MAIN).deleted
+
+
+@pytest.mark.parametrize("params", [{}, {"limit": 1}, {"message_id": 1}])
+def test_read_and_search_return_stored_mentions_not_current_names(
+    world, params
+) -> None:
+    human = tools_for(world, HUMAN)
+    room = human.create_discussion("Mentions", [MAIN])["id"]
+    body = "Hi @Other and @mAiN and @Main"
+    sent = human.send_message(room, body)
+    assert sent["mentioned"] == [MAIN]
+    expected = [{"member_id": MAIN, "position": 14, "length": 5}]
+    human.add_members(room, [OTHER])
+    human.rename_member(MAIN, "Renamed")
+    human.remove_members(room, [MAIN])
+    assert human.read_discussion(room, **params)["messages"][0]["mentions"] == expected
+    assert human.search_messages("Hi")[0]["mentions"] == expected
+    human.send_message(room, "@Renamed nobody")
+    assert human.read_discussion(room, limit=1)["messages"][0]["mentions"] == []
+    assert human.search_messages("nobody")[0]["mentions"] == []
 
 
 def test_library_conflict_returns_the_current_content(world) -> None:

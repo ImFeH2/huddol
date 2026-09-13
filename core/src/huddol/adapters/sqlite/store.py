@@ -9,7 +9,7 @@ from threading import RLock
 from types import TracebackType
 from typing import Any, Self
 
-from huddol.core.discussion import Discussion, Message
+from huddol.core.discussion import Discussion, Message, MessageMention
 from huddol.core.errors import DomainError
 from huddol.core.member import AgentState, Member, MemberType, name_key
 from huddol.core.mention import Mention, build_mentions
@@ -54,6 +54,7 @@ CREATE TABLE IF NOT EXISTS mentions (
     message_id INTEGER NOT NULL,
     member_id INTEGER NOT NULL,
     position INTEGER NOT NULL,
+    length INTEGER NOT NULL DEFAULT 0,
     PRIMARY KEY (discussion_id, message_id, member_id)
 );
 CREATE INDEX IF NOT EXISTS mentions_by_member ON mentions (member_id);
@@ -157,6 +158,12 @@ class SqliteStore:
         connection.execute("PRAGMA foreign_keys=ON")
         self._db = LockedConnection(connection)
         self._db.executescript(SCHEMA)
+        if "length" not in {
+            row["name"] for row in self._db.execute("PRAGMA table_info(mentions)")
+        }:
+            self._db.execute(
+                "ALTER TABLE mentions ADD COLUMN length INTEGER NOT NULL DEFAULT 0"
+            )
         self._db.commit()
 
     def close(self) -> None:
@@ -353,28 +360,29 @@ class SqliteStore:
                 (1 if archived else 0, discussion_id),
             )
 
-    def delete_discussion(self, discussion_id: int) -> None:
-        with self._write() as db:
-            for table in (
-                "discussion_members",
-                "messages",
-                "mentions",
-                "acks",
-                "watermarks",
-            ):
-                db.execute(
-                    f"DELETE FROM {table} WHERE discussion_id = ?", (discussion_id,)
-                )
-            db.execute("DELETE FROM discussions WHERE id = ?", (discussion_id,))
-
-    def _message(self, row: sqlite3.Row) -> Message:
-        return Message(
-            discussion_id=int(row["discussion_id"]),
-            id=int(row["id"]),
-            sender_id=int(row["sender_id"]),
-            sender_name=str(row["sender_name"]),
-            body=str(row["body"]),
-            created_at=str(row["created_at"]),
+    def _messages(self, sql: str, params: Sequence[object]) -> tuple[Message, ...]:
+        rows = self._db.execute(sql, params)
+        mentions: dict[tuple[int, int], list[MessageMention]] = {}
+        for row in self._db.execute(
+            "SELECT m.* FROM mentions m"
+            f" JOIN ({sql}) selected ON selected.discussion_id = m.discussion_id"
+            " AND selected.id = m.message_id ORDER BY m.position, m.member_id",
+            params,
+        ):
+            mentions.setdefault((row["discussion_id"], row["message_id"]), []).append(
+                MessageMention(row["member_id"], row["position"], row["length"])
+            )
+        return tuple(
+            Message(
+                discussion_id=int(row["discussion_id"]),
+                id=int(row["id"]),
+                sender_id=int(row["sender_id"]),
+                sender_name=str(row["sender_name"]),
+                body=str(row["body"]),
+                created_at=str(row["created_at"]),
+                mentions=tuple(mentions.get((row["discussion_id"], row["id"]), ())),
+            )
+            for row in rows
         )
 
     def append_message(
@@ -407,6 +415,10 @@ class SqliteStore:
             sender_name=sender.name,
             body=body,
             created_at=now(),
+            mentions=tuple(
+                MessageMention(item.member_id, item.position, item.length)
+                for item in mentions
+            ),
         )
         with self._write() as db:
             db.execute(
@@ -422,10 +434,16 @@ class SqliteStore:
                 ),
             )
             db.executemany(
-                "INSERT INTO mentions (discussion_id, message_id, member_id, position)"
-                " VALUES (?, ?, ?, ?)",
+                "INSERT INTO mentions (discussion_id, message_id, member_id, position, length)"
+                " VALUES (?, ?, ?, ?, ?)",
                 [
-                    (item.discussion_id, item.message_id, item.member_id, item.position)
+                    (
+                        item.discussion_id,
+                        item.message_id,
+                        item.member_id,
+                        item.position,
+                        item.length,
+                    )
                     for item in mentions
                 ],
             )
@@ -452,7 +470,7 @@ class SqliteStore:
         if limit is not None:
             sql += " LIMIT ?"
             params.append(limit)
-        messages = tuple(self._message(row) for row in self._db.execute(sql, params))
+        messages = self._messages(sql, params)
         return tuple(reversed(messages)) if latest else messages
 
     def message_count(self, discussion_id: int) -> int:
@@ -492,12 +510,12 @@ class SqliteStore:
             params.append(discussion_id)
         sql += " ORDER BY discussion_id, id LIMIT ?"
         params.append(limit)
-        return tuple(self._message(row) for row in self._db.execute(sql, params))
+        return self._messages(sql, params)
 
     def pending(self, member_id: int) -> tuple[Mention, ...]:
         rows = self._db.execute(
             """
-            SELECT m.discussion_id, m.message_id, m.member_id, m.position
+            SELECT m.discussion_id, m.message_id, m.member_id, m.position, m.length
             FROM mentions m
             JOIN discussion_members dm
               ON dm.discussion_id = m.discussion_id AND dm.member_id = m.member_id
@@ -518,6 +536,7 @@ class SqliteStore:
                 int(row["message_id"]),
                 int(row["member_id"]),
                 int(row["position"]),
+                int(row["length"]),
             )
             for row in rows
         )

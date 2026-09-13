@@ -156,9 +156,6 @@ class Api:
         def discussion_unarchive(params: dict[str, Any]) -> Any:
             return self._human().archive_discussion(int(params["discussion_id"]), False)
 
-        def discussion_delete(params: dict[str, Any]) -> Any:
-            return self._human().delete_discussion(int(params["discussion_id"]))
-
         def discussion_search(params: dict[str, Any]) -> Any:
             return self._human().search_messages(
                 str(params.get("query", "")),
@@ -338,7 +335,6 @@ class Api:
         register("discussion.remove_members", discussion_remove_members)
         register("discussion.archive", discussion_archive)
         register("discussion.unarchive", discussion_unarchive)
-        register("discussion.delete", discussion_delete)
         register("discussion.search", discussion_search)
         register("library.list", library_list)
         register("library.read", library_read)

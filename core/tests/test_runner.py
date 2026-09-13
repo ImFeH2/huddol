@@ -15,6 +15,7 @@ from pydantic_ai.messages import (
     ModelResponse,
     TextPart,
     ToolCallPart,
+    ToolReturnPart,
     UserPromptPart,
 )
 from pydantic_ai.models import ModelRequestParameters
@@ -23,6 +24,7 @@ from pydantic_ai.usage import RequestUsage
 
 from huddol.adapters.model.config import ModelConfig
 from huddol.adapters.model.observability import ObservabilityConfig
+from huddol.adapters.model.prompt import SYSTEM_PROMPT
 from huddol.adapters.model.runner import (
     UNAVAILABLE,
     LiveModel,
@@ -66,6 +68,7 @@ def request() -> TurnRequest:
     reminder = Reminder(2, "Main", (ReminderItem(1, "work", 1, 1, "You", False),))
     return TurnRequest(
         agent_id=2,
+        sequence=1,
         agent_name="Main",
         prompt=reminder.render(),
         reminder=reminder,
@@ -73,6 +76,7 @@ def request() -> TurnRequest:
         resident="Your MEMORY.md is empty.\n\nTodos: none\n\nenvironment A",
         environment=lambda: "environment A",
         ephemeral=lambda: "",
+        persist=lambda messages_json: None,
     )
 
 
@@ -106,6 +110,135 @@ class Builder:
         return FunctionModel(
             lambda messages, info: ModelResponse(parts=[TextPart(config.model)])
         )
+
+
+def test_prompt_does_not_warn_against_bare_numbers() -> None:
+    assert "bare number" not in SYSTEM_PROMPT
+
+
+@pytest.mark.parametrize("prior", [False, True])
+@pytest.mark.parametrize("priced", [False, True])
+def test_each_response_persists_the_complete_history_without_ephemeral(
+    settings, prior, priced
+) -> None:
+    persisted = []
+    responses = []
+    environment = "environment A"
+
+    def respond(messages, info):
+        assert len(persisted) == len(responses)
+        response = ModelResponse(
+            parts=[
+                ToolCallPart("todo", {"action": "list"}, tool_call_id="list")
+                if not responses
+                else TextPart("Done")
+            ],
+            provider_name="openai" if priced else None,
+            usage=RequestUsage(input_tokens=100, output_tokens=10),
+        )
+        responses.append(response)
+        return response
+
+    class Tools:
+        def list_todos(self):
+            nonlocal environment
+            assert len(persisted) == 1
+            environment = "environment B"
+            return [{"id": 1, "title": "Work"}]
+
+    original = request()
+    if prior:
+        previous = PydanticModelRunner(settings, build_model=Builder()).run(
+            original, None
+        )
+        original = replace(original, history_json=previous.messages_json)
+    outcome = PydanticModelRunner(
+        settings,
+        build_model=lambda config: FunctionModel(
+            respond, model_name="gpt-4o" if priced else "local"
+        ),
+    ).run(
+        replace(
+            original,
+            persist=persisted.append,
+            ephemeral=lambda: "EPHEMERAL",
+            environment=lambda: environment,
+        ),
+        Tools(),
+    )
+    assert outcome.error is None
+    assert len(persisted) == len(responses) == 2
+    first, second = [ModelMessagesTypeAdapter.validate_json(raw) for raw in persisted]
+    assert (responses[0].usage.cost is not None) == priced
+    assert first[-1] == responses[0]
+    assert first[-2].parts[0].content == original.prompt
+    assert second == ModelMessagesTypeAdapter.validate_json(outcome.messages_json)
+    assert second[: len(first)] == first
+    assert second[-1] == responses[1]
+    assert second[-2].metadata == {
+        "huddol": {"block": "durable", "environment": "environment B"}
+    }
+    assert second[-3].parts == [
+        ToolReturnPart(
+            "todo",
+            [{"id": 1, "title": "Work"}],
+            tool_call_id="list",
+            timestamp=second[-3].parts[0].timestamp,
+        )
+    ]
+    assert first[0].parts[0].content == original.resident
+    assert first[0].metadata == {
+        "huddol": {"block": "resident", "environment": "environment A"}
+    }
+    assert all("EPHEMERAL" not in raw for raw in persisted)
+    if prior:
+        history = ModelMessagesTypeAdapter.validate_json(original.history_json)
+        assert first[: len(history)] == history
+
+
+def test_persistence_errors_are_logged_without_failing_the_turn(
+    settings, caplog
+) -> None:
+    calls = []
+
+    def persist(raw):
+        calls.append(raw)
+        raise OSError("disk unavailable")
+
+    def respond(messages, info):
+        return ModelResponse(parts=[TextPart("Done")])
+
+    outcome = PydanticModelRunner(
+        settings, build_model=lambda config: FunctionModel(respond)
+    ).run(replace(request(), persist=persist), None)
+    assert outcome.error is None
+    assert calls == [outcome.messages_json]
+    assert any(
+        record.name == "huddol.model" and record.exc_info for record in caplog.records
+    )
+    assert "disk unavailable" in caplog.text
+
+
+def test_invalid_tool_responses_are_persisted_before_retry(settings) -> None:
+    persisted = []
+
+    def respond(messages, info):
+        if not persisted:
+            return ModelResponse(
+                parts=[
+                    ToolCallPart("discussion", {"action": "delete", "discussion_id": 1})
+                ]
+            )
+        return ModelResponse(parts=[TextPart("Done")])
+
+    outcome = PydanticModelRunner(
+        settings, build_model=lambda config: FunctionModel(respond)
+    ).run(replace(request(), persist=persisted.append), None)
+    assert outcome.error is None
+    assert len(persisted) == 2
+    assert '"tool-call"' in persisted[0]
+    assert '"retry-prompt"' in persisted[1]
+    assert persisted[-1] == outcome.messages_json
 
 
 def test_runs_are_unavailable_until_a_model_is_configured() -> None:

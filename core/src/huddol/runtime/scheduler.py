@@ -242,12 +242,16 @@ class Scheduler:
         discussion_ids = tuple(item.discussion_id for item in items)
         request = TurnRequest(
             agent_id=agent_id,
+            sequence=run.sequence,
             agent_name=agent_name,
             prompt=prompt,
             reminder=reminder,
             history_json=self.history.latest_messages(agent_id),
             resident="",
             environment=self.environment_facts,
+            persist=lambda messages_json: self.history.save_progress(
+                agent_id, run.sequence, messages_json
+            ),
             ephemeral=lambda: exchange_nudge(
                 self.store,
                 agent_id,

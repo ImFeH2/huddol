@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Sequence
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Any
 
@@ -127,7 +127,6 @@ class AgentTools:
                 "Pause the Agent and let its Turn finish before deleting",
             )
         self._deps.store.delete_member(agent_id)
-        self._deps.todos.clear_todos(agent_id)
         return {"id": agent_id, "deleted": True}
 
     def create_discussion(
@@ -271,6 +270,7 @@ class AgentTools:
                     "sender_name": item.sender_name,
                     "body": item.body,
                     "created_at": item.created_at,
+                    "mentions": [asdict(mention) for mention in item.mentions],
                 }
                 for item in selected
             ],
@@ -380,14 +380,6 @@ class AgentTools:
             "discussion.updated", {"id": discussion_id, "archived": archived}
         )
 
-    def delete_discussion(self, discussion_id: int) -> dict[str, Any]:
-        self._check("discussion.delete", discussion_id)
-        self._discussion(discussion_id)
-        self._deps.store.delete_discussion(discussion_id)
-        return self._changed(
-            "discussion.deleted", {"id": discussion_id, "deleted": True}
-        )
-
     def search_messages(
         self,
         query: str,
@@ -410,6 +402,7 @@ class AgentTools:
                 "id": item.id,
                 "sender_name": item.sender_name,
                 "body": item.body,
+                "mentions": [asdict(mention) for mention in item.mentions],
             }
             for item in found
             if item.discussion_id in mine

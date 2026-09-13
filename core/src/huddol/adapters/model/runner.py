@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import threading
 from collections.abc import AsyncIterator, Callable, Sequence
 from contextlib import asynccontextmanager
@@ -15,6 +16,7 @@ from pydantic_ai import (
     RunContext,
     capture_run_messages,
 )
+from pydantic_ai._cost import fill_response_cost
 from pydantic_ai.capabilities import Hooks
 from pydantic_ai.common_tools.duckduckgo import duckduckgo_search_tool
 from pydantic_ai.exceptions import ModelHTTPError
@@ -289,7 +291,8 @@ class PydanticModelRunner:
                 "do not combine it with before/after. Pagination uses exclusive message ID bounds "
                 "and a positive limit: nearest messages after the lower bound, or before the upper "
                 "bound, returned oldest first. Without bounds, limit selects the latest messages. "
-                "Archive is reversible; delete permanently removes the discussion and all its messages."
+                "Archive is reversible and is the only way to put a Discussion away. "
+                "Each message lists its mentions; an @Name that is not listed there notified nobody."
             ),
         )
         def discussion(
@@ -306,7 +309,6 @@ class PydanticModelRunner:
                 "remove_members",
                 "archive",
                 "unarchive",
-                "delete",
             ],
             discussion_id: int | None = None,
             message_id: int | None = None,
@@ -386,12 +388,6 @@ class PydanticModelRunner:
                     lambda: tools.archive_discussion(
                         _required(discussion_id, "discussion_id", action),
                         action == "archive",
-                    )
-                )
-            if action == "delete":
-                return _guard(
-                    lambda: tools.delete_discussion(
-                        _required(discussion_id, "discussion_id", action)
                     )
                 )
             raise ModelRetry(f"discussion has no action {action}")
@@ -670,6 +666,28 @@ class PydanticModelRunner:
                     ),
                 ],
             )
+
+        @hooks.on.after_model_request
+        async def persist_progress(
+            ctx: RunContext[AgentTools],
+            *,
+            request_context: ModelRequestContext,
+            response: ModelResponse,
+        ) -> ModelResponse:
+            try:
+                fill_response_cost(response)
+                request.persist(
+                    ModelMessagesTypeAdapter.dump_json(
+                        [*ctx.messages, response]
+                    ).decode("utf-8")
+                )
+            except Exception:
+                logging.getLogger("huddol.model").exception(
+                    "history persistence failed for agent %s run %s",
+                    request.agent_id,
+                    request.sequence,
+                )
+            return response
 
         counted = RunUsage()
 

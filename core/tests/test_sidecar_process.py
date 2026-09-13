@@ -298,7 +298,7 @@ def test_discussion_management_and_pagination_survive_the_pipe(tmp_path: Path) -
     store.create_discussion("hidden", [2, 3])
     for sender, body in [
         (1, "needle first"),
-        (2, "needle second"),
+        (2, "needle second @You @Other"),
         (1, "third"),
         (2, "fourth"),
     ]:
@@ -334,6 +334,10 @@ def test_discussion_management_and_pagination_survive_the_pipe(tmp_path: Path) -
         ] == [2, 3]
     assert response(frames, 4)["error"]["code"] == "invalid_pagination"
     assert [item["id"] for item in response(frames, 5)["result"]] == [2]
+    expected_mentions = [{"member_id": 1, "position": 14, "length": 4}]
+    assert response(frames, 5)["result"][0]["mentions"] == expected_mentions
+    assert response(frames, 2)["result"]["messages"][0]["mentions"] == expected_mentions
+    assert response(frames, 2)["result"]["messages"][1]["mentions"] == []
     assert [item["id"] for item in response(frames, 7)["result"]] == [2]
     assert [item["id"] for item in response(frames, 8)["result"]["messages"]] == [1, 2]
     assert response(frames, 9)["result"]["member_ids"] == [1, 3]
@@ -353,10 +357,18 @@ def test_discussion_management_and_pagination_survive_the_pipe(tmp_path: Path) -
     assert code == 0, stderr
     assert [item["id"] for item in response(frames, 1)["result"]["members"]] == [1, 3]
     assert len(response(frames, 1)["result"]["messages"]) == 4
-    assert response(frames, 2)["result"]["deleted"] is True
-    assert response(frames, 3)["error"]["code"] == "not_found"
-    assert [item["discussion_id"] for item in response(frames, 4)["result"]] == [2]
-    assert len(events(frames, "discussion.deleted")) == 1
+    assert response(frames, 2)["error"]["code"] == "unknown_method"
+    assert (
+        response(frames, 3)["result"]["messages"]
+        == response(frames, 1)["result"]["messages"]
+    )
+    assert response(frames, 3)["result"]["messages"][1]["mentions"] == expected_mentions
+    assert [item["discussion_id"] for item in response(frames, 4)["result"]] == [
+        1,
+        1,
+        2,
+    ]
+    assert events(frames, "discussion.deleted") == []
 
 
 def test_agent_settings_and_window_survive_the_pipe_and_restart(tmp_path: Path) -> None:
@@ -869,7 +881,7 @@ def test_a_missing_frontend_build_answers_503(tmp_path: Path) -> None:
         assert kernel.shutdown() == 0, kernel.stderr
 
 
-def test_discussion_ids_are_not_reused_after_deletion_or_restart(
+def test_discussion_ids_keep_increasing_after_archiving_or_restart(
     tmp_path: Path,
 ) -> None:
     data = tmp_path / "data"
@@ -877,10 +889,10 @@ def test_discussion_ids_are_not_reused_after_deletion_or_restart(
         ("organization.create_agent", {"name": "Main"}),
         ("discussion.create", {"topic": "First", "member_ids": [2]}),
         ("discussion.create", {"topic": "Second", "member_ids": [2]}),
-        ("discussion.delete", {"discussion_id": 2}),
+        ("discussion.archive", {"discussion_id": 2}),
         ("discussion.create", {"topic": "Third", "member_ids": [2]}),
-        ("discussion.delete", {"discussion_id": 1}),
-        ("discussion.delete", {"discussion_id": 3}),
+        ("discussion.archive", {"discussion_id": 1}),
+        ("discussion.archive", {"discussion_id": 3}),
     ]
     frames, code, stderr = drive(
         data,
@@ -891,8 +903,8 @@ def test_discussion_ids_are_not_reused_after_deletion_or_restart(
     )
     assert code == 0, stderr
     assert [response(frames, index)["result"]["id"] for index in (2, 3, 5)] == [1, 2, 3]
-    assert response(frames, 6)["result"]["deleted"] is True
-    assert response(frames, 7)["result"]["deleted"] is True
+    assert response(frames, 6)["result"]["archived"] is True
+    assert response(frames, 7)["result"]["archived"] is True
     frames, code, stderr = drive(
         data,
         [
@@ -906,7 +918,7 @@ def test_discussion_ids_are_not_reused_after_deletion_or_restart(
     )
     assert code == 0, stderr
     assert response(frames, 1)["result"]["id"] == 4
-    assert response(frames, 2)["error"]["code"] == "not_found"
+    assert response(frames, 2)["result"]["archived"] is True
 
 
 def test_a_full_conversation_survives_the_real_pipe(tmp_path: Path) -> None:
@@ -938,6 +950,9 @@ def test_a_full_conversation_survives_the_real_pipe(tmp_path: Path) -> None:
     assert response(frames, 3)["result"]["mentioned"] == [2]
     assert response(frames, 4)["result"][0]["topic"] == "ship it"
     assert response(frames, 5)["result"]["messages"][0]["body"] == "@Main please start"
+    assert response(frames, 5)["result"]["messages"][0]["mentions"] == [
+        {"member_id": 2, "position": 0, "length": 5}
+    ]
 
 
 def test_acknowledgement_ownership_survives_the_real_pipe(tmp_path: Path) -> None:

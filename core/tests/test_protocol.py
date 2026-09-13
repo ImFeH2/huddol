@@ -163,6 +163,16 @@ def test_unknown_methods_return_a_named_error(server) -> None:
     assert call(dispatcher, output, "nope.at.all")["error"]["code"] == "unknown_method"
 
 
+def test_discussion_delete_is_not_registered(server) -> None:
+    dispatcher, output, deps = server
+    agent = deps.store.create_member("agent", "Main")
+    room = deps.store.create_discussion("Keep", [HUMAN_ID, agent.id])
+    response = call(dispatcher, output, "discussion.delete", discussion_id=room.id)
+    assert response["error"]["code"] == "unknown_method"
+    assert deps.store.get_discussion(room.id) == room
+    assert [frame["type"] for frame in output.frames()] == ["response"]
+
+
 def test_domain_errors_become_structured_responses(server) -> None:
     dispatcher, output, _ = server
     response = call(dispatcher, output, "organization.create_agent", name="   ")
@@ -217,6 +227,9 @@ def test_full_human_flow_over_the_protocol(server) -> None:
         "result"
     ]
     assert read["messages"][0]["body"] == "@Main go"
+    assert read["messages"][0]["mentions"] == [
+        {"member_id": agent["id"], "position": 0, "length": 5}
+    ]
 
 
 def test_human_ack_and_revoke_round_trip(server) -> None:

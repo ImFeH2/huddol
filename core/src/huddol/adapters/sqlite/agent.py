@@ -195,6 +195,13 @@ class SqliteAgentStore:
             agent_id, sequence, identifier, "running", started, None, "[]", None, None
         )
 
+    def save_progress(self, agent_id: int, sequence: int, messages_json: str) -> None:
+        with self._db:
+            self._db.execute(
+                "UPDATE agent_runs SET messages_json = ? WHERE agent_id = ? AND sequence = ?",
+                (messages_json, agent_id, sequence),
+            )
+
     def finish_run(
         self,
         agent_id: int,

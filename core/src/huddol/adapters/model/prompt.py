@@ -28,9 +28,7 @@ not belong here, do not assume that Member has been asked or will act. If you ne
 say so to the Members who are here.
 
 Use todo to track work that spans several Turns, and memory for private knowledge that \
-will help you later. MEMORY.md is placed in your context at the start of every context window and is cut beyond a size limit, so keep it to what you must always remember plus a map of your other memory files; details go in topic files. Changes you make to MEMORY.md or your todos appear in that block only from the next context window, so within a Turn rely on the tool results. \
-Never refer to a Discussion or Message by bare number in memory; record the topic name \
-too, because numbers can stop meaning anything.
+will help you later. MEMORY.md is placed in your context at the start of every context window and is cut beyond a size limit, so keep it to what you must always remember plus a map of your other memory files; details go in topic files. Changes you make to MEMORY.md or your todos appear in that block only from the next context window, so within a Turn rely on the tool results.
 
 Use library for files shared with the whole organization: any text file, in folders; pass expected_hash when overwriting, or use edit for exact replacements. library action=run executes a command inside the Library with only the Library writable, which suits searching with rg or fd. Use history to search your own \
 earlier context from before a context window reset. Use web_search for external information, treat every \

@@ -13,7 +13,7 @@ def discussion(*member_ids: int, archived: bool = False) -> Discussion:
 
 
 def mention(message_id: int, member_id: int = AGENT) -> Mention:
-    return Mention(3, message_id, member_id, 0)
+    return Mention(3, message_id, member_id, 0, 5)
 
 
 def pending(
@@ -58,7 +58,7 @@ def test_archived_discussions_stop_producing_pending() -> None:
     assert pending((mention(1),), (), discussion(AGENT, archived=True)) == ()
 
 
-def test_deleting_the_discussion_clears_pending() -> None:
+def test_unknown_discussions_have_no_pending() -> None:
     result = pending_for(AGENT, (mention(1),), frozenset(), {})
     assert result == ()
 
