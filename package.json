@@ -6,9 +6,9 @@
   "type": "module",
   "packageManager": "pnpm@12.3.4",
   "scripts": {
-    "dev": "pnpm --dir app exec tauri dev",
-    "dev:release": "pnpm --dir app exec tauri dev --release",
-    "start": "pnpm build:web && uv run --project core python -m huddol",
+    "dev:app": "pnpm --dir app exec tauri dev",
+    "dev:web": "pnpm --dir web dev --host 127.0.0.1",
+    "serve": "pnpm build:web && uv run --project core python -m huddol",
     "build": "pnpm build:cli && pnpm build:app --debug --no-bundle --ci",
     "build:web": "pnpm --dir web build",
     "build:core": "node scripts/build-core.mjs",
