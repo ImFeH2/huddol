@@ -2,7 +2,7 @@
   position: fixed;
   inset: 0;
   z-index: var(--layer-overlay);
-  background: rgb(var(--gray-1100) / 0.6);
+  background: color-mix(in srgb, var(--color-gray-1100) 60%, transparent);
   animation: fade-in var(--duration-fast) var(--ease-out);
 }
 
@@ -13,12 +13,12 @@
   z-index: var(--layer-dialog);
   display: flex;
   flex-direction: column;
-  gap: var(--space-5);
+  gap: calc(var(--spacing) * 4);
   width: min(440px, calc(100vw - 48px));
-  padding: var(--space-6);
-  border: 1px solid rgb(var(--border-base));
+  padding: calc(var(--spacing) * 6);
+  border: 1px solid var(--color-line);
   border-radius: var(--radius-lg);
-  background: rgb(var(--bg-raised));
+  background: var(--color-surface-raised);
   box-shadow: var(--shadow-dialog);
   transform: translate(-50%, -50%);
   transform-origin: center;
@@ -29,7 +29,7 @@
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
-  gap: var(--space-4);
+  gap: calc(var(--spacing) * 3);
 }
 
 .dialog-title {
@@ -37,24 +37,24 @@
   overflow-wrap: anywhere;
   margin: 0;
   font-size: var(--text-md);
-  font-weight: var(--weight-semibold);
+  font-weight: var(--font-weight-semibold);
   letter-spacing: var(--tracking-title);
 }
 
 .dialog-description {
-  margin: calc(var(--space-5) * -1) 0 0;
-  color: rgb(var(--text-muted));
+  margin: calc(var(--spacing) * -4) 0 0;
+  color: var(--color-fg-muted);
   font-size: var(--text-sm);
 }
 
 .dialog-body {
   display: flex;
   flex-direction: column;
-  gap: var(--space-5);
+  gap: calc(var(--spacing) * 4);
 }
 
 .dialog-footer {
   display: flex;
   justify-content: flex-end;
-  gap: var(--space-3);
+  gap: calc(var(--spacing) * 2);
 }

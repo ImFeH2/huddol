@@ -1,11 +1,11 @@
 .toast-viewport {
   position: fixed;
-  right: var(--space-6);
-  bottom: var(--space-6);
+  right: calc(var(--spacing) * 6);
+  bottom: calc(var(--spacing) * 6);
   z-index: var(--layer-toast);
   display: flex;
   flex-direction: column;
-  gap: var(--space-3);
+  gap: calc(var(--spacing) * 2);
   width: min(360px, calc(100vw - 48px));
   margin: 0;
   padding: 0;
@@ -16,12 +16,13 @@
 .toast {
   display: flex;
   align-items: flex-start;
-  gap: var(--space-4);
-  padding: var(--space-4) var(--space-4) var(--space-4) var(--space-5);
-  border: 1px solid rgb(var(--border-base));
+  gap: calc(var(--spacing) * 3);
+  padding: calc(var(--spacing) * 3) calc(var(--spacing) * 3)
+    calc(var(--spacing) * 3) calc(var(--spacing) * 4);
+  border: 1px solid var(--color-line);
   border-radius: var(--radius-md);
-  background: rgb(var(--bg-raised));
-  color: rgb(var(--text-base));
+  background: var(--color-surface-raised);
+  color: var(--color-fg);
   font-size: var(--text-sm);
   box-shadow: var(--shadow-popover);
   transform-origin: bottom right;
@@ -52,39 +53,39 @@
   display: flex;
   flex: none;
   padding-top: 2px;
-  color: rgb(var(--text-muted));
+  color: var(--color-fg-muted);
 }
 
 .toast[data-tone="success"] .toast-icon {
-  color: rgb(var(--text-success));
+  color: var(--color-success);
 }
 
 .toast[data-tone="danger"] .toast-icon {
-  color: rgb(var(--text-danger));
+  color: var(--color-danger);
 }
 
 .toast[data-tone="info"] .toast-icon {
-  color: rgb(var(--text-primary));
+  color: var(--color-primary);
 }
 
 .toast-body {
   display: flex;
   flex: 1;
   flex-direction: column;
-  gap: var(--space-1);
+  gap: calc(var(--spacing) * 0.5);
   min-width: 0;
   padding-top: 3px;
 }
 
 .toast-title {
   margin: 0;
-  font-weight: var(--weight-medium);
+  font-weight: var(--font-weight-medium);
   line-height: var(--leading-body);
 }
 
 .toast-description {
   margin: 0;
-  color: rgb(var(--text-muted));
+  color: var(--color-fg-muted);
   font-size: var(--text-xs);
   line-height: 16px;
   overflow-wrap: anywhere;

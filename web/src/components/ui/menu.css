@@ -12,7 +12,7 @@
   border: 1px solid transparent;
   border-radius: var(--radius-sm);
   background: transparent;
-  color: rgb(var(--text-muted));
+  color: var(--color-fg-muted);
   cursor: pointer;
   transition:
     background-color var(--duration-fast) linear,
@@ -22,19 +22,19 @@
 
 .menu-trigger:hover,
 .menu-trigger[aria-expanded="true"] {
-  background: rgb(var(--bg-hover));
-  border-color: rgb(var(--border-interactive));
-  color: rgb(var(--text-base));
+  background: var(--color-surface-hover);
+  border-color: var(--color-line-interactive);
+  color: var(--color-fg);
 }
 
 .menu-list {
   position: absolute;
-  top: calc(100% + var(--space-2));
+  top: calc(100% + var(--spacing) * 1);
   z-index: var(--layer-menu);
   min-width: 168px;
-  padding: var(--space-2);
+  padding: calc(var(--spacing) * 1);
   border-radius: var(--radius-sm);
-  background: rgb(var(--bg-raised));
+  background: var(--color-surface-raised);
   box-shadow: var(--shadow-popover);
   transform-origin: top right;
   animation: pop-in var(--duration-fast) var(--ease-out);
@@ -52,14 +52,14 @@
 .menu-item {
   display: flex;
   align-items: center;
-  gap: var(--space-3);
+  gap: calc(var(--spacing) * 2);
   width: 100%;
   height: 28px;
-  padding: 0 var(--space-3);
+  padding: 0 calc(var(--spacing) * 2);
   border: 0;
   border-radius: var(--radius-xs);
   background: none;
-  color: rgb(var(--text-base));
+  color: var(--color-fg);
   font-size: var(--text-sm);
   text-align: left;
   white-space: nowrap;
@@ -71,26 +71,26 @@
 
 .menu-item:hover:not(:disabled),
 .menu-item:focus-visible {
-  background: rgb(var(--bg-hover));
+  background: var(--color-surface-hover);
 }
 
 .menu-item:disabled {
-  color: rgb(var(--text-disabled));
+  color: var(--color-fg-disabled);
   cursor: not-allowed;
 }
 
 .menu-item[data-tone="danger"] {
-  color: rgb(var(--text-danger));
+  color: var(--color-danger);
 }
 
 .menu-item[data-tone="danger"]:hover:not(:disabled) {
-  background: rgb(var(--red-500) / 0.2);
-  color: rgb(var(--red-100));
+  background: color-mix(in srgb, var(--color-red-500) 20%, transparent);
+  color: var(--color-red-100);
 }
 
 .menu-item-icon {
   display: flex;
-  color: rgb(var(--text-muted));
+  color: var(--color-fg-muted);
 }
 
 .combobox {
@@ -100,12 +100,12 @@
 }
 
 .combobox > .field {
-  padding-right: calc(26px + var(--space-4));
+  padding-right: calc(26px + var(--spacing) * 3);
 }
 
 .combobox > .icon-button {
   position: absolute;
-  right: var(--space-2);
+  right: calc(var(--spacing) * 1);
   top: 50%;
   transform: translateY(-50%);
 }
@@ -129,5 +129,5 @@
 }
 
 .combobox-panel .menu-item[data-active="true"] {
-  background: rgb(var(--bg-hover));
+  background: var(--color-surface-hover);
 }

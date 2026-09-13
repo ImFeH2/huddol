@@ -16,11 +16,11 @@ body,
 }
 
 body {
-  background: rgb(var(--bg-base));
-  color: rgb(var(--text-base));
+  background: var(--color-surface);
+  color: var(--color-fg);
   font-family: var(--font-sans);
   font-size: var(--text-sm);
-  font-weight: var(--weight-normal);
+  font-weight: var(--font-weight-normal);
   line-height: var(--leading-body);
   letter-spacing: var(--tracking-body);
   -webkit-font-smoothing: antialiased;
@@ -45,20 +45,20 @@ ol {
 
 h1 {
   font-size: var(--text-lg);
-  font-weight: var(--weight-semibold);
+  font-weight: var(--font-weight-semibold);
   line-height: var(--leading-title);
   letter-spacing: var(--tracking-title);
 }
 
 h2 {
   font-size: var(--text-md);
-  font-weight: var(--weight-semibold);
+  font-weight: var(--font-weight-semibold);
   letter-spacing: var(--tracking-title);
 }
 
 h3 {
   font-size: var(--text-sm);
-  font-weight: var(--weight-semibold);
+  font-weight: var(--font-weight-semibold);
 }
 
 button,
@@ -76,9 +76,13 @@ table {
 }
 
 a {
-  color: rgb(var(--text-primary));
+  color: var(--color-primary);
   text-decoration: underline;
-  text-decoration-color: rgb(var(--blue-500) / 0.45);
+  text-decoration-color: color-mix(
+    in srgb,
+    var(--color-blue-500) 45%,
+    transparent
+  );
   text-underline-offset: 2px;
   transition:
     color var(--duration-fast) linear,
@@ -86,8 +90,8 @@ a {
 }
 
 a:hover {
-  color: rgb(var(--blue-100));
-  text-decoration-color: rgb(var(--blue-100));
+  color: var(--color-blue-100);
+  text-decoration-color: var(--color-blue-100);
 }
 
 a:focus-visible,
@@ -95,7 +99,7 @@ button:focus-visible,
 input:focus-visible,
 textarea:focus-visible,
 [tabindex]:focus-visible {
-  outline: 2px solid rgb(var(--outline-focus));
+  outline: 2px solid var(--color-ring);
   outline-offset: 2px;
 }
 
@@ -109,14 +113,14 @@ a:focus-visible {
 }
 
 ::-webkit-scrollbar-thumb {
-  background: rgb(var(--gray-700));
+  background: var(--color-gray-700);
   border: 2px solid transparent;
   background-clip: content-box;
-  border-radius: var(--radius-pill);
+  border-radius: 9999px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: rgb(var(--gray-600));
+  background: var(--color-gray-600);
   background-clip: content-box;
 }
 
@@ -124,69 +128,14 @@ a:focus-visible {
   background: transparent;
 }
 
-@keyframes spin {
-  to {
-    transform: rotate(360deg);
-  }
-}
-
-@keyframes breathe {
-  0%,
-  100% {
-    opacity: 1;
-  }
-  50% {
-    opacity: 0.4;
-  }
-}
-
-@keyframes ping {
-  75%,
-  100% {
-    transform: scale(2.4);
-    opacity: 0;
-  }
-}
-
-@keyframes pop-in {
-  from {
-    opacity: 0;
-    transform: scale(0.96);
-  }
-  to {
-    opacity: 1;
-    transform: scale(1);
-  }
-}
-
-@keyframes fade-in {
-  from {
-    opacity: 0;
-  }
-  to {
-    opacity: 1;
-  }
-}
-
-@keyframes rise-in {
-  from {
-    opacity: 0;
-    transform: translateY(4px);
-  }
-  to {
-    opacity: 1;
-    transform: none;
-  }
-}
-
 .boot {
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: var(--space-4);
+  gap: calc(var(--spacing) * 3);
   height: 100vh;
-  background: rgb(var(--bg-base));
+  background: var(--color-surface);
 }
 
 @media (prefers-reduced-motion: reduce) {

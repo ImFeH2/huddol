@@ -263,11 +263,11 @@ export function StatusText({
 }
 
 const HUES = [
-  "var(--blue-100)",
-  "var(--green-200)",
-  "var(--yellow-200)",
-  "var(--red-100)",
-  "var(--purple-300)",
+  "var(--color-blue-100)",
+  "var(--color-green-200)",
+  "var(--color-yellow-200)",
+  "var(--color-red-100)",
+  "var(--color-purple-300)",
 ];
 
 export function hueFor(name: string): string {
@@ -298,7 +298,7 @@ export function Avatar({
     <span
       className="avatar"
       data-size={size}
-      style={{ background: `rgb(${hueFor(name)})` }}
+      style={{ background: hueFor(name) }}
       aria-hidden="true"
     >
       {initialsFor(name)}
