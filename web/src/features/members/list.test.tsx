@@ -67,15 +67,17 @@ describe("member actions", () => {
 describe("member row", () => {
   it("links an agent to its page by name alone", () => {
     const html = render(agent("idle"));
-    expect(html).toContain('class="row-link"');
-    expect(html).toContain('<span class="row-primary">Helper</span>');
-    expect(html).not.toContain("row-secondary");
+    const buttons = html.match(/<button\b[^>]*>[\s\S]*?<\/button>/g) ?? [];
+    const nameAction = buttons.find((button) => button.includes(">Helper<"));
+    expect(nameAction).toBeDefined();
+    expect(nameAction?.replace(/<[^>]*>/g, "")).toBe("Helper");
   });
 
   it("shows a human as plain text", () => {
     const html = render(human);
-    expect(html).not.toContain("row-link");
-    expect(html).toContain('<span class="member-name">You</span>');
+    const buttons = html.match(/<button\b[^>]*>[\s\S]*?<\/button>/g) ?? [];
+    expect(buttons.join("")).not.toContain(">You<");
+    expect(html).toMatch(/<span\b[^>]*>You<\/span>/);
   });
 
   it("reports the ceiling in the State column", () => {

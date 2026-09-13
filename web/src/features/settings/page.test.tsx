@@ -10,7 +10,7 @@ describe("Settings page", () => {
         <SettingsPage section="agent" />
       </RouterProvider>,
     );
-    expect(html).toContain("<h1>Settings</h1>");
+    expect(html).toMatch(/<h1\b[^>]*>Settings<\/h1>/);
     for (const label of ["Model", "Execution", "Agent", "Langfuse"]) {
       expect(html).toContain(`>${label}</button>`);
     }

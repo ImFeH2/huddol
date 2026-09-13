@@ -90,7 +90,8 @@ describe("Library tree", () => {
   it("does not link unreadable files but keeps their actions and size", () => {
     const html = render([], "image");
     expect(html).toContain("Unreadable");
-    expect(html).not.toContain('class="row-link"');
+    const buttons = html.match(/<button\b[^>]*>[\s\S]*?<\/button>/g) ?? [];
+    expect(buttons.join("")).not.toContain(">image.png<");
     expect(html).toContain('aria-label="Actions for runbooks/image.png"');
     expect(html).toContain("2.0 kB");
   });

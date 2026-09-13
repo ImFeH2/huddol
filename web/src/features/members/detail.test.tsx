@@ -139,7 +139,7 @@ describe("Memory tree", () => {
         <MemorySection agentId={2} entries={entries} />
       </TooltipProvider>,
     );
-    expect(html).toContain("<h2>Memory</h2>");
+    expect(html).toMatch(/<h2\b[^>]*>Memory<\/h2>/);
     expect(html).toContain('aria-label="Memory files"');
     expect(html).toContain('aria-expanded="false"');
     expect(html).toContain("notes");

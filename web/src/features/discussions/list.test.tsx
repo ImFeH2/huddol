@@ -28,7 +28,7 @@ describe("discussions page", () => {
         </RouterProvider>
       </TooltipProvider>,
     );
-    expect(html).toContain("<h1>Discussions</h1>");
+    expect(html).toMatch(/<h1\b[^>]*>Discussions<\/h1>/);
     expect(html).toContain('placeholder="Search messages"');
     expect(html).toContain('aria-label="Show archived"');
     expect(html).toContain('aria-pressed="false"');

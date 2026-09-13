@@ -121,7 +121,7 @@ describe("thread page", () => {
         unread: 0,
       },
     ]);
-    expect(html).toContain("<h1>Release notes</h1>");
+    expect(html).toMatch(/<h1\b[^>]*>Release notes<\/h1>/);
     expect(html).toContain('placeholder="Message Release notes"');
     expect(html).toContain('aria-label="Send · Enter"');
     expect(html).toMatch(/<textarea[^>]*rows="1"[^>]*aria-label="Message"/);
@@ -158,7 +158,7 @@ describe("thread page", () => {
           </RouterProvider>
         </TooltipProvider>,
       );
-      expect(html).toContain("<h1>Release</h1>");
+      expect(html).toMatch(/<h1\b[^>]*>Release<\/h1>/);
       const { actions } = vi.mocked(OverflowMenu).mock.calls[0][0];
       expect(actions.map((action) => action.label)).toEqual([
         "Members",
@@ -170,7 +170,7 @@ describe("thread page", () => {
 
   it("never shows a loading heading for an unlisted thread", () => {
     const html = page([]);
-    expect(html).toContain("<h1></h1>");
+    expect(html).toMatch(/<h1\b[^>]*><\/h1>/);
     expect(html).not.toContain("Loading");
     expect(html).toContain('placeholder="Message"');
   });

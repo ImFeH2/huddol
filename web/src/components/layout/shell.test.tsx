@@ -70,12 +70,12 @@ describe("Sidebar navigation", () => {
       </TooltipProvider>,
     );
     expect(html).toContain('aria-label="New Discussion"');
-    expect(html.match(/class="nav-subitem"/g)).toHaveLength(2);
+    expect(html.match(/data-nav="subitem"/g)).toHaveLength(2);
     expect(html.match(/aria-current="page"/g)).toHaveLength(1);
     expect(html).toContain('aria-current="page" data-unread="true"');
     expect(html).toContain("<i>dot</i>");
-    expect(html.match(/class="nav-sublist"/g)).toHaveLength(1);
-    expect(html).toContain('<div class="sidebar-footer"><span>Footer</span>');
+    expect(html.match(/<ul\b/g)).toHaveLength(2);
+    expect(html).toContain("<span>Footer</span>");
   });
 
   it("renders an item without children flat", () => {
@@ -89,8 +89,8 @@ describe("Sidebar navigation", () => {
         />
       </Nav>,
     );
-    expect(html).not.toContain("nav-sublist");
-    expect(html).not.toContain("nav-trailing");
+    expect(html.match(/<ul\b/g)).toHaveLength(1);
+    expect(html.match(/<button\b/g)).toHaveLength(1);
     expect(html).toContain('data-active="true"');
   });
 });
@@ -102,7 +102,7 @@ describe("PageTransition", () => {
         <main>Thread</main>
       </PageTransition>,
     );
-    expect(html).toBe('<div class="page-transition"><main>Thread</main></div>');
+    expect(html).toMatch(/<div\b[^>]*><main>Thread<\/main><\/div>/);
   });
 });
 
@@ -114,9 +114,11 @@ describe("PageHeader", () => {
         status={<Chip>Archived</Chip>}
       />,
     );
-    expect(html).toContain("<h1>Ship the release notes</h1>");
-    expect(html).toMatch(/<div[^>]*><span[^>]*>Archived<\/span><\/div>/);
-    expect(html).not.toContain("page-lede");
+    expect(html).toMatch(/<h1\b[^>]*>Ship the release notes<\/h1>/);
+    expect(html).toMatch(
+      /<\/h1><div\b[^>]*><span\b[^>]*>Archived<\/span><\/div>/,
+    );
+    expect(html).not.toContain("<p");
   });
 
   it("renders an array of crumbs with separators and only ancestors clickable", () => {
@@ -160,8 +162,8 @@ describe("PageHeader", () => {
   });
 
   it("renders no status slot without state", () => {
-    expect(renderToStaticMarkup(<PageHeader title="Members" />)).not.toContain(
-      "page-status",
+    expect(renderToStaticMarkup(<PageHeader title="Members" />)).toMatch(
+      /<h1\b[^>]*>Members<\/h1><\/div>/,
     );
   });
 });
