@@ -10,7 +10,12 @@ from huddol.adapters.execution.manager import ExecutionManager
 from huddol.adapters.files.tree import MarkdownTree
 from huddol.adapters.sqlite.agent import SqliteAgentStore
 from huddol.adapters.sqlite.store import SqliteStore
-from huddol.runtime.reminder import TurnOutcome, TurnRequest, build_reminder
+from huddol.runtime.reminder import (
+    TurnOutcome,
+    TurnRequest,
+    build_reminder,
+    render_resident,
+)
 from huddol.runtime.scheduler import Scheduler
 from huddol.tools import AgentTools, Dependencies
 
@@ -79,7 +84,8 @@ def test_unavailable_execution_does_not_disable_business_tools(
     world.execution = ExecutionManager(settings={"environment": {"kind": "invalid"}})
 
     def respond(request, tools):
-        assert "Commands and file editing are unavailable" in request.runtime_context
+        assert request.resident == "Your MEMORY.md is empty.\n\nTodos: none"
+        assert request.environment() is None
         assert tools.list_members()
         tools.send_message(room, "Business tools still work")
         with pytest.raises(DomainError):
@@ -126,7 +132,6 @@ def test_model_discussion_list_defaults_to_twenty(world, monkeypatch) -> None:
     )
     from pydantic_ai.models.function import FunctionModel
 
-    from huddol.adapters.model.config import ModelConfig
     from huddol.adapters.model.runner import PydanticModelRunner
 
     for day in range(1, 26):
@@ -160,12 +165,12 @@ def test_model_discussion_list_defaults_to_twenty(world, monkeypatch) -> None:
         )
 
     monkeypatch.setattr(models, "ALLOW_MODEL_REQUESTS", False)
-    monkeypatch.setattr(
-        "huddol.adapters.model.runner.build_model",
-        lambda config: FunctionModel(respond),
+    world.settings.set_settings(
+        "model",
+        {"base_url": "https://example.invalid", "api_key": "unused", "model": "local"},
     )
     runner = PydanticModelRunner(
-        ModelConfig("openai", "https://example.invalid", "unused", "local")
+        world.settings, build_model=lambda config: FunctionModel(respond)
     )
     record = Scheduler(world, runner).run_turn(MAIN)
     assert record is not None and record.status == "completed", record
@@ -188,7 +193,6 @@ def test_model_can_manage_discussions_and_page_messages(world, monkeypatch) -> N
     )
     from pydantic_ai.models.function import FunctionModel
 
-    from huddol.adapters.model.config import ModelConfig
     from huddol.adapters.model.runner import PydanticModelRunner
 
     room = mention(world, "@Main review this")
@@ -245,12 +249,12 @@ def test_model_can_manage_discussions_and_page_messages(world, monkeypatch) -> N
         )
 
     monkeypatch.setattr(models, "ALLOW_MODEL_REQUESTS", False)
-    monkeypatch.setattr(
-        "huddol.adapters.model.runner.build_model",
-        lambda config: FunctionModel(respond),
+    world.settings.set_settings(
+        "model",
+        {"base_url": "https://example.invalid", "api_key": "unused", "model": "local"},
     )
     runner = PydanticModelRunner(
-        ModelConfig("openai", "https://example.invalid", "unused", "local")
+        world.settings, build_model=lambda config: FunctionModel(respond)
     )
     emitted = []
     record = Scheduler(
@@ -303,20 +307,19 @@ def test_discussion_notifications_do_not_depend_on_the_caller_type(
     ]
 
 
-def test_compaction_setting_applies_to_the_next_runner(world, monkeypatch) -> None:
+def test_lowering_compaction_threshold_resets_history_on_the_next_turn(
+    world, monkeypatch
+) -> None:
 
     from pydantic_ai import ModelMessagesTypeAdapter, models
     from pydantic_ai.messages import (
-        ModelRequest,
         ModelResponse,
         TextPart,
-        UserPromptPart,
     )
     from pydantic_ai.models.function import FunctionModel
 
     from huddol.adapters.jsonl.api import Api
     from huddol.adapters.jsonl.protocol import Dispatcher, parse
-    from huddol.adapters.model.config import ModelConfig
     from huddol.adapters.model.runner import PydanticModelRunner
 
     mention(world)
@@ -336,14 +339,15 @@ def test_compaction_setting_applies_to_the_next_runner(world, monkeypatch) -> No
         return ModelResponse(parts=[TextPart("Done")])
 
     monkeypatch.setattr(models, "ALLOW_MODEL_REQUESTS", False)
-    monkeypatch.setattr(
-        "huddol.adapters.model.runner.build_model",
-        lambda config: FunctionModel(respond),
+    running = PydanticModelRunner(
+        world.settings, build_model=lambda config: FunctionModel(respond)
     )
-    config = ModelConfig.restore(world.settings.get_settings("model"))
-    assert config is not None
-    running = PydanticModelRunner(config)
     scheduler = Scheduler(world, running)
+    first = scheduler.run_turn(MAIN)
+    assert first is not None and first.status == "completed"
+    second = scheduler.run_turn(MAIN)
+    assert second is not None and second.status == "completed"
+    assert received == [1, 3]
     output: list[dict] = []
     dispatcher = Dispatcher()
     Api(scheduler, dispatcher)
@@ -359,27 +363,17 @@ def test_compaction_setting_applies_to_the_next_runner(world, monkeypatch) -> No
     assert update is not None
     dispatcher.handle(update, output.append)
     assert output[-1]["result"]["compaction_threshold"] == 1
-    history = []
-    for _ in range(8):
-        history.extend(
-            [
-                ModelRequest(parts=[UserPromptPart("Past request")]),
-                ModelResponse(parts=[TextPart("Past response")]),
-            ]
-        )
     reminder = build_reminder(world.store, world.history, MAIN, "Main")
     assert reminder is not None
-    request = TurnRequest(
-        reminder=reminder,
-        history_json=ModelMessagesTypeAdapter.dump_json(history).decode(),
-        runtime_context="",
-    )
-    assert running.run(request, scheduler.tools_for(MAIN)).error is None
-    config = ModelConfig.restore(world.settings.get_settings("model"))
-    assert config is not None
-    restarted = PydanticModelRunner(config)
-    assert restarted.run(request, scheduler.tools_for(MAIN)).error is None
-    assert received == [17, 9]
+    third = scheduler.run_turn(MAIN)
+    assert third is not None and third.status == "completed"
+    assert received == [1, 3, 1]
+    saved = ModelMessagesTypeAdapter.validate_json(world.history.latest_messages(MAIN))
+    assert len(saved) == 3
+    assert saved[0].parts[0].content == scheduler.resident_block(MAIN)
+    assert saved[0].metadata["huddol"]["block"] == "resident"
+    assert saved[1].parts[0].content == reminder.render()
+    assert saved[2].parts[0].content == "Done"
 
 
 def test_no_reminder_without_pending_mentions(world) -> None:
@@ -398,7 +392,7 @@ def test_turn_records_history_and_returns_to_idle(world) -> None:
 
 
 @pytest.mark.parametrize("fail", [False, True])
-def test_runtime_context_is_not_persisted_into_history(
+def test_resident_is_persisted_and_stays_unchanged_until_a_reset(
     world, monkeypatch, fail
 ) -> None:
     from pydantic_ai import ModelMessagesTypeAdapter, models
@@ -411,7 +405,6 @@ def test_runtime_context_is_not_persisted_into_history(
     )
     from pydantic_ai.models.function import FunctionModel
 
-    from huddol.adapters.model.config import ModelConfig
     from huddol.adapters.model.runner import PydanticModelRunner
 
     room = mention(world, "@Main keep the discussion text")
@@ -434,12 +427,12 @@ def test_runtime_context_is_not_persisted_into_history(
         )
 
     monkeypatch.setattr(models, "ALLOW_MODEL_REQUESTS", False)
-    monkeypatch.setattr(
-        "huddol.adapters.model.runner.build_model",
-        lambda config: FunctionModel(respond),
+    world.settings.set_settings(
+        "model",
+        {"base_url": "https://example.invalid", "api_key": "unused", "model": "local"},
     )
     runner = PydanticModelRunner(
-        ModelConfig("openai", "https://example.invalid", "unused", "local")
+        world.settings, build_model=lambda config: FunctionModel(respond)
     )
     scheduler = Scheduler(world, runner)
     tools = scheduler.tools_for(MAIN)
@@ -463,14 +456,13 @@ def test_runtime_context_is_not_persisted_into_history(
         assert record.status == ("failed" if fail else "completed")
         assert len(received) == start + 2
         for request in received[start:]:
-            assert f"MEMORY_STATE_{state}" in request
-            assert f"TASK_STATE_{state}" in request
-            if state == "NEW":
-                assert "MEMORY_STATE_OLD" not in request
-                assert "TASK_STATE_OLD" not in request
+            assert "MEMORY_STATE_OLD" in request
+            assert "TASK_STATE_OLD" in request
+            assert "MEMORY_STATE_NEW" not in request
+            assert "TASK_STATE_NEW" not in request
         saved = world.history.latest_messages(MAIN)
-        assert "MEMORY_STATE_" not in saved
-        assert "TASK_STATE_" not in saved
+        assert "MEMORY_STATE_OLD" in saved
+        assert "TASK_STATE_OLD" in saved
         messages = ModelMessagesTypeAdapter.validate_json(saved)
         prompts = [
             part.content
@@ -478,7 +470,7 @@ def test_runtime_context_is_not_persisted_into_history(
             for part in message.parts
             if isinstance(part, UserPromptPart)
         ]
-        assert len(prompts) == turn
+        assert len(prompts) == turn + 1
         assert prompts[-1] == reminder.render()
         assert "@Main keep the discussion text" in saved
         assert (
@@ -500,9 +492,19 @@ def test_runtime_context_is_not_persisted_into_history(
         if not fail:
             assert "Keep the model response" in saved
 
+    world.settings.set_settings(
+        "model", {**world.settings.get_settings("model"), "compaction_threshold": 1}
+    )
+    record = scheduler.run_turn(MAIN)
+    assert record is not None and record.status == ("failed" if fail else "completed")
+    saved = world.history.latest_messages(MAIN)
+    assert "MEMORY_STATE_NEW" in saved and "TASK_STATE_NEW" in saved
+    assert "MEMORY_STATE_OLD" not in saved and "TASK_STATE_OLD" not in saved
+    assert saved.count('"block":"resident"') == 1
+
 
 @pytest.mark.parametrize("threshold", [1, 400_000])
-def test_runtime_context_removal_preserves_existing_history(
+def test_history_is_preserved_or_reset_without_rewriting_old_prompts(
     world, monkeypatch, threshold: int
 ) -> None:
     from pydantic_ai import ModelMessagesTypeAdapter, models
@@ -514,24 +516,29 @@ def test_runtime_context_removal_preserves_existing_history(
     )
     from pydantic_ai.models.function import FunctionModel
 
-    from huddol.adapters.model.config import ModelConfig
     from huddol.adapters.model.runner import PydanticModelRunner
 
-    room = mention(world)
+    mention(world)
     monkeypatch.setattr(models, "ALLOW_MODEL_REQUESTS", False)
-    monkeypatch.setattr(
-        "huddol.adapters.model.runner.build_model",
-        lambda config: FunctionModel(
-            lambda messages, info: ModelResponse(parts=[TextPart("New response")])
-        ),
+    world.settings.set_settings(
+        "model",
+        {
+            "base_url": "https://example.invalid",
+            "api_key": "unused",
+            "model": "local",
+            "compaction_threshold": threshold,
+        },
     )
     runner = PydanticModelRunner(
-        ModelConfig("openai", "https://example.invalid", "unused", "local", threshold)
+        world.settings,
+        build_model=lambda config: FunctionModel(
+            lambda messages, info: ModelResponse(parts=[TextPart("New response")])
+        ),
     )
     scheduler = Scheduler(world, runner)
     reminder = build_reminder(world.store, world.history, MAIN, "Main")
     assert reminder is not None
-    prompt = f"{reminder.render()}\n\n{scheduler.runtime_context(MAIN, (room,))}"
+    prompt = f"{reminder.render()}\n\n{scheduler.resident_block(MAIN)}"
     prior = []
     for index in range(6):
         prior.extend(
@@ -550,14 +557,24 @@ def test_runtime_context_removal_preserves_existing_history(
 
     assert record is not None and record.status == "completed"
     saved = ModelMessagesTypeAdapter.validate_json(world.history.latest_messages(MAIN))
-    retained = prior[-8:] if threshold == 1 else prior
-    assert saved[: len(retained)] == retained
-    assert saved[-2].parts[0].content == reminder.render()
+    if threshold == 1:
+        assert len(saved) == 3
+        assert saved[0].parts[0].content == scheduler.resident_block(MAIN)
+    else:
+        assert saved[: len(prior)] == prior
+        assert saved[-2].metadata == {
+            "huddol": {"block": "durable", "environment": scheduler.environment_facts()}
+        }
+    assert (
+        saved[1 if threshold == 1 else len(prior)].parts[0].content == reminder.render()
+    )
     assert saved[-1].parts[0].content == "New response"
     assert world.history.runs(MAIN)[1].messages_json == original
 
 
-def test_runtime_context_carries_memory_and_todo_state(world, tmp_path: Path) -> None:
+def test_resident_carries_memory_todo_details_and_environment(
+    world, tmp_path: Path
+) -> None:
     mention(world)
     MarkdownTree(world.memory_tree_for(MAIN).root).write(
         "MEMORY.md", "- prior knowledge"
@@ -565,14 +582,44 @@ def test_runtime_context_carries_memory_and_todo_state(world, tmp_path: Path) ->
     world.todos.add_todo(MAIN, "unfinished work", "detail")
     runner = RecordingRunner()
     Scheduler(world, runner).run_turn(MAIN)
-    context = runner.requests[0].runtime_context
-    assert context.startswith(
+    context = runner.requests[0].resident
+    assert context == (
+        "Your MEMORY.md:\n- prior knowledge\n\n"
+        "Todos:\n- [ ] 1. unfinished work\n  detail\n\n"
         f"Execution environment: native ({sys.platform})\n"
-        f"Writable directories:\n- {tmp_path}\n\n"
+        f"Writable directories:\n- {tmp_path}"
     )
-    assert str(tmp_path / "agents" / str(MAIN)) not in context
-    assert "prior knowledge" in context
-    assert "unfinished work" in context
+
+
+@pytest.mark.parametrize("environment", [None, "environment facts"])
+@pytest.mark.parametrize("memory", ["", "remember this"])
+def test_render_resident_orders_only_the_requested_blocks(memory, environment) -> None:
+    expected = (
+        "Your MEMORY.md:\nremember this" if memory else "Your MEMORY.md is empty."
+    )
+    expected += "\n\nTodos: none"
+    if environment is not None:
+        expected += "\n\nenvironment facts"
+    assert render_resident(memory, "Todos: none", environment) == expected
+
+
+def test_resident_loading_failure_preserves_history_and_returns_to_idle(
+    world, monkeypatch
+) -> None:
+    mention(world)
+    scheduler = Scheduler(world, RecordingRunner())
+    scheduler.run_turn(MAIN)
+    previous = world.history.latest_messages(MAIN)
+
+    def fail(agent_id):
+        raise OSError("memory is unreadable")
+
+    monkeypatch.setattr(scheduler, "resident_block", fail)
+    record = scheduler.run_turn(MAIN)
+    assert record is not None and record.status == "failed"
+    assert "memory is unreadable" in record.error
+    assert world.history.latest_messages(MAIN) == previous
+    assert world.store.get_member(MAIN).state == "idle"
 
 
 def test_a_failing_turn_is_recorded_and_the_agent_recovers(world) -> None:
@@ -658,7 +705,6 @@ def test_an_agent_can_reopen_its_own_acknowledgement(world, monkeypatch) -> None
     from pydantic_ai.messages import ModelResponse, TextPart, ToolCallPart
     from pydantic_ai.models.function import FunctionModel
 
-    from huddol.adapters.model.config import ModelConfig
     from huddol.adapters.model.runner import PydanticModelRunner
 
     room = mention(world)
@@ -681,12 +727,12 @@ def test_an_agent_can_reopen_its_own_acknowledgement(world, monkeypatch) -> None
         )
 
     monkeypatch.setattr(models, "ALLOW_MODEL_REQUESTS", False)
-    monkeypatch.setattr(
-        "huddol.adapters.model.runner.build_model",
-        lambda config: FunctionModel(respond),
+    world.settings.set_settings(
+        "model",
+        {"base_url": "https://example.invalid", "api_key": "unused", "model": "local"},
     )
     runner = PydanticModelRunner(
-        ModelConfig("openai", "https://example.invalid", "unused", "local")
+        world.settings, build_model=lambda config: FunctionModel(respond)
     )
 
     record = Scheduler(world, runner).run_turn(MAIN)
@@ -772,8 +818,9 @@ def test_a_long_back_and_forth_produces_a_nudge(world) -> None:
         world.store.append_message(room.id, sender, f"turn {index}")
     world.store.append_message(room.id, HELPER, "@Main again")
 
-    scheduler = Scheduler(world, RecordingRunner())
-    context = scheduler.runtime_context(MAIN, (room.id,))
+    runner = RecordingRunner()
+    Scheduler(world, runner).run_turn(MAIN)
+    context = runner.requests[0].ephemeral()
     assert "exchanged" in context
     assert "Helper" in context
     assert "acknowledge instead of mentioning them again" in context
@@ -783,29 +830,32 @@ def test_no_nudge_when_a_third_member_is_involved(world) -> None:
     room = world.store.create_discussion("group", [HUMAN, MAIN, HELPER])
     for index in range(6):
         sender = [MAIN, HELPER, HUMAN][index % 3]
-        world.store.append_message(room.id, sender, f"turn {index}")
+        world.store.append_message(room.id, sender, f"turn {index} @Main")
 
-    scheduler = Scheduler(world, RecordingRunner())
-    assert "exchanged" not in scheduler.runtime_context(MAIN, (room.id,))
+    runner = RecordingRunner()
+    Scheduler(world, runner).run_turn(MAIN)
+    assert runner.requests[0].ephemeral() == ""
 
 
 def test_no_nudge_for_a_short_exchange(world) -> None:
     room = world.store.create_discussion("brief", [HUMAN, MAIN])
     world.store.append_message(room.id, MAIN, "one")
-    world.store.append_message(room.id, HUMAN, "two")
+    world.store.append_message(room.id, HUMAN, "two @Main")
 
-    scheduler = Scheduler(world, RecordingRunner())
-    assert "exchanged" not in scheduler.runtime_context(MAIN, (room.id,))
+    runner = RecordingRunner()
+    Scheduler(world, runner).run_turn(MAIN)
+    assert runner.requests[0].ephemeral() == ""
 
 
 def test_no_nudge_for_an_exchange_you_are_not_part_of(world) -> None:
     room = world.store.create_discussion("others", [HUMAN, MAIN, HELPER])
     for index in range(6):
         sender = HUMAN if index % 2 == 0 else HELPER
-        world.store.append_message(room.id, sender, f"turn {index}")
+        world.store.append_message(room.id, sender, f"turn {index} @Main")
 
-    scheduler = Scheduler(world, RecordingRunner())
-    assert "exchanged" not in scheduler.runtime_context(MAIN, (room.id,))
+    runner = RecordingRunner()
+    Scheduler(world, runner).run_turn(MAIN)
+    assert runner.requests[0].ephemeral() == ""
 
 
 def test_the_nudge_reaches_the_model_but_not_the_history(world) -> None:
@@ -818,7 +868,9 @@ def test_the_nudge_reaches_the_model_but_not_the_history(world) -> None:
 
     runner = RecordingRunner()
     Scheduler(world, runner).run_turn(MAIN)
-    assert "exchanged" in runner.requests[0].runtime_context
+    assert "exchanged" in runner.requests[0].ephemeral()
+    world.store.append_message(room, HUMAN, "A third participant")
+    assert runner.requests[0].ephemeral() == ""
     assert "exchanged" not in world.history.latest_messages(MAIN)
 
 

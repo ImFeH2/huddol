@@ -130,10 +130,9 @@ class ExecutionManager:
         return instance
 
     def snapshot(self) -> ExecutionEnvironment:
-        key = self._key
-
         def lookup() -> ExecutionEnvironment:
             with self._lock:
+                key = self._key
                 if self._closed:
                     raise DomainError(
                         "execution_closed", "Execution environment is closed"

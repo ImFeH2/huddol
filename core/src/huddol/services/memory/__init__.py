@@ -24,17 +24,18 @@ class Memory:
     def delete(self, path: str) -> None:
         self._tree.delete(path)
 
-    def index_context(self) -> str:
-        entries = self._tree.list()
-        if not entries:
-            return ""
+    def index(self, limit_bytes: int) -> str:
         try:
             content, _ = self._tree.read(INDEX)
-        except DomainError:
-            content = ""
-        listing = "\n".join(f"- {item.path}" for item in entries)
-        if content.strip():
-            return (
-                f"Your memory index ({INDEX}):\n{content.strip()}\n\nFiles:\n{listing}"
-            )
-        return f"Your memory files:\n{listing}"
+        except DomainError as error:
+            if error.code != "not_found":
+                raise
+            return ""
+        encoded = content.encode("utf-8")
+        if len(encoded) <= limit_bytes:
+            return content
+        return encoded[:limit_bytes].decode("utf-8", errors="ignore") + (
+            f"\n[MEMORY.md is longer than {limit_bytes} bytes and was cut here. "
+            "Reorganize it: keep only what you must always remember and a map of "
+            "your other memory files.]"
+        )

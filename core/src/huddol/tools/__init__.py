@@ -10,7 +10,7 @@ from huddol.core.discussion import Discussion, validate_body, validate_topic
 from huddol.core.errors import DomainError
 from huddol.core.member import validate_name
 from huddol.ports.agent import HistoryStore, SettingsStore, TodoStore
-from huddol.ports.execution import ExecutionControl, ExecutionEnvironment
+from huddol.ports.execution import ExecutionControl
 from huddol.ports.files import ConflictError, FileTree
 from huddol.ports.store import OrganizationStore
 from huddol.services.history import History
@@ -47,12 +47,8 @@ class AgentTools:
         turn: TurnBinding | None = None,
         *,
         on_change: Callable[[str, dict[str, Any]], None] | None = None,
-        environment: ExecutionEnvironment | None = None,
     ) -> None:
         self._deps = deps
-        self._environment = (
-            environment if environment is not None else deps.execution.snapshot()
-        )
         self._actor = actor
         self._auth = authorizer or Authorizer()
         self._turn = turn
@@ -432,7 +428,9 @@ class AgentTools:
             PurePosixPath(cwd).is_absolute() or PureWindowsPath(cwd).is_absolute()
         ):
             cwd = str(self._deps.agent_directory_for(self._actor.member_id) / cwd)
-        result = self._environment.run(list(argv), cwd=cwd, timeout=timeout)
+        result = self._deps.execution.snapshot().run(
+            list(argv), cwd=cwd, timeout=timeout
+        )
         self._record("run", f"{' '.join(argv)} exited {result.exit_code}")
         return {
             "exit_code": result.exit_code,
@@ -453,7 +451,7 @@ class AgentTools:
             PurePosixPath(path).is_absolute() or PureWindowsPath(path).is_absolute()
         ):
             path = str(self._deps.agent_directory_for(self._actor.member_id) / path)
-        result = self._environment.edit(
+        result = self._deps.execution.snapshot().edit(
             path, old_text, new_text, replace_all=replace_all
         )
         self._record("edit", f"{result.path} ({result.replacements} replaced)")

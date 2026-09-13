@@ -138,7 +138,7 @@ def main(argv: list[str] | None = None) -> int:
     from huddol.adapters.files.tree import MarkdownTree
     from huddol.adapters.jsonl.api import HUMAN_ID, Api
     from huddol.adapters.jsonl.protocol import Dispatcher
-    from huddol.adapters.model.live import LiveModelRunner
+    from huddol.adapters.model.runner import PydanticModelRunner
     from huddol.adapters.sqlite.agent import SqliteAgentStore
     from huddol.adapters.sqlite.store import SqliteStore
     from huddol.adapters.websocket.server import WebServer, web_directory
@@ -191,7 +191,7 @@ def main(argv: list[str] | None = None) -> int:
 
     scheduler = Scheduler(
         deps,
-        LiveModelRunner(agent_store),
+        PydanticModelRunner(agent_store),
         on_event=lambda name, payload: dispatcher.emit(name, payload),
     )
     Api(scheduler, dispatcher)

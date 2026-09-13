@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from typing import Protocol
 
@@ -114,11 +114,28 @@ def exchange_nudge(
     return "\n".join(warnings)
 
 
+MEMORY_INDEX_BYTES = 16_384
+
+
+def render_resident(memory_index: str, todos: str, environment: str | None) -> str:
+    parts = [
+        f"Your MEMORY.md:\n{memory_index}"
+        if memory_index
+        else "Your MEMORY.md is empty.",
+        todos,
+    ]
+    if environment is not None:
+        parts.append(environment)
+    return "\n\n".join(parts)
+
+
 @dataclass(frozen=True)
 class TurnRequest:
     reminder: Reminder
     history_json: str
-    runtime_context: str
+    resident: str
+    environment: Callable[[], str | None]
+    ephemeral: Callable[[], str]
 
 
 @dataclass(frozen=True)

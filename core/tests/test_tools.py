@@ -107,8 +107,10 @@ def test_tools_forward_absolute_paths_in_both_platform_formats(
         calls.append((path, old_text, new_text, replace_all))
         return EditResult(path, "", 1)
 
-    monkeypatch.setattr(tools._environment, "run", run)
-    monkeypatch.setattr(tools._environment, "edit", edit)
+    environment = world.execution.snapshot()
+    monkeypatch.setattr(environment, "run", run)
+    monkeypatch.setattr(environment, "edit", edit)
+    monkeypatch.setattr(world.execution, "snapshot", lambda: environment)
     tools.run(["pwd"], cwd=path, timeout=7)
     tools.edit(path, "before", "after", replace_all=True)
     assert calls == [(["pwd"], path, 7), (path, "before", "after", True)]
@@ -121,19 +123,67 @@ def test_relative_edit_resolves_under_the_agents_directory_and_is_not_writable(
     directory = tmp_path / "agents" / str(MAIN)
     tools = tools_for(world, MAIN)
     paths = []
-    original = tools._environment.edit
+    environment = world.execution.snapshot()
+    original = environment.edit
 
     def edit(path, *args, **kwargs):
         paths.append(path)
         return original(path, *args, **kwargs)
 
-    monkeypatch.setattr(tools._environment, "edit", edit)
+    monkeypatch.setattr(environment, "edit", edit)
+    monkeypatch.setattr(world.execution, "snapshot", lambda: environment)
     assert not directory.exists()
     with pytest.raises(DomainError) as error:
         tools.edit("file.txt", "before", "after")
     assert paths == [str(directory / "file.txt")]
     assert error.value.code == "not_writable"
     assert directory.is_dir()
+
+
+def test_existing_tools_follow_environment_and_directory_changes(
+    world, tmp_path: Path, monkeypatch
+) -> None:
+    from huddol.adapters.execution.local import LocalExecution
+
+    manager = world.execution
+    original = manager._create
+
+    def create(target, directories, *, tolerant=False):
+        if target["kind"] == "wsl":
+            environment = LocalExecution(directories, enforce=False)
+            monkeypatch.setattr(
+                environment,
+                "run",
+                lambda *args, **kwargs: RunResult(0, "WSL", "", False),
+            )
+            return environment
+        return original(target, directories, tolerant=tolerant)
+
+    monkeypatch.setattr(manager, "_create", create)
+    target = tmp_path / "file.txt"
+    target.write_text("before", encoding="utf-8")
+    tools = tools_for(world, MAIN)
+    command = [sys.executable, "-c", "print('native')"]
+    assert tools.run(command)["stdout"].strip() == "native"
+    with pytest.raises(DomainError, match="outside"):
+        tools.edit(str(target), "before", "denied")
+    manager.configure({"write_directories": [str(tmp_path)]}, lambda values: None)
+    tools.edit(str(target), "before", "native")
+    manager.configure(
+        {"environment": {"kind": "wsl", "distribution": "test"}}, lambda values: None
+    )
+    assert tools.run(command)["stdout"] == "WSL"
+    with pytest.raises(DomainError, match="outside"):
+        tools.edit(str(target), "native", "denied")
+    manager.configure({"write_directories": [str(tmp_path)]}, lambda values: None)
+    tools.edit(str(target), "native", "wsl")
+    manager.configure({"write_directories": []}, lambda values: None)
+    with pytest.raises(DomainError, match="outside"):
+        tools.edit(str(target), "wsl", "denied")
+    manager.configure({"environment": {"kind": "native"}}, lambda values: None)
+    assert tools.run(command)["stdout"].strip() == "native"
+    tools.edit(str(target), "wsl", "after")
+    assert target.read_text(encoding="utf-8") == "after"
 
 
 def test_edit_keeps_absolute_paths(world, tmp_path: Path) -> None:

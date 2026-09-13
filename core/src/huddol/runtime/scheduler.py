@@ -7,14 +7,16 @@ from dataclasses import dataclass, replace
 
 from huddol.core.errors import DomainError
 from huddol.ports.agent import HistoryStore, SettingsStore, TodoStore
-from huddol.ports.execution import ExecutionControl, ExecutionEnvironment
+from huddol.ports.execution import ExecutionControl
 from huddol.ports.store import OrganizationStore
 from huddol.runtime.reminder import (
+    MEMORY_INDEX_BYTES,
     ModelRunner,
     Reminder,
     TurnRequest,
     build_reminder,
     exchange_nudge,
+    render_resident,
 )
 from huddol.services.memory import Memory
 from huddol.services.todo import Todos
@@ -170,8 +172,6 @@ class Scheduler:
         self,
         actor: Actor,
         turn: TurnBinding | None = None,
-        *,
-        environment: ExecutionEnvironment | None = None,
     ) -> AgentTools:
         return AgentTools(
             self._deps,
@@ -179,38 +179,24 @@ class Scheduler:
             self._authorizer,
             turn,
             on_change=self._changed,
-            environment=environment,
         )
 
     @property
     def execution(self) -> ExecutionControl:
         return self._deps.execution
 
-    def runtime_context(
-        self,
-        agent_id: int,
-        discussion_ids: tuple[int, ...] = (),
-        *,
-        environment: ExecutionEnvironment | None = None,
-    ) -> str:
-        selected = (
-            environment if environment is not None else self._deps.execution.snapshot()
+    def resident_block(self, agent_id: int) -> str:
+        return render_resident(
+            Memory(self._deps.memory_tree_for(agent_id)).index(MEMORY_INDEX_BYTES),
+            Todos(self._deps.todos, agent_id).snapshot(),
+            self.environment_facts(),
         )
+
+    def environment_facts(self) -> str | None:
         try:
-            description = selected.describe_environment()
-        except DomainError as error:
-            description = f"Commands and file editing are unavailable: {error}. Business tools remain available."
-        parts = [description]
-        nudge = exchange_nudge(self.store, agent_id, discussion_ids)
-        if nudge:
-            parts.append(nudge)
-        memory = Memory(self._deps.memory_tree_for(agent_id)).index_context()
-        if memory:
-            parts.append(memory)
-        todo = Todos(self._deps.todos, agent_id).reminder()
-        if todo:
-            parts.append(todo)
-        return "\n\n".join(parts)
+            return self._deps.execution.snapshot().describe_environment()
+        except DomainError:
+            return None
 
     def run_turn(self, agent_id: int) -> TurnRecord | None:
         member = self.store.get_member(agent_id)
@@ -222,7 +208,6 @@ class Scheduler:
         return self._execute(reminder)
 
     def _execute(self, reminder: Reminder) -> TurnRecord:
-        environment = self._deps.execution.snapshot()
         agent_id = reminder.agent_id
         self.store.set_agent_state(agent_id, "running")
         run = self.history.start_run(
@@ -237,28 +222,23 @@ class Scheduler:
                 "items": len(reminder.items),
             },
         )
+        discussion_ids = tuple(item.discussion_id for item in reminder.items)
         request = TurnRequest(
             reminder=reminder,
             history_json=self.history.latest_messages(agent_id),
-            runtime_context="",
+            resident="",
+            environment=self.environment_facts,
+            ephemeral=lambda: exchange_nudge(self.store, agent_id, discussion_ids),
         )
         status = "completed"
         error: str | None = None
         try:
-            request = replace(
-                request,
-                runtime_context=self.runtime_context(
-                    agent_id,
-                    tuple(item.discussion_id for item in reminder.items),
-                    environment=environment,
-                ),
-            )
+            request = replace(request, resident=self.resident_block(agent_id))
             outcome = self._runner.run(
                 request,
                 self.tools_for_actor(
                     Actor(agent_id, True),
                     TurnBinding(agent_id, run.sequence),
-                    environment=environment,
                 ),
             )
             if outcome.error:

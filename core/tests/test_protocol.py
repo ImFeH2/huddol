@@ -11,7 +11,7 @@ from huddol.adapters.execution.manager import ExecutionManager
 from huddol.adapters.files.tree import MarkdownTree
 from huddol.adapters.jsonl.api import HUMAN_ID, Api
 from huddol.adapters.jsonl.protocol import Dispatcher, parse, wait_for_shutdown
-from huddol.adapters.model.unavailable import UnavailableRunner
+from huddol.adapters.model.runner import PydanticModelRunner
 from huddol.adapters.sqlite.agent import SqliteAgentStore
 from huddol.adapters.sqlite.store import SqliteStore
 from huddol.runtime.scheduler import Scheduler
@@ -75,7 +75,9 @@ def server(tmp_path: Path):
     output = Capture()
     dispatcher = Dispatcher()
     dispatcher.attach(output)
-    scheduler = Scheduler(deps, UnavailableRunner("no model"), on_event=dispatcher.emit)
+    scheduler = Scheduler(
+        deps, PydanticModelRunner(agent_store), on_event=dispatcher.emit
+    )
     probe = Probe()
     Api(
         scheduler,

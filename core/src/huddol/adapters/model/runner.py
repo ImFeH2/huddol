@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import asyncio
 import json
-from collections.abc import Sequence
+import threading
+from collections.abc import AsyncIterator, Callable
+from contextlib import asynccontextmanager
 from dataclasses import replace
 from typing import Any, Literal, cast
 
@@ -13,9 +15,20 @@ from pydantic_ai import (
     RunContext,
     capture_run_messages,
 )
+from pydantic_ai.capabilities import Hooks
 from pydantic_ai.common_tools.duckduckgo import duckduckgo_search_tool
-from pydantic_ai.messages import ModelMessage, ModelRequest, UserPromptPart
-from pydantic_ai.models import Model
+from pydantic_ai.messages import (
+    ModelMessage,
+    ModelRequest,
+    ModelResponse,
+    UserPromptPart,
+)
+from pydantic_ai.models import (
+    Model,
+    ModelRequestContext,
+    ModelRequestParameters,
+    StreamedResponse,
+)
 from pydantic_ai.models.anthropic import AnthropicModel, AnthropicModelName
 from pydantic_ai.models.google import GoogleModel, GoogleModelName
 from pydantic_ai.models.openai import (
@@ -23,15 +36,22 @@ from pydantic_ai.models.openai import (
     OpenAIModelName,
     OpenAIResponsesModel,
 )
+from pydantic_ai.models.wrapper import WrapperModel
 from pydantic_ai.providers.anthropic import AnthropicProvider
 from pydantic_ai.providers.google import GoogleProvider
 from pydantic_ai.providers.openai import OpenAIProvider
+from pydantic_ai.settings import ModelSettings
 
-from huddol.adapters.model.compaction import compact
 from huddol.adapters.model.config import ModelConfig
-from huddol.adapters.model.observability import Observability, TurnTrace, active_trace
+from huddol.adapters.model.observability import (
+    Observability,
+    ObservabilityConfig,
+    TurnTrace,
+    active_trace,
+)
 from huddol.adapters.model.prompt import SYSTEM_PROMPT
 from huddol.core.errors import DomainError
+from huddol.ports.agent import SettingsStore
 from huddol.runtime.reminder import TurnOutcome, TurnRequest
 from huddol.tools import AgentTools
 
@@ -84,24 +104,106 @@ def _result(value: Any) -> Any:
     return value
 
 
+UNAVAILABLE = "Configure a model in Settings before running Agents"
+
+
+def build_observability(config: ObservabilityConfig) -> Observability:
+    from huddol.adapters.model.langfuse import LangfuseObservability
+
+    return LangfuseObservability(config)
+
+
+class LiveModel(WrapperModel):
+    def __init__(
+        self, resolve: Callable[[], Model], ephemeral: Callable[[], str]
+    ) -> None:
+        self._resolve = resolve
+        self._ephemeral = ephemeral
+        super().__init__(resolve())
+
+    @property
+    def wrapped(self) -> Model:
+        return self._resolve()
+
+    @wrapped.setter
+    def wrapped(self, value: Model) -> None:
+        pass
+
+    def _outgoing(self, messages: list[ModelMessage]) -> list[ModelMessage]:
+        text = self._ephemeral()
+        if not text:
+            return messages
+        last = messages[-1]
+        assert isinstance(last, ModelRequest)
+        return [
+            *messages[:-1],
+            replace(last, parts=[*last.parts, UserPromptPart(text)]),
+        ]
+
+    async def request(
+        self,
+        messages: list[ModelMessage],
+        model_settings: ModelSettings | None,
+        model_request_parameters: ModelRequestParameters,
+    ) -> ModelResponse:
+        outgoing = self._outgoing(messages)
+        return await self.wrapped.request(
+            outgoing, model_settings, model_request_parameters
+        )
+
+    @asynccontextmanager
+    async def request_stream(
+        self,
+        messages: list[ModelMessage],
+        model_settings: ModelSettings | None,
+        model_request_parameters: ModelRequestParameters,
+        run_context: RunContext[Any] | None = None,
+    ) -> AsyncIterator[StreamedResponse]:
+        outgoing = self._outgoing(messages)
+        async with self.wrapped.request_stream(
+            outgoing, model_settings, model_request_parameters, run_context
+        ) as response:
+            yield response
+
+
 class PydanticModelRunner:
     def __init__(
-        self, config: ModelConfig, observability: Observability | None = None
+        self,
+        settings: SettingsStore,
+        *,
+        build_model: Callable[[ModelConfig], Model] = build_model,
+        build_observability: Callable[
+            [ObservabilityConfig], Observability
+        ] = build_observability,
     ) -> None:
-        self._config = config
-        self._observability = observability
+        self._settings = settings
+        self._build_model = build_model
+        self._build_observability = build_observability
+        self._lock = threading.Lock()
+        self._config: ModelConfig | None = None
+        self._model: Model | None = None
+        self._tracing: ObservabilityConfig | None = None
+        self._observability: Observability | None = None
         self._agent: Agent[AgentTools, str] = Agent(
-            build_model(config),
+            model=None,
             deps_type=AgentTools,
             name="huddol_agent",
             instructions=SYSTEM_PROMPT,
             retries=2,
             tools=[_web_search_tool()],
-            capabilities=(
-                [observability.instrumentation()] if observability is not None else []
-            ),
         )
         self._register()
+
+    def _resolve_model(self) -> Model:
+        with self._lock:
+            config = ModelConfig.restore(self._settings.get_settings("model"))
+            if config is None:
+                raise DomainError("model_unavailable", UNAVAILABLE)
+            if config != self._config:
+                self._model = self._build_model(config)
+                self._config = config
+            assert self._model is not None
+            return self._model
 
     def _register(self) -> None:
         agent = self._agent
@@ -406,43 +508,96 @@ class PydanticModelRunner:
             _result(tool)
 
     def run(self, request: TurnRequest, tools: AgentTools) -> TurnOutcome:
-        raw = json.loads(request.history_json or "[]")
-        trimmed = compact(raw, self._config.compaction_threshold)
-        history = (
-            _decode_history(json.dumps(trimmed.kept, ensure_ascii=False))
-            if trimmed.applied
-            else _decode_history(request.history_json)
-        )
-        reminder = request.reminder.render()
-        prompt = reminder
-        if request.runtime_context:
-            prompt = f"{prompt}\n\n{request.runtime_context}"
-        history_prompts = sum(
-            isinstance(part, UserPromptPart)
-            for message in history
-            if isinstance(message, ModelRequest)
-            for part in message.parts
-        )
+        config = ModelConfig.restore(self._settings.get_settings("model"))
+        if config is None:
+            return TurnOutcome(messages_json=request.history_json, error=UNAVAILABLE)
+        with self._lock:
+            tracing = ObservabilityConfig.restore(
+                self._settings.get_settings("observability")
+            )
+            if tracing != self._tracing:
+                observability = (
+                    self._build_observability(tracing) if tracing is not None else None
+                )
+                previous = self._observability
+                self._observability = observability
+                self._tracing = tracing
+                if previous is not None:
+                    previous.shutdown()
+            observability = self._observability
+        history = _decode_history(request.history_json)
+        if len(request.history_json.encode("utf-8")) > config.compaction_threshold:
+            history = []
+        if not history:
+            history.append(
+                ModelRequest(
+                    parts=[UserPromptPart(request.resident)],
+                    metadata={
+                        "huddol": {
+                            "block": "resident",
+                            "environment": request.environment() or "",
+                        }
+                    },
+                )
+            )
+        hooks: Hooks[AgentTools] = Hooks()
 
-        def encode_history(messages: Sequence[ModelMessage]) -> str:
-            saved = list(messages)
-            remaining = history_prompts
-            for index, message in enumerate(saved):
-                if not isinstance(message, ModelRequest):
-                    continue
-                parts = []
-                for part in message.parts:
-                    if isinstance(part, UserPromptPart):
-                        if remaining:
-                            remaining -= 1
-                        elif part.content == prompt:
-                            part = replace(part, content=reminder)
-                    parts.append(part)
-                saved[index] = replace(message, parts=parts)
-            return ModelMessagesTypeAdapter.dump_json(saved).decode("utf-8")
+        @hooks.on.before_model_request
+        async def durable(
+            ctx: RunContext[AgentTools], request_context: ModelRequestContext
+        ) -> ModelRequestContext:
+            if ctx.run_step == 1:
+                request_context = replace(
+                    request_context,
+                    messages=[*history, request_context.messages[-1]],
+                )
+            current = request.environment()
+            if current is None:
+                return request_context
+            previous = next(
+                (
+                    message.metadata["huddol"]["environment"]
+                    for message in reversed(request_context.messages)
+                    if isinstance(message, ModelRequest)
+                    and message.metadata is not None
+                    and "huddol" in message.metadata
+                ),
+                None,
+            )
+            if previous == current:
+                return request_context
+            return replace(
+                request_context,
+                messages=[
+                    *request_context.messages,
+                    ModelRequest(
+                        parts=[
+                            UserPromptPart(
+                                "The execution environment changed.\n" + current
+                            )
+                        ],
+                        metadata={
+                            "huddol": {"block": "durable", "environment": current}
+                        },
+                    ),
+                ],
+            )
 
         async def once() -> Any:
-            return await self._agent.run(prompt, deps=tools, message_history=history)
+            return await self._agent.run(
+                request.reminder.render(),
+                deps=tools,
+                message_history=history,
+                model=LiveModel(self._resolve_model, request.ephemeral),
+                capabilities=[
+                    hooks,
+                    *(
+                        [observability.instrumentation()]
+                        if observability is not None
+                        else []
+                    ),
+                ],
+            )
 
         trace = TurnTrace.of(request.reminder)
         with capture_run_messages() as captured, active_trace(trace):
@@ -451,13 +606,17 @@ class PydanticModelRunner:
             except Exception as failure:  # noqa: BLE001
                 partial = request.history_json
                 if captured:
-                    partial = encode_history(captured)
+                    partial = ModelMessagesTypeAdapter.dump_json(captured).decode(
+                        "utf-8"
+                    )
                 return TurnOutcome(
                     messages_json=partial,
                     error=f"{type(failure).__name__}: {failure}",
                 )
 
-        messages = encode_history(result.all_messages())
+        messages = ModelMessagesTypeAdapter.dump_json(result.all_messages()).decode(
+            "utf-8"
+        )
         counted = getattr(result, "usage", None)
         if callable(counted):
             counted = counted()

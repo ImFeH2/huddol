@@ -322,7 +322,7 @@ def test_worker_translates_host_paths_without_a_root(
     assert len(translations) == (2 if path == r"C:\allowed" else 1)
 
 
-def test_environment_identity_is_bound_but_its_directory_policy_updates(
+def test_existing_snapshot_resolves_current_environment_and_directories(
     tmp_path: Path, monkeypatch
 ) -> None:
     manager = ExecutionManager(
@@ -351,8 +351,11 @@ def test_environment_identity_is_bound_but_its_directory_policy_updates(
         saved.append,
     )
     second = manager.snapshot()
-    assert first.write_directories == (str(allowed),)
+    assert first.write_directories == ()
     assert second.write_directories == ()
+    manager.configure({"environment": {"kind": "native"}}, saved.append)
+    assert first.write_directories == (str(allowed),)
+    assert second.write_directories == (str(allowed),)
     manager.close()
 
 

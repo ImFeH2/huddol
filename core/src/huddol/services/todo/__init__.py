@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from huddol.core.todo import (
     Todo,
-    status_reminder,
+    snapshot,
     validate_detail,
     validate_start,
     validate_title,
@@ -33,5 +33,5 @@ class Todos:
     def remove(self, todo_id: int) -> None:
         self._store.remove_todo(self._agent_id, todo_id)
 
-    def reminder(self) -> str:
-        return status_reminder(self.list())
+    def snapshot(self) -> str:
+        return snapshot(self.list())

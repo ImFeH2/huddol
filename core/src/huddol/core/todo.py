@@ -61,14 +61,14 @@ def validate_start(todos: Sequence[Todo], todo_id: int) -> None:
         )
 
 
-def status_reminder(todos: Sequence[Todo]) -> str:
-    if not todos:
-        return ""
-    open_items = [todo for todo in todos if todo.status != "done"]
-    if not open_items:
-        return ""
-    lines = [
-        f"- [{'>' if todo.status == 'in_progress' else ' '}] {todo.id}. {todo.title}"
-        for todo in open_items
-    ]
-    return "Your current todos:\n" + "\n".join(lines)
+def snapshot(todos: Sequence[Todo]) -> str:
+    lines = []
+    for todo in todos:
+        if todo.status == "done":
+            continue
+        lines.append(
+            f"- [{'>' if todo.status == 'in_progress' else ' '}] {todo.id}. {todo.title}"
+        )
+        if todo.detail:
+            lines.extend(f"  {line}" for line in todo.detail.splitlines())
+    return "Todos:\n" + "\n".join(lines) if lines else "Todos: none"

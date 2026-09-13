@@ -116,19 +116,11 @@ def test_tool_errors_are_reported_as_retryable_guidance() -> None:
 def test_every_tool_named_in_the_prompt_is_actually_registered() -> None:
     import re
 
-    from huddol.adapters.model.config import ModelConfig
+    from test_runner import FakeSettings
+
     from huddol.adapters.model.runner import PydanticModelRunner
 
-    config = ModelConfig.restore(
-        {
-            "api_type": "openai",
-            "base_url": "https://example.invalid/v1",
-            "api_key": "unused",
-            "model": "unused",
-        }
-    )
-    assert config is not None
-    registered = set(PydanticModelRunner(config)._agent._function_toolset.tools)
+    registered = set(PydanticModelRunner(FakeSettings())._agent._function_toolset.tools)
 
     named = {
         match.group(1)
@@ -150,19 +142,11 @@ def test_every_tool_named_in_the_prompt_is_actually_registered() -> None:
 
 
 def test_the_full_tool_surface_matches_the_specification() -> None:
-    from huddol.adapters.model.config import ModelConfig
+    from test_runner import FakeSettings
+
     from huddol.adapters.model.runner import PydanticModelRunner
 
-    config = ModelConfig.restore(
-        {
-            "api_type": "openai",
-            "base_url": "https://example.invalid/v1",
-            "api_key": "unused",
-            "model": "unused",
-        }
-    )
-    assert config is not None
-    assert set(PydanticModelRunner(config)._agent._function_toolset.tools) == {
+    assert set(PydanticModelRunner(FakeSettings())._agent._function_toolset.tools) == {
         "discussion",
         "organization",
         "run",

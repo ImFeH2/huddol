@@ -50,19 +50,22 @@ def test_titles_are_normalized_and_validated(todos: Todos) -> None:
         todos.add("   ")
 
 
-def test_reminder_lists_open_items_and_marks_the_active_one(todos: Todos) -> None:
-    first = todos.add("alpha")
+def test_snapshot_lists_open_items_with_details(todos: Todos) -> None:
+    first = todos.add("alpha", "first line\nsecond line")
     todos.add("beta")
+    done = todos.add("finished", "hidden")
+    todos.complete(done.id)
     todos.start(first.id)
-    reminder = todos.reminder()
-    assert "[>] 1. alpha" in reminder
-    assert "[ ] 2. beta" in reminder
+    assert todos.snapshot() == (
+        "Todos:\n- [>] 1. alpha\n  first line\n  second line\n- [ ] 2. beta"
+    )
 
 
-def test_reminder_is_empty_when_everything_is_done(todos: Todos) -> None:
+def test_snapshot_has_no_items_when_empty_or_everything_is_done(todos: Todos) -> None:
+    assert todos.snapshot() == "Todos: none"
     item = todos.add("only")
     todos.complete(item.id)
-    assert todos.reminder() == ""
+    assert todos.snapshot() == "Todos: none"
 
 
 def test_todos_are_private_to_each_agent(agent_store: SqliteAgentStore) -> None:
