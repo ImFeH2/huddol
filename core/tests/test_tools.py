@@ -721,7 +721,7 @@ def test_a_turn_records_what_it_produced(world) -> None:
     tools = tools_for(world, MAIN, turn=TurnBinding(MAIN, 1))
     discussion = tools.create_discussion("Work", [OTHER])["id"]
     sent = tools.send_message(discussion, "Starting now")["id"]
-    tools.run(["echo", "hi"])
+    tools.run([sys.executable, "-c", "print('hi')"])
     tools.write_library("notes.md", "content")
 
     recorded = world.history.effects(MAIN, sequences=[1])

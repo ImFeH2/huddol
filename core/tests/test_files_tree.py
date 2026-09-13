@@ -160,7 +160,11 @@ def test_hidden_names_and_symlinked_files_and_directories_are_not_listed(
     assert not (tree.root / "missing.md").exists()
 
 
-@pytest.mark.parametrize("data", [b"\xff\xfe", b"x" * (MAX_FILE_BYTES + 1)])
+@pytest.mark.parametrize(
+    "data",
+    [b"\xff\xfe", b"x" * (MAX_FILE_BYTES + 1)],
+    ids=["invalid_utf8", "too_large"],
+)
 def test_unreadable_files_are_listed_but_cannot_be_read_written_or_edited(
     tree, data
 ) -> None:

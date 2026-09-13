@@ -12,6 +12,7 @@ from pathlib import Path
 from types import TracebackType
 from typing import Any, Self
 
+import psutil
 import pytest
 from websockets.exceptions import InvalidStatus
 from websockets.sync.client import ClientConnection, connect
@@ -39,10 +40,23 @@ class Kernel:
             "HUDDOL_DATA_DIR": str(data_directory),
             "HUDDOL_PORT": "0",
             "HUDDOL_WEB_DIR": str(web_directory or data_directory / "no-web"),
-            "PATH": "/usr/bin:/bin:/usr/local/bin",
+            "PATH": os.environ["PATH"]
+            if os.name == "nt"
+            else "/usr/bin:/bin:/usr/local/bin",
             "PYTHONPATH": SOURCE,
-            **(env or {}),
         }
+        if os.name == "nt":
+            for name in (
+                "SYSTEMROOT",
+                "SYSTEMDRIVE",
+                "COMSPEC",
+                "PATHEXT",
+                "TEMP",
+                "TMP",
+            ):
+                if name in os.environ:
+                    self._env[name] = os.environ[name]
+        self._env.update(env or {})
         self.ready: dict[str, Any] = {}
         self.raw_ready = b""
         self.stdout = b""
@@ -92,7 +106,12 @@ class Kernel:
 
     @property
     def pid(self) -> int:
-        return self._process.pid
+        pid = self._process.pid
+        if os.name == "nt" and sys.executable != sys._base_executable:
+            children = psutil.Process(pid).children()
+            if len(children) == 1:
+                pid = children[0].pid
+        return pid
 
     def ws_url(self, token: str | None = None) -> str:
         query = (
@@ -710,7 +729,8 @@ def test_run_file_lives_only_while_the_kernel_runs(tmp_path: Path) -> None:
     run_file = data / "run.json"
     with Kernel(data) as kernel:
         assert run_file.is_file()
-        assert oct(run_file.stat().st_mode & 0o777) == "0o600"
+        if os.name != "nt":
+            assert oct(run_file.stat().st_mode & 0o777) == "0o600"
         assert json.loads(run_file.read_text()) == {
             "port": kernel.port,
             "token": kernel.token,
