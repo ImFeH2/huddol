@@ -3,7 +3,6 @@ from __future__ import annotations
 import email.utils
 import http
 import logging
-import mimetypes
 import os
 import secrets
 import sys
@@ -21,6 +20,23 @@ from huddol.adapters.jsonl.protocol import Dispatcher, encode
 
 WEB_DIRECTORY_ENV = "HUDDOL_WEB_DIR"
 HOST = "127.0.0.1"
+CONTENT_TYPES = {
+    ".css": "text/css; charset=utf-8",
+    ".html": "text/html; charset=utf-8",
+    ".ico": "image/x-icon",
+    ".js": "text/javascript; charset=utf-8",
+    ".json": "application/json; charset=utf-8",
+    ".map": "application/json; charset=utf-8",
+    ".mjs": "text/javascript; charset=utf-8",
+    ".png": "image/png",
+    ".svg": "image/svg+xml; charset=utf-8",
+    ".txt": "text/plain; charset=utf-8",
+    ".ttf": "font/ttf",
+    ".wasm": "application/wasm",
+    ".webp": "image/webp",
+    ".woff": "font/woff",
+    ".woff2": "font/woff2",
+}
 
 log = logging.getLogger(__name__)
 
@@ -62,13 +78,7 @@ def static_response(directory: Path, path: str) -> Response:
             return _plain(http.HTTPStatus.NOT_FOUND, "Not found")
     if not target.is_file():
         return _plain(http.HTTPStatus.SERVICE_UNAVAILABLE, "Frontend not built")
-    content_type = mimetypes.guess_type(target.name)[0] or "application/octet-stream"
-    if content_type.startswith("text/") or content_type in (
-        "application/javascript",
-        "application/json",
-        "image/svg+xml",
-    ):
-        content_type += "; charset=utf-8"
+    content_type = CONTENT_TYPES.get(target.suffix.lower(), "application/octet-stream")
     return _response(http.HTTPStatus.OK, content_type, target.read_bytes())
 
 
