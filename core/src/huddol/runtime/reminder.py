@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from typing import Protocol
 
 from huddol.core.mention import Mention
-from huddol.ports.agent import HistoryStore
+from huddol.ports.agent import HistoryStore, WindowState
 from huddol.ports.store import OrganizationStore
 from huddol.tools import AgentTools
 
@@ -117,7 +117,34 @@ def exchange_nudge(
 MEMORY_INDEX_BYTES = 16_384
 
 
-def render_resident(memory_index: str, todos: str, environment: str | None) -> str:
+PREPARATION_PROMPT = (
+    "Your context window is almost full and will be reset when this Turn ends."
+    " Nothing in this window carries over by itself. Write what you will still need"
+    " into MEMORY.md or a memory file, and put the current state of your in-progress"
+    " work into that todo's detail. Do not start new work. Then end the Turn."
+)
+
+
+def reset_notice(state: WindowState) -> str | None:
+    if state.number == 1:
+        return None
+    if state.reason == "prepared":
+        return (
+            f"Your context window was reset at {state.reset_at} after you saved your"
+            " notes. Use the history tool for anything older."
+        )
+    if state.reason == "overflow":
+        return (
+            f"Your context window was reset at {state.reset_at} in the middle of a"
+            " Turn because it overflowed, so you could not save notes first. Use the"
+            " history tool to see what you were doing."
+        )
+    return None
+
+
+def render_resident(
+    memory_index: str, todos: str, environment: str | None, reset: str | None
+) -> str:
     parts = [
         f"Your MEMORY.md:\n{memory_index}"
         if memory_index
@@ -126,12 +153,17 @@ def render_resident(memory_index: str, todos: str, environment: str | None) -> s
     ]
     if environment is not None:
         parts.append(environment)
+    if reset is not None:
+        parts.append(reset)
     return "\n\n".join(parts)
 
 
 @dataclass(frozen=True)
 class TurnRequest:
-    reminder: Reminder
+    agent_id: int
+    agent_name: str
+    prompt: str
+    reminder: Reminder | None
     history_json: str
     resident: str
     environment: Callable[[], str | None]
@@ -143,6 +175,8 @@ class TurnOutcome:
     messages_json: str
     usage_json: str | None = None
     error: str | None = None
+    input_tokens: int | None = None
+    context_exceeded: bool = False
 
 
 class ModelRunner(Protocol):

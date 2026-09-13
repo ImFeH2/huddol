@@ -10,11 +10,14 @@ from huddol.adapters.execution.manager import ExecutionManager
 from huddol.adapters.files.tree import MarkdownTree
 from huddol.adapters.sqlite.agent import SqliteAgentStore
 from huddol.adapters.sqlite.store import SqliteStore
+from huddol.ports.agent import WindowState
 from huddol.runtime.reminder import (
+    PREPARATION_PROMPT,
     TurnOutcome,
     TurnRequest,
     build_reminder,
     render_resident,
+    reset_notice,
 )
 from huddol.runtime.scheduler import Scheduler
 from huddol.tools import AgentTools, Dependencies
@@ -307,73 +310,277 @@ def test_discussion_notifications_do_not_depend_on_the_caller_type(
     ]
 
 
-def test_lowering_compaction_threshold_resets_history_on_the_next_turn(
-    world, monkeypatch
-) -> None:
-
+def test_lowering_the_window_budget_schedules_preparation(world, monkeypatch) -> None:
     from pydantic_ai import ModelMessagesTypeAdapter, models
-    from pydantic_ai.messages import (
-        ModelResponse,
-        TextPart,
-    )
+    from pydantic_ai.messages import ModelResponse, TextPart
     from pydantic_ai.models.function import FunctionModel
+    from pydantic_ai.usage import RequestUsage
 
-    from huddol.adapters.jsonl.api import Api
-    from huddol.adapters.jsonl.protocol import Dispatcher, parse
     from huddol.adapters.model.runner import PydanticModelRunner
 
     mention(world)
     world.settings.set_settings(
         "model",
-        {
-            "base_url": "https://example.invalid",
-            "api_key": "unused",
-            "model": "local",
-            "compaction_threshold": 400000,
-        },
+        {"base_url": "https://example.invalid", "api_key": "unused", "model": "local"},
     )
-    received = []
-
-    def respond(messages, info):
-        received.append(len(messages))
-        return ModelResponse(parts=[TextPart("Done")])
-
     monkeypatch.setattr(models, "ALLOW_MODEL_REQUESTS", False)
-    running = PydanticModelRunner(
-        world.settings, build_model=lambda config: FunctionModel(respond)
+    runner = PydanticModelRunner(
+        world.settings,
+        build_model=lambda config: FunctionModel(
+            lambda messages, info: ModelResponse(
+                parts=[TextPart("Done")], usage=RequestUsage(input_tokens=100)
+            )
+        ),
     )
-    scheduler = Scheduler(world, running)
-    first = scheduler.run_turn(MAIN)
-    assert first is not None and first.status == "completed"
-    second = scheduler.run_turn(MAIN)
-    assert second is not None and second.status == "completed"
-    assert received == [1, 3]
-    output: list[dict] = []
-    dispatcher = Dispatcher()
-    Api(scheduler, dispatcher)
-    update = parse(
-        json.dumps(
-            {
-                "id": 1,
-                "method": "settings.update",
-                "params": {"section": "model", "values": {"compaction_threshold": 1}},
-            }
-        )
-    )
-    assert update is not None
-    dispatcher.handle(update, output.append)
-    assert output[-1]["result"]["compaction_threshold"] == 1
-    reminder = build_reminder(world.store, world.history, MAIN, "Main")
-    assert reminder is not None
-    third = scheduler.run_turn(MAIN)
-    assert third is not None and third.status == "completed"
-    assert received == [1, 3, 1]
+    scheduler = Scheduler(world, runner)
+    assert scheduler.run_turn(MAIN).status == "completed"
+    assert not scheduler.preparation_due(MAIN)
+    world.settings.set_settings("agent", {"context_window_tokens": 100})
+    assert scheduler.preparation_due(MAIN)
+    assert scheduler.run_turn(MAIN).status == "completed"
+    runs = world.history.runs(MAIN)
+    saved = ModelMessagesTypeAdapter.validate_json(runs[0].messages_json)
+    assert saved[-2].parts[0].content == PREPARATION_PROMPT
+    assert world.history.latest_messages(MAIN) == "[]"
+    assert scheduler.run_turn(MAIN).status == "completed"
     saved = ModelMessagesTypeAdapter.validate_json(world.history.latest_messages(MAIN))
     assert len(saved) == 3
     assert saved[0].parts[0].content == scheduler.resident_block(MAIN)
     assert saved[0].metadata["huddol"]["block"] == "resident"
-    assert saved[1].parts[0].content == reminder.render()
-    assert saved[2].parts[0].content == "Done"
+    assert saved[0].parts[0].content.endswith(reset_notice(world.history.window(MAIN)))
+
+
+@pytest.mark.parametrize("first_status", ["completed", "failed"])
+@pytest.mark.parametrize(
+    "preparation_status", ["completed", "failed", "exception", "overflow"]
+)
+def test_preparation_runs_without_pending_and_resets_after_any_outcome(
+    world, first_status, preparation_status
+) -> None:
+    room = mention(world)
+    world.settings.set_settings("agent", {"context_window_tokens": 100})
+    events = []
+
+    def respond(request, tools):
+        if request.reminder is not None:
+            tools.read_discussion(room)
+            tools.ack(room, [1])
+            return TurnOutcome(
+                messages_json='[{"text":"saved"}]',
+                usage_json='{"input_tokens":100,"last_input_tokens":100}',
+                input_tokens=100,
+                error="failure" if first_status == "failed" else None,
+            )
+        assert request.prompt == PREPARATION_PROMPT
+        assert request.ephemeral() == ""
+        if preparation_status == "exception":
+            raise RuntimeError("preparation failed")
+        return TurnOutcome(
+            messages_json='[{"text":"notes saved"}]',
+            error="preparation failed" if preparation_status != "completed" else None,
+            context_exceeded=preparation_status == "overflow",
+        )
+
+    runner = RecordingRunner(respond)
+    scheduler = Scheduler(
+        world, runner, on_event=lambda name, payload: events.append((name, payload))
+    )
+    assert scheduler.run_turn(MAIN).status == first_status
+    assert world.store.pending(MAIN) == ()
+    assert scheduler.preparation_due(MAIN)
+    assert scheduler.runnable_agents() == (MAIN,)
+    restarted = Scheduler(world, runner)
+    assert restarted.preparation_due(MAIN)
+    assert restarted.runnable_agents() == (MAIN,)
+    record = scheduler.run_turn(MAIN)
+    assert record.status == (
+        "completed" if preparation_status == "completed" else "failed"
+    )
+    assert runner.requests[-1].reminder is None
+    assert runner.requests[-1].history_json == '[{"text":"saved"}]'
+    state = world.history.window(MAIN)
+    assert state.number == 2 and state.since_sequence == 3
+    assert state.reason == "prepared" and state.reset_at is not None
+    assert world.history.latest_messages(MAIN) == "[]"
+    assert not scheduler.preparation_due(MAIN)
+    assert not restarted.preparation_due(MAIN)
+    assert scheduler._failed == {}
+    assert scheduler.runnable_agents() == ()
+    assert events == [
+        (
+            "turn.started",
+            {"agent_id": MAIN, "sequence": 1, "items": 1, "kind": "reminder"},
+        ),
+        ("mention.acked", {"discussion_id": room, "acked": 1}),
+        ("turn.finished", {"agent_id": MAIN, "sequence": 1, "status": first_status}),
+        (
+            "turn.started",
+            {"agent_id": MAIN, "sequence": 2, "items": 0, "kind": "preparation"},
+        ),
+        ("window.reset", {"agent_id": MAIN, "number": 2, "reason": "prepared"}),
+        ("turn.finished", {"agent_id": MAIN, "sequence": 2, "status": record.status}),
+    ]
+    world.store.append_message(room, HUMAN, "@Main next task")
+    assert scheduler.run_turn(MAIN).status == first_status
+    following = runner.requests[-1]
+    assert following.agent_id == MAIN and following.agent_name == "Main"
+    assert following.reminder is not None
+    assert following.prompt == following.reminder.render()
+    assert following.history_json == "[]"
+    assert following.resident.endswith(reset_notice(state))
+
+
+@pytest.mark.parametrize("fresh", [False, True])
+def test_overflow_resets_only_after_an_earlier_run_and_retries_once(
+    world, fresh
+) -> None:
+    mention(world)
+    if fresh:
+        world.history.reset_window(MAIN, "prepared")
+    events = []
+    runner = RecordingRunner()
+    scheduler = Scheduler(
+        world, runner, on_event=lambda name, payload: events.append((name, payload))
+    )
+    assert scheduler.run_turn(MAIN).status == "completed"
+    prior = world.history.latest_messages(MAIN)
+    runner._behaviour = lambda request, tools: TurnOutcome(
+        messages_json=prior, error="too long", context_exceeded=True
+    )
+    previous = world.history.window(MAIN)
+    scheduler._wake.clear()
+    assert scheduler.run_turn(MAIN).status == "failed"
+    state = world.history.window(MAIN)
+    assert state.number == previous.number + 1
+    assert state.reason == "overflow" and state.since_sequence == 3
+    assert world.history.latest_messages(MAIN) == "[]"
+    assert scheduler._failed == {}
+    assert scheduler._wake.is_set()
+    assert (
+        "window.reset",
+        {"agent_id": MAIN, "number": state.number, "reason": "overflow"},
+    ) in events
+    try:
+        assert scheduler.tick() == (MAIN,)
+        scheduler._threads[MAIN].join(timeout=5)
+        assert not scheduler._threads[MAIN].is_alive()
+        following = runner.requests[-1]
+        assert following.history_json == "[]"
+        assert following.reminder is not None
+        assert following.resident.endswith(reset_notice(state))
+        assert world.history.window(MAIN) == state
+        assert scheduler._failed[MAIN] == scheduler.pending_keys(MAIN)
+        assert scheduler.tick() == ()
+    finally:
+        scheduler.stop()
+
+
+@pytest.mark.parametrize("fresh", [False, True])
+def test_first_turn_overflow_is_an_ordinary_failure(world, fresh) -> None:
+    mention(world)
+    if fresh:
+        spend(world, MAIN, 1)
+        world.history.reset_window(MAIN, "prepared")
+    state = world.history.window(MAIN)
+    events = []
+    runner = RecordingRunner(
+        lambda request, tools: TurnOutcome(
+            messages_json='[{"text":"partial"}]',
+            error="too long",
+            context_exceeded=True,
+        )
+    )
+    scheduler = Scheduler(
+        world, runner, on_event=lambda name, payload: events.append(name)
+    )
+    assert scheduler.run_turn(MAIN).status == "failed"
+    assert world.history.window(MAIN) == state
+    assert scheduler._failed[MAIN] == scheduler.pending_keys(MAIN)
+    assert scheduler.tick() == ()
+    assert world.history.latest_messages(MAIN) == '[{"text":"partial"}]'
+    assert "window.reset" not in events
+
+
+@pytest.mark.parametrize("status", ["completed", "failed", "interrupted", "running"])
+@pytest.mark.parametrize("tokens", [None, 99, 100, 101])
+def test_preparation_uses_the_latest_finished_run_in_the_current_window(
+    world, status, tokens
+) -> None:
+    world.settings.set_settings("agent", {"context_window_tokens": 100})
+    scheduler = Scheduler(world, RecordingRunner())
+    assert not scheduler.preparation_due(MAIN)
+    for run_status, count in [("completed", 200), (status, tokens)]:
+        run = world.history.start_run(MAIN)
+        world.history.finish_run(
+            MAIN,
+            run.sequence,
+            status=run_status,
+            messages_json="[]",
+            usage_json=json.dumps({"last_input_tokens": count}),
+        )
+    assert scheduler.preparation_due(MAIN) == (
+        status in ("completed", "failed") and tokens is not None and tokens >= 100
+    )
+    world.history.reset_window(MAIN, "prepared")
+    assert not scheduler.preparation_due(MAIN)
+
+
+def test_token_limit_and_member_state_still_block_preparation(world) -> None:
+    world.settings.set_settings("agent", {"context_window_tokens": 100})
+    run = world.history.start_run(MAIN)
+    world.history.finish_run(
+        MAIN,
+        run.sequence,
+        status="completed",
+        messages_json="[]",
+        usage_json='{"input_tokens":100,"last_input_tokens":100}',
+    )
+    runner = RecordingRunner()
+    scheduler = Scheduler(world, runner)
+    assert scheduler.preparation_due(MAIN)
+    world.settings.set_settings("limits", {"agent_token_limit": 100})
+    assert scheduler.runnable_agents() == ()
+    assert scheduler.run_turn(MAIN) is None
+    world.settings.set_settings("limits", {"agent_token_limit": 101})
+    world.store.set_agent_state(MAIN, "paused")
+    assert scheduler.runnable_agents() == ()
+    assert scheduler.run_turn(MAIN) is None
+    world.store.set_agent_state(MAIN, "idle")
+    assert scheduler.runnable_agents() == (MAIN,)
+    assert scheduler.run_turn(MAIN).status == "completed"
+    assert runner.requests[-1].prompt == PREPARATION_PROMPT
+
+
+def test_preparation_does_not_record_pending_mentions_as_reminded(world) -> None:
+    room = mention(world)
+    run = world.history.start_run(MAIN)
+    world.history.finish_run(
+        MAIN,
+        run.sequence,
+        status="completed",
+        messages_json="[]",
+        usage_json='{"last_input_tokens":200000}',
+    )
+    runner = RecordingRunner()
+    scheduler = Scheduler(world, runner)
+    assert scheduler.run_turn(MAIN).status == "completed"
+    assert runner.requests[-1].reminder is None
+    assert world.history.previously_reminded(MAIN, [(room, 1)]) == frozenset()
+    assert scheduler.run_turn(MAIN).status == "completed"
+    assert not runner.requests[-1].reminder.items[0].previously_reminded
+
+
+def test_reset_notices_use_the_exact_window_timestamp() -> None:
+    assert reset_notice(WindowState(1, 1, None, None)) is None
+    assert reset_notice(WindowState(2, 3, "STAMP", "prepared")) == (
+        "Your context window was reset at STAMP after you saved your notes. "
+        "Use the history tool for anything older."
+    )
+    assert reset_notice(WindowState(2, 3, "STAMP", "overflow")) == (
+        "Your context window was reset at STAMP in the middle of a Turn because it "
+        "overflowed, so you could not save notes first. Use the history tool to see "
+        "what you were doing."
+    )
 
 
 def test_no_reminder_without_pending_mentions(world) -> None:
@@ -492,9 +699,7 @@ def test_resident_is_persisted_and_stays_unchanged_until_a_reset(
         if not fail:
             assert "Keep the model response" in saved
 
-    world.settings.set_settings(
-        "model", {**world.settings.get_settings("model"), "compaction_threshold": 1}
-    )
+    world.history.reset_window(MAIN, "prepared")
     record = scheduler.run_turn(MAIN)
     assert record is not None and record.status == ("failed" if fail else "completed")
     saved = world.history.latest_messages(MAIN)
@@ -503,9 +708,9 @@ def test_resident_is_persisted_and_stays_unchanged_until_a_reset(
     assert saved.count('"block":"resident"') == 1
 
 
-@pytest.mark.parametrize("threshold", [1, 400_000])
+@pytest.mark.parametrize("reset", [False, True])
 def test_history_is_preserved_or_reset_without_rewriting_old_prompts(
-    world, monkeypatch, threshold: int
+    world, monkeypatch, reset: bool
 ) -> None:
     from pydantic_ai import ModelMessagesTypeAdapter, models
     from pydantic_ai.messages import (
@@ -526,7 +731,6 @@ def test_history_is_preserved_or_reset_without_rewriting_old_prompts(
             "base_url": "https://example.invalid",
             "api_key": "unused",
             "model": "local",
-            "compaction_threshold": threshold,
         },
     )
     runner = PydanticModelRunner(
@@ -552,12 +756,14 @@ def test_history_is_preserved_or_reset_without_rewriting_old_prompts(
     world.history.finish_run(
         MAIN, old_run.sequence, status="completed", messages_json=original
     )
+    if reset:
+        world.history.reset_window(MAIN, "prepared")
 
     record = scheduler.run_turn(MAIN)
 
     assert record is not None and record.status == "completed"
     saved = ModelMessagesTypeAdapter.validate_json(world.history.latest_messages(MAIN))
-    if threshold == 1:
+    if reset:
         assert len(saved) == 3
         assert saved[0].parts[0].content == scheduler.resident_block(MAIN)
     else:
@@ -565,9 +771,7 @@ def test_history_is_preserved_or_reset_without_rewriting_old_prompts(
         assert saved[-2].metadata == {
             "huddol": {"block": "durable", "environment": scheduler.environment_facts()}
         }
-    assert (
-        saved[1 if threshold == 1 else len(prior)].parts[0].content == reminder.render()
-    )
+    assert saved[1 if reset else len(prior)].parts[0].content == reminder.render()
     assert saved[-1].parts[0].content == "New response"
     assert world.history.runs(MAIN)[1].messages_json == original
 
@@ -593,14 +797,19 @@ def test_resident_carries_memory_todo_details_and_environment(
 
 @pytest.mark.parametrize("environment", [None, "environment facts"])
 @pytest.mark.parametrize("memory", ["", "remember this"])
-def test_render_resident_orders_only_the_requested_blocks(memory, environment) -> None:
+@pytest.mark.parametrize("reset", [None, "Window reset notice"])
+def test_render_resident_orders_only_the_requested_blocks(
+    memory, environment, reset
+) -> None:
     expected = (
         "Your MEMORY.md:\nremember this" if memory else "Your MEMORY.md is empty."
     )
     expected += "\n\nTodos: none"
     if environment is not None:
         expected += "\n\nenvironment facts"
-    assert render_resident(memory, "Todos: none", environment) == expected
+    if reset is not None:
+        expected += "\n\n" + reset
+    assert render_resident(memory, "Todos: none", environment, reset) == expected
 
 
 def test_resident_loading_failure_preserves_history_and_returns_to_idle(
@@ -782,7 +991,7 @@ def test_previously_reminded_is_flagged_on_the_second_turn(world) -> None:
     assert "still waiting" in second.render()
 
 
-def test_compacted_content_stays_retrievable_through_history(world) -> None:
+def test_prior_window_content_stays_retrievable_through_history(world) -> None:
     mention(world)
     from huddol.services.history import History
 
@@ -800,6 +1009,7 @@ def test_compacted_content_stays_retrievable_through_history(world) -> None:
         MAIN, first.sequence, status="completed", messages_json=early
     )
 
+    world.history.reset_window(MAIN, "prepared")
     later = json.dumps([{"kind": "response", "parts": []}])
     second = world.history.start_run(MAIN)
     world.history.finish_run(

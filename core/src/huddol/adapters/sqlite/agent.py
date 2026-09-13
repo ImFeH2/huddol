@@ -8,9 +8,16 @@ from collections.abc import Sequence
 from huddol.adapters.sqlite.store import LockedConnection, first
 from huddol.core.errors import DomainError
 from huddol.core.todo import Todo, TodoStatus
-from huddol.ports.agent import AgentRun, TurnEffect
+from huddol.ports.agent import AgentRun, TurnEffect, WindowState
 
 SCHEMA = """
+CREATE TABLE IF NOT EXISTS agent_windows (
+    agent_id INTEGER PRIMARY KEY,
+    number INTEGER NOT NULL,
+    since_sequence INTEGER NOT NULL,
+    reset_at TEXT,
+    reason TEXT
+);
 CREATE TABLE IF NOT EXISTS agent_todos (
     agent_id INTEGER NOT NULL,
     id INTEGER NOT NULL,
@@ -213,12 +220,43 @@ class SqliteAgentStore:
                 ),
             )
 
+    def window(self, agent_id: int) -> WindowState:
+        row = first(
+            self._db.execute(
+                "SELECT number, since_sequence, reset_at, reason FROM agent_windows"
+                " WHERE agent_id = ?",
+                (agent_id,),
+            )
+        )
+        if row is None:
+            return WindowState(1, 1, None, None)
+        return WindowState(
+            int(row["number"]),
+            int(row["since_sequence"]),
+            row["reset_at"],
+            row["reason"],
+        )
+
+    def reset_window(self, agent_id: int, reason: str) -> WindowState:
+        with self._db:
+            self._db.execute(
+                "INSERT INTO agent_windows (agent_id, number, since_sequence, reset_at, reason)"
+                " VALUES (?, 2, (SELECT COALESCE(MAX(sequence), 0) + 1 FROM agent_runs"
+                " WHERE agent_id = ?), ?, ?) ON CONFLICT (agent_id) DO UPDATE SET"
+                " number = agent_windows.number + 1, since_sequence = excluded.since_sequence,"
+                " reset_at = excluded.reset_at, reason = excluded.reason",
+                (agent_id, agent_id, self._now(), reason),
+            )
+            return self.window(agent_id)
+
     def latest_messages(self, agent_id: int) -> str:
         row = first(
             self._db.execute(
                 "SELECT messages_json FROM agent_runs WHERE agent_id = ?"
-                " AND messages_json != '[]' ORDER BY sequence DESC LIMIT 1",
-                (agent_id,),
+                " AND sequence >= COALESCE((SELECT since_sequence FROM agent_windows"
+                " WHERE agent_id = ?), 1)"
+                " AND messages_json NOT IN ('[]', '') ORDER BY sequence DESC LIMIT 1",
+                (agent_id, agent_id),
             )
         )
         return str(row["messages_json"]) if row else "[]"

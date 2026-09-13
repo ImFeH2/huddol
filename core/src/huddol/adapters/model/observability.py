@@ -7,7 +7,7 @@ from contextvars import ContextVar
 from dataclasses import dataclass, field
 from typing import Any, Protocol
 
-from huddol.runtime.reminder import Reminder
+from huddol.runtime.reminder import TurnRequest
 
 
 @dataclass(frozen=True)
@@ -67,14 +67,13 @@ class TurnTrace:
     message_count: int
 
     @classmethod
-    def of(cls, reminder: Reminder) -> TurnTrace:
+    def of(cls, request: TurnRequest) -> TurnTrace:
+        items = request.reminder.items if request.reminder is not None else ()
         return cls(
-            agent_id=reminder.agent_id,
-            agent_name=reminder.agent_name,
-            discussion_ids=tuple(
-                sorted({item.discussion_id for item in reminder.items})
-            ),
-            message_count=len(reminder.items),
+            agent_id=request.agent_id,
+            agent_name=request.agent_name,
+            discussion_ids=tuple(sorted({item.discussion_id for item in items})),
+            message_count=len(items),
         )
 
     def attributes(self) -> dict[str, Any]:

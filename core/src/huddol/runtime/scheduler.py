@@ -1,22 +1,26 @@
 from __future__ import annotations
 
+import json
 import logging
 import threading
 from collections.abc import Callable
 from dataclasses import dataclass, replace
 
 from huddol.core.errors import DomainError
+from huddol.core.parameters import AgentParameters, agent_parameters
 from huddol.ports.agent import HistoryStore, SettingsStore, TodoStore
 from huddol.ports.execution import ExecutionControl
 from huddol.ports.store import OrganizationStore
 from huddol.runtime.reminder import (
     MEMORY_INDEX_BYTES,
+    PREPARATION_PROMPT,
     ModelRunner,
     Reminder,
     TurnRequest,
     build_reminder,
     exchange_nudge,
     render_resident,
+    reset_notice,
 )
 from huddol.services.memory import Memory
 from huddol.services.todo import Todos
@@ -129,6 +133,21 @@ class Scheduler:
             return False
         return self.history.usage_total(agent_id)["total_tokens"] >= limit
 
+    def parameters(self) -> AgentParameters:
+        return agent_parameters(self.settings.get_settings("agent"))
+
+    def preparation_due(self, agent_id: int) -> bool:
+        runs = self.history.runs(agent_id, limit=1)
+        if not runs:
+            return False
+        run = runs[0]
+        if run.sequence < self.history.window(
+            agent_id
+        ).since_sequence or run.status not in ("completed", "failed"):
+            return False
+        tokens = json.loads(run.usage_json or "{}").get("last_input_tokens")
+        return type(tokens) is int and tokens >= self.parameters().context_window_tokens
+
     def pending_keys(self, agent_id: int) -> frozenset[tuple[int, int]]:
         return frozenset(
             (item.discussion_id, item.message_id)
@@ -152,14 +171,14 @@ class Scheduler:
         for member in self.store.list_members():
             if not member.is_agent or member.state != "idle":
                 continue
-            keys = self.pending_keys(member.id)
-            if not keys:
-                continue
-            if self._failed_on(member.id, keys):
-                continue
             if self.over_token_limit(member.id):
                 continue
-            found.append(member.id)
+            if self.preparation_due(member.id):
+                found.append(member.id)
+                continue
+            keys = self.pending_keys(member.id)
+            if keys and not self._failed_on(member.id, keys):
+                found.append(member.id)
         return tuple(found)
 
     def tools_for(self, agent_id: int) -> AgentTools:
@@ -190,6 +209,7 @@ class Scheduler:
             Memory(self._deps.memory_tree_for(agent_id)).index(MEMORY_INDEX_BYTES),
             Todos(self._deps.todos, agent_id).snapshot(),
             self.environment_facts(),
+            reset_notice(self.history.window(agent_id)),
         )
 
     def environment_facts(self) -> str | None:
@@ -202,28 +222,38 @@ class Scheduler:
         member = self.store.get_member(agent_id)
         if member is None or not member.is_agent or member.state != "idle":
             return None
+        if self.over_token_limit(agent_id):
+            return None
+        if self.preparation_due(agent_id):
+            return self._execute(agent_id, member.name, None, PREPARATION_PROMPT)
         reminder = build_reminder(self.store, self.history, agent_id, member.name)
         if reminder is None:
             return None
-        return self._execute(reminder)
+        return self._execute(agent_id, member.name, reminder, reminder.render())
 
-    def _execute(self, reminder: Reminder) -> TurnRecord:
-        agent_id = reminder.agent_id
+    def _execute(
+        self, agent_id: int, agent_name: str, reminder: Reminder | None, prompt: str
+    ) -> TurnRecord:
+        items = reminder.items if reminder is not None else ()
         self.store.set_agent_state(agent_id, "running")
         run = self.history.start_run(
             agent_id,
-            reminded=[(item.discussion_id, item.message_id) for item in reminder.items],
+            reminded=[(item.discussion_id, item.message_id) for item in items],
         )
         self.emit(
             "turn.started",
             {
                 "agent_id": agent_id,
                 "sequence": run.sequence,
-                "items": len(reminder.items),
+                "items": len(items),
+                "kind": "reminder" if reminder is not None else "preparation",
             },
         )
-        discussion_ids = tuple(item.discussion_id for item in reminder.items)
+        discussion_ids = tuple(item.discussion_id for item in items)
         request = TurnRequest(
+            agent_id=agent_id,
+            agent_name=agent_name,
+            prompt=prompt,
             reminder=reminder,
             history_json=self.history.latest_messages(agent_id),
             resident="",
@@ -232,6 +262,7 @@ class Scheduler:
         )
         status = "completed"
         error: str | None = None
+        context_exceeded = False
         try:
             request = replace(request, resident=self.resident_block(agent_id))
             outcome = self._runner.run(
@@ -241,6 +272,7 @@ class Scheduler:
                     TurnBinding(agent_id, run.sequence),
                 ),
             )
+            context_exceeded = outcome.context_exceeded
             if outcome.error:
                 status = "failed"
                 error = outcome.error
@@ -265,6 +297,23 @@ class Scheduler:
             )
         finally:
             self._record_outcome(agent_id, status)
+            reason = None
+            if reminder is None:
+                reason = "prepared"
+            elif (
+                context_exceeded
+                and run.sequence != self.history.window(agent_id).since_sequence
+            ):
+                reason = "overflow"
+            if reason is not None:
+                window = self.history.reset_window(agent_id, reason)
+                with self._lock:
+                    self._failed.pop(agent_id, None)
+                self.emit(
+                    "window.reset",
+                    {"agent_id": agent_id, "number": window.number, "reason": reason},
+                )
+                self.wake()
             current = self.store.get_member(agent_id)
             if current is not None and current.state == "running":
                 self.store.set_agent_state(agent_id, "idle")

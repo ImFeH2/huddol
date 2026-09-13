@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from huddol.adapters.model.config import DEFAULT_COMPACTION, ModelConfig
+from huddol.adapters.model.config import ModelConfig
 from huddol.adapters.model.prompt import SYSTEM_PROMPT
 
 
@@ -13,19 +13,17 @@ def test_config_needs_model_key_and_url() -> None:
     assert ModelConfig.restore({"model": "m", "base_url": "u"}) is None
 
 
-@pytest.mark.parametrize(
-    ("values", "expected"),
-    [({}, DEFAULT_COMPACTION), ({"compaction_threshold": 128000}, 128000)],
-)
-def test_config_defaults_to_openai_and_reads_compaction_threshold(
-    values: dict[str, object], expected: int
+@pytest.mark.parametrize("values", [{}, {"compaction_threshold": "obsolete"}])
+def test_config_defaults_to_openai_and_ignores_obsolete_settings(
+    values: dict[str, object],
 ) -> None:
     config = ModelConfig.restore(
         {"model": "m", "api_key": "k", "base_url": "u", **values}
     )
     assert config is not None
     assert config.api_type == "openai"
-    assert config.compaction_threshold == expected
+    assert not hasattr(config, "compaction_threshold")
+    assert "compaction_threshold" not in config.redacted()
 
 
 def test_config_rejects_unknown_api_types() -> None:
@@ -34,7 +32,6 @@ def test_config_rejects_unknown_api_types() -> None:
     )
     assert config is not None
     assert config.api_type == "openai"
-    assert config.compaction_threshold == DEFAULT_COMPACTION
 
 
 def test_redacted_config_never_exposes_the_key() -> None:

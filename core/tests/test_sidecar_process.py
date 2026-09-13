@@ -356,85 +356,94 @@ def test_discussion_management_and_pagination_survive_the_pipe(tmp_path: Path) -
     assert len(events(frames, "discussion.deleted")) == 1
 
 
-def test_compaction_settings_work_without_model_credentials(tmp_path: Path) -> None:
+def test_agent_settings_and_window_survive_the_pipe_and_restart(tmp_path: Path) -> None:
     data = tmp_path / "data"
     frames, code, stderr = drive(
         data,
         [
-            {"id": 1, "method": "settings.get", "params": {"section": "model"}},
+            {"id": 1, "method": "settings.get", "params": {"section": "agent"}},
             {
                 "id": 2,
                 "method": "settings.update",
                 "params": {
-                    "section": "model",
-                    "values": {"compaction_threshold": 12345},
+                    "section": "agent",
+                    "values": {"context_window_tokens": 12345},
                 },
             },
+            {
+                "id": 3,
+                "method": "organization.create_agent",
+                "params": {"name": "Main"},
+            },
+            {"id": 4, "method": "agent.detail", "params": {"agent_id": 2}},
+            {"id": 5, "method": "settings.get", "params": {"section": "model"}},
         ],
     )
     assert code == 0, stderr
-    assert response(frames, 1)["result"]["compaction_threshold"] == 400_000
-    assert response(frames, 2)["result"]["compaction_threshold"] == 12345
-    assert response(frames, 2)["result"]["api_key_set"] is False
+    assert response(frames, 1)["result"] == {"context_window_tokens": 200_000}
+    assert response(frames, 2)["result"] == {"context_window_tokens": 12345}
+    assert response(frames, 4)["result"]["window"] == {
+        "number": 1,
+        "since_sequence": 1,
+        "reset_at": None,
+        "reason": None,
+    }
+    assert "compaction_threshold" not in response(frames, 5)["result"]
+    assert events(frames, "settings.updated") == [
+        {"type": "settings.updated", "section": "agent"}
+    ]
     frames, code, stderr = drive(
         data,
-        [
-            {"id": 1, "method": "settings.get", "params": {"section": "model"}},
-        ],
+        [{"id": 1, "method": "settings.get", "params": {"section": "agent"}}],
     )
     assert code == 0, stderr
-    assert response(frames, 1)["result"]["api_key_set"] is False
-    assert response(frames, 1)["result"]["compaction_threshold"] == 12345
+    assert response(frames, 1)["result"] == {"context_window_tokens": 12345}
 
 
-@pytest.mark.parametrize("threshold", [0, -1, 1.5, True, None, "32000"])
-def test_invalid_compaction_settings_do_not_change_stored_values(
-    tmp_path: Path, threshold
+@pytest.mark.parametrize(
+    ("values", "code"),
+    [
+        *[
+            ({"context_window_tokens": value}, "invalid_parameter")
+            for value in (0, -1, 1.5, True, None, "32000")
+        ],
+        ({"unknown": 1}, "invalid_setting"),
+    ],
+)
+def test_invalid_agent_settings_do_not_change_stored_values(
+    tmp_path: Path, values, code
 ) -> None:
     from huddol.adapters.sqlite.agent import SqliteAgentStore
     from huddol.adapters.sqlite.store import SqliteStore
 
     data = tmp_path / "data"
     store = SqliteStore(data / "huddol.sqlite3")
-    original = {
-        "base_url": "https://example.invalid",
-        "api_key": "retained-test-key",
-        "compaction_threshold": 64000,
-    }
-    SqliteAgentStore(store._db).set_settings("model", original)
+    original = {"context_window_tokens": 64000}
+    SqliteAgentStore(store._db).set_settings("agent", original)
     store.close()
-    frames, code, stderr = drive(
+    frames, exit_code, stderr = drive(
         data,
         [
             {
                 "id": 1,
                 "method": "settings.update",
-                "params": {
-                    "section": "model",
-                    "values": {
-                        "compaction_threshold": threshold,
-                        "api_key": "replacement-test-key",
-                    },
-                },
+                "params": {"section": "agent", "values": values},
             },
-            {"id": 2, "method": "settings.get", "params": {"section": "model"}},
+            {"id": 2, "method": "settings.get", "params": {"section": "agent"}},
         ],
     )
-    assert code == 0, stderr
-    assert response(frames, 1)["error"]["code"] == "invalid_compaction_threshold"
-    assert response(frames, 2)["result"]["compaction_threshold"] == 64000
-    assert response(frames, 2)["result"]["api_key_set"] is True
+    assert exit_code == 0, stderr
+    assert response(frames, 1)["error"]["code"] == code
+    assert response(frames, 2)["result"] == original
     assert events(frames, "settings.updated") == []
-    assert "retained-test-key" not in json.dumps(frames) + stderr
-    assert "replacement-test-key" not in json.dumps(frames) + stderr
     store = SqliteStore(data / "huddol.sqlite3")
     try:
-        assert SqliteAgentStore(store._db).get_settings("model") == original
+        assert SqliteAgentStore(store._db).get_settings("agent") == original
     finally:
         store.close()
 
 
-def test_compaction_updates_preserve_model_credentials(tmp_path: Path) -> None:
+def test_obsolete_model_settings_are_not_validated_or_returned(tmp_path: Path) -> None:
     from huddol.adapters.sqlite.agent import SqliteAgentStore
     from huddol.adapters.sqlite.store import SqliteStore
 
@@ -456,20 +465,20 @@ def test_compaction_updates_preserve_model_credentials(tmp_path: Path) -> None:
                 "method": "settings.update",
                 "params": {
                     "section": "model",
-                    "values": {"compaction_threshold": 32000},
+                    "values": {"compaction_threshold": False},
                 },
             },
         ],
     )
     assert code == 0, stderr
-    assert response(frames, 1)["result"]["compaction_threshold"] == 64000
-    assert response(frames, 2)["result"]["compaction_threshold"] == 32000
+    assert "compaction_threshold" not in response(frames, 1)["result"]
+    assert "compaction_threshold" not in response(frames, 2)["result"]
     assert "retained-test-key" not in json.dumps(frames) + stderr
     store = SqliteStore(data / "huddol.sqlite3")
     try:
         assert SqliteAgentStore(store._db).get_settings("model") == {
             **original,
-            "compaction_threshold": 32000,
+            "compaction_threshold": False,
         }
     finally:
         store.close()
@@ -512,7 +521,6 @@ def test_model_api_type_round_trips_and_is_validated_over_the_pipe(
         "api_type": "google",
         "base_url": "https://generativelanguage.googleapis.invalid",
         "model": "gemini-test",
-        "compaction_threshold": 400_000,
         "api_key_set": True,
     }
     assert len(events(frames, "settings.updated")) == 1
@@ -1135,6 +1143,7 @@ def test_agents_wake_and_report_turns_over_the_socket(tmp_path: Path) -> None:
             started = client.wait_for(lambda frame: frame.get("type") == "turn.started")
             assert started["agent_id"] == 2
             assert started["items"] == 1
+            assert started["kind"] == "reminder"
             finished = client.wait_for(
                 lambda frame: frame.get("type") == "turn.finished"
             )

@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import threading
-from collections.abc import AsyncIterator, Callable
+from collections.abc import AsyncIterator, Callable, Sequence
 from contextlib import asynccontextmanager
 from dataclasses import replace
 from typing import Any, Literal, cast
@@ -17,6 +17,7 @@ from pydantic_ai import (
 )
 from pydantic_ai.capabilities import Hooks
 from pydantic_ai.common_tools.duckduckgo import duckduckgo_search_tool
+from pydantic_ai.exceptions import ModelHTTPError
 from pydantic_ai.messages import (
     ModelMessage,
     ModelRequest,
@@ -41,6 +42,7 @@ from pydantic_ai.providers.anthropic import AnthropicProvider
 from pydantic_ai.providers.google import GoogleProvider
 from pydantic_ai.providers.openai import OpenAIProvider
 from pydantic_ai.settings import ModelSettings
+from pydantic_ai.usage import RunUsage
 
 from huddol.adapters.model.config import ModelConfig
 from huddol.adapters.model.observability import (
@@ -54,6 +56,37 @@ from huddol.core.errors import DomainError
 from huddol.ports.agent import SettingsStore
 from huddol.runtime.reminder import TurnOutcome, TurnRequest
 from huddol.tools import AgentTools
+
+
+def is_context_exceeded(error: BaseException) -> bool:
+    return (
+        isinstance(error, ModelHTTPError)
+        and error.status_code in (400, 413)
+        and any(
+            phrase in str(error.body).lower()
+            for phrase in (
+                "context_length_exceeded",
+                "maximum context length",
+                "context window",
+                "prompt is too long",
+                "too many tokens",
+                "input token count",
+                "exceeds the maximum number of tokens",
+                "request too large",
+            )
+        )
+    )
+
+
+def _last_input_tokens(messages: Sequence[ModelMessage]) -> int | None:
+    return next(
+        (
+            message.usage.input_tokens
+            for message in reversed(messages)
+            if isinstance(message, ModelResponse) and message.usage.input_tokens > 0
+        ),
+        None,
+    )
 
 
 def build_model(config: ModelConfig) -> Model:
@@ -526,8 +559,6 @@ class PydanticModelRunner:
                     previous.shutdown()
             observability = self._observability
         history = _decode_history(request.history_json)
-        if len(request.history_json.encode("utf-8")) > config.compaction_threshold:
-            history = []
         if not history:
             history.append(
                 ModelRequest(
@@ -583,9 +614,12 @@ class PydanticModelRunner:
                 ],
             )
 
+        counted = RunUsage()
+
         async def once() -> Any:
             return await self._agent.run(
-                request.reminder.render(),
+                request.prompt,
+                usage=counted,
                 deps=tools,
                 message_history=history,
                 model=LiveModel(self._resolve_model, request.ephemeral),
@@ -599,41 +633,45 @@ class PydanticModelRunner:
                 ],
             )
 
-        trace = TurnTrace.of(request.reminder)
+        trace = TurnTrace.of(request)
+        history_length = len(history)
+        error = None
+        context_exceeded = False
         with capture_run_messages() as captured, active_trace(trace):
             try:
                 result = asyncio.run(once())
             except Exception as failure:  # noqa: BLE001
-                partial = request.history_json
+                messages = request.history_json
                 if captured:
-                    partial = ModelMessagesTypeAdapter.dump_json(captured).decode(
+                    messages = ModelMessagesTypeAdapter.dump_json(captured).decode(
                         "utf-8"
                     )
-                return TurnOutcome(
-                    messages_json=partial,
-                    error=f"{type(failure).__name__}: {failure}",
-                )
+                input_tokens = _last_input_tokens(captured[history_length:])
+                error = f"{type(failure).__name__}: {failure}"
+                context_exceeded = is_context_exceeded(failure)
+            else:
+                messages = ModelMessagesTypeAdapter.dump_json(
+                    result.all_messages()
+                ).decode("utf-8")
+                input_tokens = _last_input_tokens(result.new_messages())
 
-        messages = ModelMessagesTypeAdapter.dump_json(result.all_messages()).decode(
-            "utf-8"
+        usage = json.dumps(
+            {
+                "input_tokens": counted.input_tokens,
+                "output_tokens": counted.output_tokens,
+                "cache_read_tokens": counted.cache_read_tokens,
+                "requests": counted.requests,
+                "tool_calls": counted.tool_calls,
+                "last_input_tokens": input_tokens,
+            }
         )
-        counted = getattr(result, "usage", None)
-        if callable(counted):
-            counted = counted()
-        usage = (
-            json.dumps(
-                {
-                    "input_tokens": getattr(counted, "input_tokens", 0),
-                    "output_tokens": getattr(counted, "output_tokens", 0),
-                    "cache_read_tokens": getattr(counted, "cache_read_tokens", 0),
-                    "requests": getattr(counted, "requests", 0),
-                    "tool_calls": getattr(counted, "tool_calls", 0),
-                }
-            )
-            if counted is not None
-            else None
+        return TurnOutcome(
+            messages_json=messages,
+            usage_json=usage,
+            error=error,
+            input_tokens=input_tokens,
+            context_exceeded=context_exceeded,
         )
-        return TurnOutcome(messages_json=messages, usage_json=usage)
 
 
 def _decode_history(raw: str) -> list[Any]:

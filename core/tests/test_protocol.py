@@ -321,6 +321,80 @@ def test_model_settings_reject_unknown_api_types_and_keep_the_stored_ones(
     ] == [{"type": "settings.updated", "section": "model"}]
 
 
+def test_agent_settings_fill_defaults_merge_and_emit_events(server) -> None:
+    dispatcher, output, deps = server
+    assert call(dispatcher, output, "settings.get", section="agent")["result"] == {
+        "context_window_tokens": 200_000
+    }
+    deps.settings.set_settings("agent", {"legacy": 10, "context_window_tokens": False})
+    assert call(dispatcher, output, "settings.get", section="agent")["result"] == {
+        "context_window_tokens": 200_000
+    }
+    updated = call(
+        dispatcher,
+        output,
+        "settings.update",
+        section="agent",
+        values={"context_window_tokens": 12345},
+    )["result"]
+    assert updated == {"context_window_tokens": 12345}
+    assert (
+        call(dispatcher, output, "settings.get", section="agent")["result"] == updated
+    )
+    assert deps.settings.get_settings("agent") == {"legacy": 10, **updated}
+    assert [
+        frame for frame in output.frames() if frame["type"] == "settings.updated"
+    ] == [{"type": "settings.updated", "section": "agent"}]
+    assert (
+        call(dispatcher, output, "settings.update", section="agent", values={})[
+            "result"
+        ]
+        == updated
+    )
+
+
+@pytest.mark.parametrize(
+    ("values", "code"),
+    [
+        *[
+            ({"context_window_tokens": value}, "invalid_parameter")
+            for value in (0, -1, True, False, "100", None, 1.5)
+        ],
+        ({"context_window_tokens": 100, "unknown": 1}, "invalid_setting"),
+    ],
+)
+def test_agent_settings_validation_is_atomic(server, values, code) -> None:
+    dispatcher, output, deps = server
+    original = {"context_window_tokens": 12345}
+    deps.settings.set_settings("agent", original)
+    rejected = call(
+        dispatcher, output, "settings.update", section="agent", values=values
+    )
+    assert rejected["error"]["code"] == code
+    assert deps.settings.get_settings("agent") == original
+    assert not any(frame["type"] == "settings.updated" for frame in output.frames())
+
+
+@pytest.mark.parametrize("configured", [False, True])
+def test_model_settings_ignore_the_obsolete_byte_threshold(server, configured) -> None:
+    dispatcher, output, deps = server
+    if configured:
+        deps.settings.set_settings(
+            "model",
+            {"model": "m", "api_key": "unused", "base_url": "https://example.invalid"},
+        )
+    initial = call(dispatcher, output, "settings.get", section="model")["result"]
+    assert "compaction_threshold" not in initial
+    result = call(
+        dispatcher,
+        output,
+        "settings.update",
+        section="model",
+        values={"compaction_threshold": "obsolete"},
+    )["result"]
+    assert result == initial
+
+
 def test_model_listing_and_testing_reach_the_injected_probe(server) -> None:
     dispatcher, output, deps = server
     stored = {
@@ -416,6 +490,21 @@ def test_agent_detail_reports_todos_and_runs(server) -> None:
     detail = call(dispatcher, output, "agent.detail", agent_id=agent["id"])["result"]
     assert detail["todos"][0]["title"] == "some work"
     assert detail["runs"][0]["status"] == "completed"
+    assert detail["window"] == {
+        "number": 1,
+        "since_sequence": 1,
+        "reset_at": None,
+        "reason": None,
+    }
+    state = deps.history.reset_window(agent["id"], "overflow")
+    detail = call(dispatcher, output, "agent.detail", agent_id=agent["id"])["result"]
+    assert detail["window"] == {
+        "number": 2,
+        "since_sequence": 2,
+        "reset_at": state.reset_at,
+        "reason": "overflow",
+    }
+    assert detail["runs"][0]["sequence"] == run.sequence
 
 
 def test_agent_detail_reports_each_turn_output_and_the_idle_streak(server) -> None:

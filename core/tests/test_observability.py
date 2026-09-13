@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 from base64 import b64decode
+from dataclasses import replace
 
 import pytest
+from test_runner import request
 
 from huddol.adapters.model.observability import (
     ObservabilityConfig,
@@ -13,8 +15,8 @@ from huddol.adapters.model.observability import (
 from huddol.runtime.reminder import Reminder, ReminderItem
 
 
-def reminder() -> Reminder:
-    return Reminder(
+def turn():
+    reminder = Reminder(
         13,
         "Main",
         (
@@ -22,6 +24,13 @@ def reminder() -> Reminder:
             ReminderItem(3, "rewrite", 9, 1, "You", True),
             ReminderItem(5, "sandbox", 2, 36, "Technical Manager", False),
         ),
+    )
+    return replace(
+        request(),
+        agent_id=13,
+        agent_name="Main",
+        reminder=reminder,
+        prompt=reminder.render(),
     )
 
 
@@ -82,15 +91,23 @@ def test_redacted_config_never_exposes_the_keys() -> None:
 
 
 def test_trace_summarises_the_turn() -> None:
-    trace = TurnTrace.of(reminder())
+    trace = TurnTrace.of(turn())
     assert trace.agent_id == 13
     assert trace.agent_name == "Main"
     assert trace.discussion_ids == (3, 5)
     assert trace.message_count == 3
 
 
+def test_preparation_trace_has_identity_without_reminders() -> None:
+    trace = TurnTrace.of(replace(turn(), reminder=None))
+    assert trace.agent_id == 13
+    assert trace.agent_name == "Main"
+    assert trace.discussion_ids == ()
+    assert trace.message_count == 0
+
+
 def test_trace_attributes_match_the_langfuse_schema() -> None:
-    attributes = TurnTrace.of(reminder()).attributes()
+    attributes = TurnTrace.of(turn()).attributes()
     assert attributes["langfuse.trace.name"] == "Agent turn"
     assert attributes["langfuse.trace.tags"] == ["huddol", "agent"]
     assert attributes["langfuse.trace.metadata.agent_id"] == 13
@@ -101,7 +118,7 @@ def test_trace_attributes_match_the_langfuse_schema() -> None:
 
 def test_trace_scope_is_restored_after_use() -> None:
     assert current_trace() is None
-    trace = TurnTrace.of(reminder())
+    trace = TurnTrace.of(turn())
     with active_trace(trace):
         assert current_trace() is trace
     assert current_trace() is None
@@ -124,7 +141,7 @@ def test_span_processor_only_decorates_model_spans() -> None:
             self.attributes[key] = value
 
     processor = TurnAttributeProcessor()
-    with active_trace(TurnTrace.of(reminder())):
+    with active_trace(TurnTrace.of(turn())):
         model_span = FakeSpan("pydantic-ai")
         other_span = FakeSpan("something-else")
         processor.on_start(model_span)  # type: ignore[arg-type]

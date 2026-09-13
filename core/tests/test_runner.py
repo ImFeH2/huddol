@@ -9,6 +9,7 @@ from typing import Any
 import pytest
 from pydantic_ai import ModelMessagesTypeAdapter, models
 from pydantic_ai.capabilities import Hooks
+from pydantic_ai.exceptions import ModelHTTPError
 from pydantic_ai.messages import (
     ModelRequest,
     ModelResponse,
@@ -18,10 +19,16 @@ from pydantic_ai.messages import (
 )
 from pydantic_ai.models import ModelRequestParameters
 from pydantic_ai.models.function import FunctionModel
+from pydantic_ai.usage import RequestUsage
 
 from huddol.adapters.model.config import ModelConfig
 from huddol.adapters.model.observability import ObservabilityConfig
-from huddol.adapters.model.runner import UNAVAILABLE, LiveModel, PydanticModelRunner
+from huddol.adapters.model.runner import (
+    UNAVAILABLE,
+    LiveModel,
+    PydanticModelRunner,
+    is_context_exceeded,
+)
 from huddol.runtime.reminder import Reminder, ReminderItem, TurnRequest
 
 
@@ -56,8 +63,12 @@ def no_network(monkeypatch) -> None:
 
 
 def request() -> TurnRequest:
+    reminder = Reminder(2, "Main", (ReminderItem(1, "work", 1, 1, "You", False),))
     return TurnRequest(
-        reminder=Reminder(2, "Main", (ReminderItem(1, "work", 1, 1, "You", False),)),
+        agent_id=2,
+        agent_name="Main",
+        prompt=reminder.render(),
+        reminder=reminder,
         history_json="[]",
         resident="Your MEMORY.md is empty.\n\nTodos: none\n\nenvironment A",
         environment=lambda: "environment A",
@@ -130,8 +141,7 @@ def test_the_next_turn_picks_up_settings_and_reuses_unchanged_models(settings) -
         "model", {**model_values("second"), "compaction_threshold": 9}
     )
     assert runner.run(request(), None).error is None
-    assert builder.calls[-1].compaction_threshold == 9
-    assert len(builder.calls) == 3
+    assert len(builder.calls) == 2
     settings.set_settings("model", {})
     assert runner.run(request(), None).error == UNAVAILABLE
 
@@ -220,10 +230,7 @@ def test_resident_is_inserted_only_for_empty_history(settings) -> None:
     assert "changed" not in second.messages_json
 
 
-@pytest.mark.parametrize("reset", [False, True])
-def test_history_reset_uses_utf8_bytes_and_keeps_the_exact_threshold(
-    settings, reset
-) -> None:
+def test_history_is_never_trimmed_by_its_byte_length(settings) -> None:
     original = request()
     history = [
         ModelRequest(
@@ -233,24 +240,14 @@ def test_history_reset_uses_utf8_bytes_and_keeps_the_exact_threshold(
         ModelResponse(parts=[TextPart("Old response")]),
     ]
     raw = ModelMessagesTypeAdapter.dump_json(history).decode()
-    threshold = len(raw) if reset else len(raw.encode("utf-8"))
-    settings.set_settings(
-        "model", {**model_values("first"), "compaction_threshold": threshold}
-    )
+    settings.set_settings("model", {**model_values("first"), "compaction_threshold": 1})
     outcome = PydanticModelRunner(settings, build_model=Builder()).run(
         replace(original, history_json=raw), None
     )
     assert outcome.error is None
     saved = ModelMessagesTypeAdapter.validate_json(outcome.messages_json)
-    if reset:
-        assert len(saved) == 3
-        assert saved[0].parts[0].content == original.resident
-        assert saved[0].metadata == {
-            "huddol": {"block": "resident", "environment": "environment A"}
-        }
-    else:
-        assert saved[:2] == history
-    assert saved[-2].parts[0].content == original.reminder.render()
+    assert saved[:2] == history
+    assert saved[-2].parts[0].content == original.prompt
 
 
 @pytest.mark.parametrize("initial", [None, "environment A"])
@@ -443,6 +440,167 @@ def test_a_failed_model_build_is_retried_on_the_next_turn(settings) -> None:
     assert "provider rejected" in runner.run(request(), None).error
     assert runner.run(request(), None).error is None
     assert len(attempts) == 2
+
+
+@pytest.mark.parametrize("tokens", [0, 123])
+def test_input_tokens_and_prompt_come_from_the_current_turn(settings, tokens) -> None:
+    received = []
+
+    def respond(messages, info):
+        received.extend(messages)
+        return ModelResponse(
+            parts=[TextPart("Done")],
+            usage=RequestUsage(input_tokens=tokens, output_tokens=1),
+        )
+
+    original = replace(
+        request(),
+        prompt="Save notes",
+        reminder=None,
+        resident="Resident\n\nReset notice",
+    )
+    outcome = PydanticModelRunner(
+        settings, build_model=lambda config: FunctionModel(respond)
+    ).run(original, None)
+    assert outcome.error is None
+    assert outcome.input_tokens == (tokens or None)
+    assert json.loads(outcome.usage_json)["last_input_tokens"] == (tokens or None)
+    assert received[-1].parts[-1].content == original.prompt
+    saved = ModelMessagesTypeAdapter.validate_json(outcome.messages_json)
+    assert saved[0].parts[0].content.endswith("Reset notice")
+    assert saved[1].parts[0].content == original.prompt
+
+
+@pytest.mark.parametrize("last_tokens", [100, 0])
+@pytest.mark.parametrize("fail", [False, True])
+def test_last_input_tokens_excludes_old_history_and_is_not_a_turn_total(
+    settings, last_tokens, fail
+) -> None:
+    calls = 0
+
+    def respond(messages, info):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            return ModelResponse(
+                parts=[ToolCallPart("todo", {"action": "list"})],
+                usage=RequestUsage(input_tokens=250, output_tokens=2),
+            )
+        if fail:
+            raise ModelHTTPError(
+                400, "fake", {"error": {"code": "context_length_exceeded"}}
+            )
+        return ModelResponse(
+            parts=[TextPart("Done")],
+            usage=RequestUsage(input_tokens=last_tokens, output_tokens=1),
+        )
+
+    class Tools:
+        def list_todos(self):
+            return []
+
+    history = ModelMessagesTypeAdapter.dump_json(
+        [
+            ModelRequest(parts=[UserPromptPart("Old prompt")]),
+            ModelResponse(
+                parts=[TextPart("Old response")], usage=RequestUsage(input_tokens=999)
+            ),
+        ]
+    ).decode()
+    outcome = PydanticModelRunner(
+        settings, build_model=lambda config: FunctionModel(respond)
+    ).run(replace(request(), history_json=history), Tools())
+    assert calls == 2
+    expected = 250 if fail or last_tokens == 0 else last_tokens
+    assert outcome.input_tokens == expected
+    usage = json.loads(outcome.usage_json)
+    assert usage["last_input_tokens"] == expected
+    assert usage["input_tokens"] == 250 + (0 if fail else last_tokens)
+    assert usage["tool_calls"] == 1
+    assert outcome.context_exceeded == fail
+    assert (outcome.error is not None) == fail
+    assert "tool-return" in outcome.messages_json
+    assert "Old response" in outcome.messages_json
+
+
+@pytest.mark.parametrize("prior", [False, True])
+def test_overflow_before_any_response_keeps_partial_history_without_old_usage(
+    settings, prior
+) -> None:
+    def respond(messages, info):
+        raise ModelHTTPError(413, "fake", "Request too large")
+
+    original = request()
+    if prior:
+        history = ModelMessagesTypeAdapter.dump_json(
+            [
+                ModelRequest(parts=[UserPromptPart("Old prompt")]),
+                ModelResponse(
+                    parts=[TextPart("Old response")],
+                    usage=RequestUsage(input_tokens=999),
+                ),
+            ]
+        ).decode()
+        original = replace(original, history_json=history)
+    outcome = PydanticModelRunner(
+        settings, build_model=lambda config: FunctionModel(respond)
+    ).run(original, None)
+    assert outcome.context_exceeded
+    assert "ModelHTTPError" in outcome.error
+    assert outcome.input_tokens is None
+    assert json.loads(outcome.usage_json)["last_input_tokens"] is None
+    assert json.loads(outcome.usage_json)["input_tokens"] == 0
+    assert original.prompt in [
+        part.content
+        for message in ModelMessagesTypeAdapter.validate_json(outcome.messages_json)
+        for part in message.parts
+        if isinstance(part, UserPromptPart)
+    ]
+    assert ("Old response" in outcome.messages_json) == prior
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        {"error": {"code": "context_length_exceeded", "message": "rejected"}},
+        {
+            "type": "error",
+            "error": {
+                "type": "invalid_request_error",
+                "message": "prompt is too long: 210000 tokens",
+            },
+        },
+        {
+            "error": {
+                "message": "The input token count exceeds the maximum number of tokens allowed",
+                "status": "INVALID_ARGUMENT",
+            }
+        },
+        "Maximum context length reached",
+        "Context window exceeded",
+        "Too many tokens",
+        "Exceeds the maximum number of tokens",
+        "REQUEST TOO LARGE",
+    ],
+)
+@pytest.mark.parametrize("status", [400, 413])
+def test_context_exceeded_recognizes_provider_errors(body, status) -> None:
+    assert is_context_exceeded(ModelHTTPError(status, "fake", body))
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        ModelHTTPError(401, "fake", "context_length_exceeded"),
+        ModelHTTPError(429, "fake", "too many tokens"),
+        ModelHTTPError(500, "fake", "context window"),
+        ModelHTTPError(400, "fake", "invalid API key"),
+        ModelHTTPError(413, "fake", None),
+        RuntimeError("context_length_exceeded"),
+    ],
+)
+def test_context_exceeded_does_not_match_other_failures(error) -> None:
+    assert not is_context_exceeded(error)
 
 
 def test_streaming_appends_ephemeral_only_to_the_outgoing_copy() -> None:

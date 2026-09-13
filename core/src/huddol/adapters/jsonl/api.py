@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from dataclasses import asdict
 from typing import Any
 
 from huddol.adapters.jsonl.protocol import Dispatcher
-from huddol.adapters.model.config import API_TYPES, ModelConfig, compaction_threshold
+from huddol.adapters.model.config import API_TYPES, ModelConfig
 from huddol.core.errors import DomainError
+from huddol.core.parameters import agent_parameters, validate_parameters
 from huddol.core.turn import idle_streak
 from huddol.runtime.scheduler import Scheduler
 from huddol.tools import AgentTools
@@ -207,6 +209,7 @@ class Api:
                 )
             return {
                 "id": agent_id,
+                "window": asdict(self._scheduler.history.window(agent_id)),
                 "todos": tools.list_todos(),
                 "memory": tools.list_memory(),
                 "usage": self._scheduler.history.usage_total(agent_id),
@@ -250,9 +253,10 @@ class Api:
                             if key in values
                         },
                         "api_key_set": bool(values.get("api_key")),
-                        "compaction_threshold": compaction_threshold(values),
                     }
                 )
+            if section == "agent":
+                return asdict(agent_parameters(values))
             if section == "observability":
                 return {
                     key: value
@@ -275,13 +279,8 @@ class Api:
                     "invalid_api_type",
                     f"api_type must be one of {', '.join(API_TYPES)}",
                 )
-            if section == "model" and "compaction_threshold" in values:
-                threshold = values["compaction_threshold"]
-                if type(threshold) is not int or threshold <= 0:
-                    raise DomainError(
-                        "invalid_compaction_threshold",
-                        "Compaction threshold must be a positive integer in bytes",
-                    )
+            if section == "agent":
+                values = validate_parameters(values)
             if section == "execution":
                 result = self._scheduler.execution.configure(
                     values, lambda stored: settings.set_settings("execution", stored)

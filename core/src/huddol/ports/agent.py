@@ -21,6 +21,14 @@ class AgentRun:
 
 
 @dataclass(frozen=True)
+class WindowState:
+    number: int
+    since_sequence: int
+    reset_at: str | None
+    reason: str | None
+
+
+@dataclass(frozen=True)
 class TurnEffect:
     sequence: int
     ordinal: int
@@ -44,6 +52,10 @@ class TodoStore(Protocol):
 
 
 class HistoryStore(Protocol):
+    def window(self, agent_id: int) -> WindowState: ...
+
+    def reset_window(self, agent_id: int, reason: str) -> WindowState: ...
+
     def start_run(
         self,
         agent_id: int,

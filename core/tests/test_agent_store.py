@@ -7,6 +7,7 @@ import pytest
 from huddol.adapters.sqlite.agent import SqliteAgentStore
 from huddol.adapters.sqlite.store import SqliteStore
 from huddol.core.errors import DomainError
+from huddol.ports.agent import WindowState
 from huddol.services.history import History
 from huddol.services.todo import Todos
 
@@ -83,6 +84,57 @@ def test_runs_append_and_report_the_latest_history(
     second = agent_store.start_run(AGENT)
     assert second.sequence == 2
     assert agent_store.latest_messages(AGENT) == '[{"kind":"request"}]'
+
+
+def test_windows_default_and_reset_without_any_runs(agent_store) -> None:
+    assert agent_store.window(AGENT) == WindowState(1, 1, None, None)
+    assert agent_store.latest_messages(AGENT) == "[]"
+    state = agent_store.reset_window(AGENT, "prepared")
+    assert state == WindowState(2, 1, state.reset_at, "prepared")
+    assert state.reset_at is not None
+    assert agent_store.window(AGENT) == state
+    assert agent_store.window(AGENT + 1) == WindowState(1, 1, None, None)
+    state = agent_store.reset_window(AGENT, "overflow")
+    assert state == WindowState(3, 1, state.reset_at, "overflow")
+
+
+def test_windows_scope_messages_but_keep_history_usage_and_effects(agent_store) -> None:
+    first = agent_store.start_run(AGENT)
+    agent_store.finish_run(
+        AGENT,
+        first.sequence,
+        status="completed",
+        messages_json='[{"text":"old"}]',
+        usage_json='{"input_tokens":100,"output_tokens":20}',
+    )
+    agent_store.record_effect(AGENT, first.sequence, "send", "old message")
+    agent_store.start_run(AGENT)
+    for _ in range(5):
+        agent_store.start_run(AGENT + 1)
+    state = agent_store.reset_window(AGENT, "prepared")
+    assert state.number == 2
+    assert state.since_sequence == 3
+    assert agent_store.latest_messages(AGENT) == "[]"
+    assert len(agent_store.runs(AGENT)) == 2
+    assert agent_store.search_runs(AGENT, "old")[0].sequence == first.sequence
+    assert agent_store.usage_total(AGENT)["total_tokens"] == 120
+    assert agent_store.effects(AGENT)[0].summary == "old message"
+    run = agent_store.start_run(AGENT)
+    assert run.sequence == state.since_sequence
+    assert agent_store.latest_messages(AGENT) == "[]"
+    agent_store.finish_run(
+        AGENT, run.sequence, status="completed", messages_json='[{"text":"new"}]'
+    )
+    agent_store.start_run(AGENT)
+    assert agent_store.latest_messages(AGENT) == '[{"text":"new"}]'
+    state = agent_store.reset_window(AGENT, "overflow")
+    assert state.number == 3 and state.since_sequence == 5
+    assert agent_store.latest_messages(AGENT) == "[]"
+    reopened = SqliteAgentStore(agent_store._db)
+    assert reopened.window(AGENT) == state
+    assert reopened.latest_messages(AGENT) == "[]"
+    assert len(reopened.runs(AGENT)) == 4
+    assert reopened.search_runs(AGENT, "old")[0].sequence == first.sequence
 
 
 def test_unfinished_runs_are_marked_interrupted(agent_store: SqliteAgentStore) -> None:
