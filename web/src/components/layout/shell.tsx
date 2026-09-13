@@ -1,7 +1,6 @@
 import { clsx } from "clsx";
 import { ArrowLeft } from "lucide-react";
 import { Children, type ReactNode, useRef } from "react";
-import "@/components/layout/shell.css";
 
 const crumbClasses =
   "inline-flex items-center gap-1 self-start min-h-6 py-0 pr-2 pl-1 border-0 rounded-xs bg-transparent text-fg-muted text-xs font-medium cursor-pointer transition-[background-color,color] duration-(--duration-fast) ease-linear hover:bg-gray-800 hover:text-fg";

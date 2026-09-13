@@ -271,9 +271,9 @@ export default function App() {
     );
   } else if (!loaded) {
     body = (
-      <div className="boot">
+      <div className="flex flex-col items-center justify-center gap-3 h-screen bg-surface">
         <Spinner label="Starting Huddol" />
-        <p className="muted">Starting Huddol…</p>
+        <p className="text-fg-muted">Starting Huddol…</p>
       </div>
     );
   } else {

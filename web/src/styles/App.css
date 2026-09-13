@@ -130,16 +130,6 @@
   }
 }
 
-.boot {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: calc(var(--spacing) * 3);
-  height: 100vh;
-  background: var(--color-surface);
-}
-
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,
