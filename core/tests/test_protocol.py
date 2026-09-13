@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import io
 import json
+from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 
@@ -14,6 +15,7 @@ from huddol.adapters.jsonl.protocol import Dispatcher, parse, wait_for_shutdown
 from huddol.adapters.model.runner import PydanticModelRunner
 from huddol.adapters.sqlite.agent import SqliteAgentStore
 from huddol.adapters.sqlite.store import SqliteStore
+from huddol.core.parameters import AgentParameters
 from huddol.runtime.scheduler import Scheduler
 from huddol.tools import Dependencies
 
@@ -323,21 +325,30 @@ def test_model_settings_reject_unknown_api_types_and_keep_the_stored_ones(
 
 def test_agent_settings_fill_defaults_merge_and_emit_events(server) -> None:
     dispatcher, output, deps = server
-    assert call(dispatcher, output, "settings.get", section="agent")["result"] == {
-        "context_window_tokens": 200_000
-    }
+    defaults = asdict(AgentParameters())
+    assert (
+        call(dispatcher, output, "settings.get", section="agent")["result"] == defaults
+    )
     deps.settings.set_settings("agent", {"legacy": 10, "context_window_tokens": False})
-    assert call(dispatcher, output, "settings.get", section="agent")["result"] == {
-        "context_window_tokens": 200_000
+    assert (
+        call(dispatcher, output, "settings.get", section="agent")["result"] == defaults
+    )
+    values = {
+        "context_window_tokens": 12345,
+        "exchange_nudge_after": 3,
+        "max_concurrent_turns": 2,
+        "idle_streak_after": 5,
+        "memory_index_bytes": 256,
+        "token_limit": 1000,
     }
     updated = call(
         dispatcher,
         output,
         "settings.update",
         section="agent",
-        values={"context_window_tokens": 12345},
+        values=values,
     )["result"]
-    assert updated == {"context_window_tokens": 12345}
+    assert updated == values
     assert (
         call(dispatcher, output, "settings.get", section="agent")["result"] == updated
     )
@@ -351,6 +362,13 @@ def test_agent_settings_fill_defaults_merge_and_emit_events(server) -> None:
         ]
         == updated
     )
+    assert call(
+        dispatcher,
+        output,
+        "settings.update",
+        section="agent",
+        values={"token_limit": 0},
+    )["result"] == {**values, "token_limit": 0}
 
 
 @pytest.mark.parametrize(
@@ -360,6 +378,8 @@ def test_agent_settings_fill_defaults_merge_and_emit_events(server) -> None:
             ({"context_window_tokens": value}, "invalid_parameter")
             for value in (0, -1, True, False, "100", None, 1.5)
         ],
+        ({"max_concurrent_turns": 0}, "invalid_parameter"),
+        ({"token_limit": -1}, "invalid_parameter"),
         ({"context_window_tokens": 100, "unknown": 1}, "invalid_setting"),
     ],
 )
@@ -526,12 +546,75 @@ def test_agent_detail_reports_each_turn_output_and_the_idle_streak(server) -> No
 
     detail = call(dispatcher, output, "agent.detail", agent_id=agent_id)["result"]
     assert detail["idle_streak"] == 2
+    assert detail["idle"] is False
     assert detail["runs"][0]["effects"] == [
         {"ordinal": 1, "tool": "ack", "summary": "1 acknowledged"}
     ]
     assert detail["runs"][2]["effects"] == [
         {"ordinal": 1, "tool": "send", "summary": "message 4"}
     ]
+
+
+def test_agent_idle_flag_follows_the_current_parameter(server) -> None:
+    dispatcher, output, deps = server
+    agent_id = call(dispatcher, output, "organization.create_agent", name="Main")[
+        "result"
+    ]["id"]
+    for _ in range(3):
+        run = deps.history.start_run(agent_id)
+        deps.history.finish_run(
+            agent_id, run.sequence, status="completed", messages_json="[]"
+        )
+    detail = call(dispatcher, output, "agent.detail", agent_id=agent_id)["result"]
+    assert detail["idle_streak"] == 3
+    assert detail["idle"] is True
+    call(
+        dispatcher,
+        output,
+        "settings.update",
+        section="agent",
+        values={"idle_streak_after": 5},
+    )
+    detail = call(dispatcher, output, "agent.detail", agent_id=agent_id)["result"]
+    assert detail["idle_streak"] == 3
+    assert detail["idle"] is False
+
+
+@pytest.mark.parametrize("limit", [0, 100, 101])
+def test_token_limit_reports_the_effective_agent_parameter(server, limit) -> None:
+    dispatcher, output, deps = server
+    agent_id = call(dispatcher, output, "organization.create_agent", name="Main")[
+        "result"
+    ]["id"]
+    run = deps.history.start_run(agent_id)
+    deps.history.finish_run(
+        agent_id,
+        run.sequence,
+        status="completed",
+        messages_json="[]",
+        usage_json='{"input_tokens":100}',
+    )
+    legacy = {"agent_token_limit": 1}
+    assert (
+        call(dispatcher, output, "settings.update", section="limits", values=legacy)[
+            "result"
+        ]
+        == legacy
+    )
+    assert (
+        call(dispatcher, output, "settings.get", section="limits")["result"] == legacy
+    )
+    call(
+        dispatcher,
+        output,
+        "settings.update",
+        section="agent",
+        values={"token_limit": limit},
+    )
+    organization = call(dispatcher, output, "organization.get")["result"]
+    detail = call(dispatcher, output, "agent.detail", agent_id=agent_id)["result"]
+    assert organization["token_limit"] == detail["token_limit"] == limit
+    assert detail["over_token_limit"] is (limit == 100)
 
 
 def test_library_round_trips_over_the_protocol(server) -> None:

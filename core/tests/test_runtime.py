@@ -538,10 +538,14 @@ def test_token_limit_and_member_state_still_block_preparation(world) -> None:
     runner = RecordingRunner()
     scheduler = Scheduler(world, runner)
     assert scheduler.preparation_due(MAIN)
-    world.settings.set_settings("limits", {"agent_token_limit": 100})
+    world.settings.set_settings(
+        "agent", {"context_window_tokens": 100, "token_limit": 100}
+    )
     assert scheduler.runnable_agents() == ()
     assert scheduler.run_turn(MAIN) is None
-    world.settings.set_settings("limits", {"agent_token_limit": 101})
+    world.settings.set_settings(
+        "agent", {"context_window_tokens": 100, "token_limit": 101}
+    )
     world.store.set_agent_state(MAIN, "paused")
     assert scheduler.runnable_agents() == ()
     assert scheduler.run_turn(MAIN) is None
@@ -812,6 +816,22 @@ def test_render_resident_orders_only_the_requested_blocks(
     assert render_resident(memory, "Todos: none", environment, reset) == expected
 
 
+def test_memory_index_truncation_follows_the_current_parameter(world) -> None:
+    mention(world)
+    world.memory_tree_for(MAIN).write("MEMORY.md", "abc😀def")
+    runner = RecordingRunner()
+    scheduler = Scheduler(world, runner)
+    for limit, prefix, truncated in [(5, "abc", True), (10, "abc😀def", False)]:
+        world.settings.set_settings("agent", {"memory_index_bytes": limit})
+        assert scheduler.run_turn(MAIN).status == "completed"
+        resident = runner.requests[-1].resident
+        assert resident.startswith(f"Your MEMORY.md:\n{prefix}\n")
+        assert ("was cut here" in resident) is truncated
+        if truncated:
+            assert f"longer than {limit} bytes" in resident
+            assert "😀" not in resident
+
+
 def test_resident_loading_failure_preserves_history_and_returns_to_idle(
     world, monkeypatch
 ) -> None:
@@ -1036,6 +1056,20 @@ def test_a_long_back_and_forth_produces_a_nudge(world) -> None:
     assert "acknowledge instead of mentioning them again" in context
 
 
+def test_nudge_threshold_is_read_again_for_each_model_call(world) -> None:
+    room = world.store.create_discussion("exchange", [MAIN, HELPER])
+    for sender, body in [(HELPER, "one"), (MAIN, "two"), (HELPER, "three @Main")]:
+        world.store.append_message(room.id, sender, body)
+    runner = RecordingRunner()
+    scheduler = Scheduler(world, runner)
+    world.settings.set_settings("agent", {"exchange_nudge_after": 3})
+    assert scheduler.run_turn(MAIN).status == "completed"
+    request = runner.requests[0]
+    assert "exchanged 3 messages" in request.ephemeral()
+    world.settings.set_settings("agent", {"exchange_nudge_after": 6})
+    assert request.ephemeral() == ""
+
+
 def test_no_nudge_when_a_third_member_is_involved(world) -> None:
     room = world.store.create_discussion("group", [HUMAN, MAIN, HELPER])
     for index in range(6):
@@ -1082,6 +1116,56 @@ def test_the_nudge_reaches_the_model_but_not_the_history(world) -> None:
     world.store.append_message(room, HUMAN, "A third participant")
     assert runner.requests[0].ephemeral() == ""
     assert "exchanged" not in world.history.latest_messages(MAIN)
+
+
+@pytest.mark.parametrize("fail", [False, True])
+def test_concurrency_follows_the_current_parameter(world, fail) -> None:
+    import threading
+
+    entered = {agent_id: threading.Event() for agent_id in (MAIN, HELPER)}
+    release = {agent_id: threading.Event() for agent_id in (MAIN, HELPER)}
+
+    def slow(request, tools):
+        entered[request.agent_id].set()
+        assert release[request.agent_id].wait(timeout=5)
+        if fail:
+            raise RuntimeError("model failed")
+        return TurnOutcome(messages_json="[]")
+
+    room = world.store.create_discussion("parallel", [HUMAN, MAIN, HELPER])
+    world.store.append_message(room.id, HUMAN, "@Main @Helper go")
+    world.settings.set_settings("agent", {"max_concurrent_turns": 1})
+    scheduler = Scheduler(world, RecordingRunner(slow))
+    try:
+        assert scheduler.tick() == (MAIN,)
+        assert entered[MAIN].wait(timeout=5)
+        assert not entered[HELPER].is_set()
+        assert scheduler.tick() == ()
+
+        world.settings.set_settings("agent", {"max_concurrent_turns": 2})
+        assert scheduler.tick() == (HELPER,)
+        assert entered[HELPER].wait(timeout=5)
+        assert scheduler.tick() == ()
+
+        world.settings.set_settings("agent", {"max_concurrent_turns": 1})
+        assert scheduler.tick() == ()
+        assert all(thread.is_alive() for thread in scheduler._threads.values())
+        release[MAIN].set()
+        scheduler._threads[MAIN].join(timeout=5)
+        assert not scheduler._threads[MAIN].is_alive()
+        world.store.append_message(room.id, HUMAN, "@Main next")
+        assert scheduler.runnable_agents() == (MAIN,)
+        assert scheduler.tick() == ()
+
+        release[HELPER].set()
+        scheduler._threads[HELPER].join(timeout=5)
+        assert not scheduler._threads[HELPER].is_alive()
+        release[MAIN].clear()
+        assert scheduler.tick() == (MAIN,)
+    finally:
+        for event in release.values():
+            event.set()
+        scheduler.stop()
 
 
 def test_stop_is_safe_while_a_turn_is_being_started(world) -> None:
@@ -1141,28 +1225,36 @@ def spend(world, agent_id: int, tokens: int) -> None:
 
 def test_an_agent_over_its_token_limit_is_not_scheduled(world) -> None:
     mention(world)
-    world.settings.set_settings("limits", {"agent_token_limit": 500})
+    world.settings.set_settings("agent", {"token_limit": 500})
     scheduler = Scheduler(world, RecordingRunner())
     assert scheduler.runnable_agents() == (MAIN,)
 
-    spend(world, MAIN, 500)
+    spend(world, MAIN, 499)
+    assert not scheduler.over_token_limit(MAIN)
+    assert scheduler.runnable_agents() == (MAIN,)
+    spend(world, MAIN, 1)
     assert scheduler.over_token_limit(MAIN)
     assert scheduler.runnable_agents() == ()
+    assert scheduler.run_turn(MAIN) is None
+    assert world.store.get_member(MAIN).state == "idle"
+    assert scheduler.tick() == ()
 
 
 def test_raising_the_limit_lets_the_agent_run_again(world) -> None:
     mention(world)
-    world.settings.set_settings("limits", {"agent_token_limit": 100})
+    world.settings.set_settings("agent", {"token_limit": 100})
     spend(world, MAIN, 400)
     scheduler = Scheduler(world, RecordingRunner())
     assert scheduler.runnable_agents() == ()
 
-    world.settings.set_settings("limits", {"agent_token_limit": 1000})
+    world.settings.set_settings("agent", {"token_limit": 1000})
     assert scheduler.runnable_agents() == (MAIN,)
 
 
-def test_no_limit_configured_means_no_ceiling(world) -> None:
+@pytest.mark.parametrize("values", [{}, {"token_limit": 0}])
+def test_no_limit_configured_means_no_ceiling(world, values) -> None:
     mention(world)
+    world.settings.set_settings("agent", values)
     spend(world, MAIN, 10_000_000)
     scheduler = Scheduler(world, RecordingRunner())
     assert scheduler.token_limit() == 0
@@ -1172,7 +1264,16 @@ def test_no_limit_configured_means_no_ceiling(world) -> None:
 
 def test_a_malformed_limit_is_treated_as_no_limit(world) -> None:
     mention(world)
-    world.settings.set_settings("limits", {"agent_token_limit": "not a number"})
+    world.settings.set_settings("agent", {"token_limit": "not a number"})
+    scheduler = Scheduler(world, RecordingRunner())
+    assert scheduler.token_limit() == 0
+    assert scheduler.runnable_agents() == (MAIN,)
+
+
+def test_legacy_limits_do_not_control_scheduling(world) -> None:
+    mention(world)
+    world.settings.set_settings("limits", {"agent_token_limit": 1})
+    spend(world, MAIN, 10_000_000)
     scheduler = Scheduler(world, RecordingRunner())
     assert scheduler.token_limit() == 0
     assert scheduler.runnable_agents() == (MAIN,)
@@ -1180,7 +1281,7 @@ def test_a_malformed_limit_is_treated_as_no_limit(world) -> None:
 
 def test_the_limit_is_per_agent_not_shared(world) -> None:
     mention(world)
-    world.settings.set_settings("limits", {"agent_token_limit": 500})
+    world.settings.set_settings("agent", {"token_limit": 500})
     spend(world, HELPER, 900)
     scheduler = Scheduler(world, RecordingRunner())
     assert scheduler.over_token_limit(HELPER)

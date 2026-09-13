@@ -12,7 +12,6 @@ from huddol.ports.agent import HistoryStore, SettingsStore, TodoStore
 from huddol.ports.execution import ExecutionControl
 from huddol.ports.store import OrganizationStore
 from huddol.runtime.reminder import (
-    MEMORY_INDEX_BYTES,
     PREPARATION_PROMPT,
     ModelRunner,
     Reminder,
@@ -28,8 +27,6 @@ from huddol.tools import AgentTools, Dependencies, TurnBinding
 from huddol.tools.authorize import Actor, Authorizer
 
 logger = logging.getLogger("huddol.runtime")
-
-MAX_CONCURRENT = 4
 
 
 @dataclass
@@ -47,13 +44,11 @@ class Scheduler:
         runner: ModelRunner,
         *,
         authorizer: Authorizer | None = None,
-        max_concurrent: int = MAX_CONCURRENT,
         on_event: Callable[[str, dict[str, object]], None] | None = None,
     ) -> None:
         self._deps = deps
         self._runner = runner
         self._authorizer = authorizer or Authorizer()
-        self._semaphore = threading.Semaphore(max_concurrent)
         self._threads: dict[int, threading.Thread] = {}
         self._failed: dict[int, frozenset[tuple[int, int]]] = {}
         self._lock = threading.Lock()
@@ -118,14 +113,7 @@ class Scheduler:
             thread.join(timeout=5)
 
     def token_limit(self) -> int:
-        limits = self.settings.get_settings("limits") or {}
-        value = limits.get("agent_token_limit", 0)
-        if not isinstance(value, int | float | str):
-            return 0
-        try:
-            return max(0, int(value))
-        except (TypeError, ValueError):
-            return 0
+        return self.parameters().token_limit
 
     def over_token_limit(self, agent_id: int) -> bool:
         limit = self.token_limit()
@@ -206,7 +194,9 @@ class Scheduler:
 
     def resident_block(self, agent_id: int) -> str:
         return render_resident(
-            Memory(self._deps.memory_tree_for(agent_id)).index(MEMORY_INDEX_BYTES),
+            Memory(self._deps.memory_tree_for(agent_id)).index(
+                self.parameters().memory_index_bytes
+            ),
             Todos(self._deps.todos, agent_id).snapshot(),
             self.environment_facts(),
             reset_notice(self.history.window(agent_id)),
@@ -258,7 +248,12 @@ class Scheduler:
             history_json=self.history.latest_messages(agent_id),
             resident="",
             environment=self.environment_facts,
-            ephemeral=lambda: exchange_nudge(self.store, agent_id, discussion_ids),
+            ephemeral=lambda: exchange_nudge(
+                self.store,
+                agent_id,
+                discussion_ids,
+                after=self.parameters().exchange_nudge_after,
+            ),
         )
         status = "completed"
         error: str | None = None
@@ -330,14 +325,14 @@ class Scheduler:
                 existing = self._threads.get(agent_id)
                 if existing is not None and existing.is_alive():
                     continue
-                if not self._semaphore.acquire(blocking=False):
+                running = sum(thread.is_alive() for thread in self._threads.values())
+                if running >= self.parameters().max_concurrent_turns:
                     break
 
                 def work(target: int = agent_id) -> None:
                     try:
                         self.run_turn(target)
                     finally:
-                        self._semaphore.release()
                         self.wake()
 
                 thread = threading.Thread(

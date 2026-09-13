@@ -207,6 +207,15 @@ class Api:
                         "summary": effect.summary,
                     }
                 )
+            streak = idle_streak(
+                [
+                    (
+                        run.status,
+                        [item["tool"] for item in produced.get(run.sequence, [])],
+                    )
+                    for run in runs
+                ]
+            )
             return {
                 "id": agent_id,
                 "window": asdict(self._scheduler.history.window(agent_id)),
@@ -215,15 +224,8 @@ class Api:
                 "usage": self._scheduler.history.usage_total(agent_id),
                 "token_limit": self._scheduler.token_limit(),
                 "over_token_limit": self._scheduler.over_token_limit(agent_id),
-                "idle_streak": idle_streak(
-                    [
-                        (
-                            run.status,
-                            [item["tool"] for item in produced.get(run.sequence, [])],
-                        )
-                        for run in runs
-                    ]
-                ),
+                "idle_streak": streak,
+                "idle": streak >= self._scheduler.parameters().idle_streak_after,
                 "runs": [
                     {
                         "sequence": run.sequence,

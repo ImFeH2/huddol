@@ -1,5 +1,5 @@
 from collections.abc import Mapping
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass, fields
 
 from huddol.core.errors import DomainError
 
@@ -7,26 +7,34 @@ from huddol.core.errors import DomainError
 @dataclass(frozen=True)
 class AgentParameters:
     context_window_tokens: int = 200_000
+    exchange_nudge_after: int = 6
+    max_concurrent_turns: int = 4
+    idle_streak_after: int = 3
+    memory_index_bytes: int = 16_384
+    token_limit: int = 0
 
 
 def agent_parameters(values: Mapping[str, object] | None) -> AgentParameters:
-    defaults = asdict(AgentParameters())
+    stored = values or {}
     return AgentParameters(
         **{
-            key: value
-            for key, value in (values or {}).items()
-            if key in defaults and type(value) is int and value > 0
+            field.name: value
+            for field in fields(AgentParameters)
+            if type(value := stored.get(field.name)) is int
+            and value >= (0 if field.name == "token_limit" else 1)
         }
     )
 
 
 def validate_parameters(values: Mapping[str, object]) -> dict[str, int]:
-    defaults = asdict(AgentParameters())
+    names = {field.name for field in fields(AgentParameters)}
     validated: dict[str, int] = {}
     for key, value in values.items():
-        if key not in defaults:
+        if key not in names:
             raise DomainError("invalid_setting", f"Unknown Agent parameter: {key}")
-        if type(value) is not int or value <= 0:
-            raise DomainError("invalid_parameter", f"{key} must be a positive integer")
+        minimum = 0 if key == "token_limit" else 1
+        if type(value) is not int or value < minimum:
+            kind = "non-negative" if minimum == 0 else "positive"
+            raise DomainError("invalid_parameter", f"{key} must be a {kind} integer")
         validated[key] = value
     return validated

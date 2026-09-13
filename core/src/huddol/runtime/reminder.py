@@ -89,16 +89,17 @@ def build_reminder(
     return Reminder(agent_id, agent_name, tuple(items))
 
 
-EXCHANGE_NUDGE_AT = 6
-
-
 def exchange_nudge(
-    store: OrganizationStore, agent_id: int, discussion_ids: Sequence[int]
+    store: OrganizationStore,
+    agent_id: int,
+    discussion_ids: Sequence[int],
+    *,
+    after: int,
 ) -> str:
     warnings: list[str] = []
     for discussion_id in dict.fromkeys(discussion_ids):
-        recent = store.messages(discussion_id)[-EXCHANGE_NUDGE_AT:]
-        if len(recent) < EXCHANGE_NUDGE_AT:
+        recent = store.messages(discussion_id)[-after:]
+        if len(recent) < after:
             continue
         senders = {item.sender_id for item in recent}
         if len(senders) != 2 or agent_id not in senders:
@@ -112,9 +113,6 @@ def exchange_nudge(
             " acknowledge instead of mentioning them again."
         )
     return "\n".join(warnings)
-
-
-MEMORY_INDEX_BYTES = 16_384
 
 
 PREPARATION_PROMPT = (

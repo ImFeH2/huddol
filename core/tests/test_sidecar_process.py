@@ -6,6 +6,7 @@ import subprocess
 import sys
 import threading
 from collections.abc import Callable, Iterator, Sequence
+from dataclasses import asdict
 from http.client import HTTPConnection
 from pathlib import Path
 from types import TracebackType
@@ -14,6 +15,8 @@ from typing import Any, Self
 import pytest
 from websockets.exceptions import InvalidStatus
 from websockets.sync.client import ClientConnection, connect
+
+from huddol.core.parameters import AgentParameters
 
 TIMEOUT = 90
 SOURCE = str(Path(__file__).resolve().parents[1] / "src")
@@ -358,6 +361,14 @@ def test_discussion_management_and_pagination_survive_the_pipe(tmp_path: Path) -
 
 def test_agent_settings_and_window_survive_the_pipe_and_restart(tmp_path: Path) -> None:
     data = tmp_path / "data"
+    values = {
+        "context_window_tokens": 12345,
+        "exchange_nudge_after": 3,
+        "max_concurrent_turns": 2,
+        "idle_streak_after": 5,
+        "memory_index_bytes": 256,
+        "token_limit": 1000,
+    }
     frames, code, stderr = drive(
         data,
         [
@@ -367,7 +378,7 @@ def test_agent_settings_and_window_survive_the_pipe_and_restart(tmp_path: Path) 
                 "method": "settings.update",
                 "params": {
                     "section": "agent",
-                    "values": {"context_window_tokens": 12345},
+                    "values": values,
                 },
             },
             {
@@ -380,8 +391,10 @@ def test_agent_settings_and_window_survive_the_pipe_and_restart(tmp_path: Path) 
         ],
     )
     assert code == 0, stderr
-    assert response(frames, 1)["result"] == {"context_window_tokens": 200_000}
-    assert response(frames, 2)["result"] == {"context_window_tokens": 12345}
+    assert response(frames, 1)["result"] == asdict(AgentParameters())
+    assert response(frames, 2)["result"] == values
+    assert response(frames, 4)["result"]["idle"] is False
+    assert response(frames, 4)["result"]["token_limit"] == values["token_limit"]
     assert response(frames, 4)["result"]["window"] == {
         "number": 1,
         "since_sequence": 1,
@@ -397,7 +410,7 @@ def test_agent_settings_and_window_survive_the_pipe_and_restart(tmp_path: Path) 
         [{"id": 1, "method": "settings.get", "params": {"section": "agent"}}],
     )
     assert code == 0, stderr
-    assert response(frames, 1)["result"] == {"context_window_tokens": 12345}
+    assert response(frames, 1)["result"] == values
 
 
 @pytest.mark.parametrize(
@@ -407,6 +420,8 @@ def test_agent_settings_and_window_survive_the_pipe_and_restart(tmp_path: Path) 
             ({"context_window_tokens": value}, "invalid_parameter")
             for value in (0, -1, 1.5, True, None, "32000")
         ],
+        ({"max_concurrent_turns": 0}, "invalid_parameter"),
+        ({"token_limit": -1}, "invalid_parameter"),
         ({"unknown": 1}, "invalid_setting"),
     ],
 )
@@ -434,13 +449,65 @@ def test_invalid_agent_settings_do_not_change_stored_values(
     )
     assert exit_code == 0, stderr
     assert response(frames, 1)["error"]["code"] == code
-    assert response(frames, 2)["result"] == original
+    assert response(frames, 2)["result"] == {**asdict(AgentParameters()), **original}
     assert events(frames, "settings.updated") == []
     store = SqliteStore(data / "huddol.sqlite3")
     try:
         assert SqliteAgentStore(store._db).get_settings("agent") == original
     finally:
         store.close()
+
+
+def test_idle_threshold_changes_over_the_pipe_and_survives_restart(
+    tmp_path: Path,
+) -> None:
+    from huddol.adapters.sqlite.agent import SqliteAgentStore
+    from huddol.adapters.sqlite.store import SqliteStore
+
+    data = tmp_path / "data"
+    store = SqliteStore(data / "huddol.sqlite3")
+    try:
+        store.create_member("human", "You")
+        agent_id = store.create_member("agent", "Main").id
+        history = SqliteAgentStore(store._db)
+        for _ in range(3):
+            run = history.start_run(agent_id)
+            history.finish_run(
+                agent_id, run.sequence, status="completed", messages_json="[]"
+            )
+    finally:
+        store.close()
+    frames, code, stderr = drive(
+        data,
+        [
+            {"id": 1, "method": "agent.detail", "params": {"agent_id": agent_id}},
+            {
+                "id": 2,
+                "method": "settings.update",
+                "params": {
+                    "section": "agent",
+                    "values": {"idle_streak_after": 5, "token_limit": 0},
+                },
+            },
+            {"id": 3, "method": "agent.detail", "params": {"agent_id": agent_id}},
+        ],
+    )
+    assert code == 0, stderr
+    assert response(frames, 1)["result"]["idle_streak"] == 3
+    assert response(frames, 1)["result"]["idle"] is True
+    assert response(frames, 2)["result"] == {
+        **asdict(AgentParameters()),
+        "idle_streak_after": 5,
+    }
+    assert response(frames, 3)["result"]["idle_streak"] == 3
+    assert response(frames, 3)["result"]["idle"] is False
+    frames, code, stderr = drive(
+        data,
+        [{"id": 1, "method": "agent.detail", "params": {"agent_id": agent_id}}],
+    )
+    assert code == 0, stderr
+    assert response(frames, 1)["result"]["idle_streak"] == 3
+    assert response(frames, 1)["result"]["idle"] is False
 
 
 def test_obsolete_model_settings_are_not_validated_or_returned(tmp_path: Path) -> None:
