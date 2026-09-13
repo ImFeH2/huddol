@@ -14,15 +14,19 @@ export function Tooltip({
   label,
   side = "top",
   children,
+  focusable = false,
 }: {
   label: ReactNode;
   side?: "top" | "right" | "bottom" | "left";
   children: ReactElement;
+  focusable?: boolean;
 }) {
   return (
     <TooltipPrimitive.Root>
       <TooltipPrimitive.Trigger
-        asChild
+        asChild={!focusable}
+        type={focusable ? "button" : undefined}
+        className={focusable ? "tooltip-trigger" : undefined}
         onFocus={(event) => {
           if (!event.currentTarget.matches(":focus-visible"))
             event.preventDefault();

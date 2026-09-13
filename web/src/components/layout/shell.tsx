@@ -176,6 +176,8 @@ export function PageTransition({
   );
 }
 
+export type Crumb = { label: string; onSelect: () => void };
+
 export function PageHeader({
   title,
   status,
@@ -186,12 +188,33 @@ export function PageHeader({
   title: ReactNode;
   status?: ReactNode;
   actions?: ReactNode;
-  crumb?: { label: string; onSelect: () => void };
+  crumb?: Crumb | Crumb[];
   leading?: ReactNode;
 }) {
   return (
     <header className="page-header">
-      {crumb ? (
+      {Array.isArray(crumb) ? (
+        <nav aria-label="Breadcrumb">
+          <ol className="crumbs">
+            {crumb.map((item, index) => (
+              <li key={`${index}:${item.label}`}>
+                {index > 0 ? <span aria-hidden="true">›</span> : null}
+                {index === crumb.length - 1 ? (
+                  <span aria-current="page">{item.label}</span>
+                ) : (
+                  <button
+                    type="button"
+                    className="crumb"
+                    onClick={item.onSelect}
+                  >
+                    {item.label}
+                  </button>
+                )}
+              </li>
+            ))}
+          </ol>
+        </nav>
+      ) : crumb ? (
         <button type="button" className="crumb" onClick={crumb.onSelect}>
           <ArrowLeft size={14} aria-hidden="true" />
           {crumb.label}
@@ -276,13 +299,20 @@ export function RowLink({
   primary,
   secondary,
   onSelect,
+  expanded,
 }: {
   primary: ReactNode;
   secondary?: ReactNode;
   onSelect: () => void;
+  expanded?: boolean;
 }) {
   return (
-    <button type="button" className="row-link" onClick={onSelect}>
+    <button
+      type="button"
+      className="row-link"
+      onClick={onSelect}
+      aria-expanded={expanded}
+    >
       <span className="row-primary">{primary}</span>
       {secondary ? <span className="row-secondary">{secondary}</span> : null}
     </button>

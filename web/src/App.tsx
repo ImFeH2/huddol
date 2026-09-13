@@ -72,7 +72,7 @@ function View({ route, tokenLimit }: { route: Route; tokenLimit: number }) {
     case "member":
       return <MemberPage id={route.id} />;
     case "library":
-      return <LibraryPage />;
+      return <LibraryPage path={route.path} />;
     case "document":
       return <DocumentPage path={route.path} />;
     case "settings":

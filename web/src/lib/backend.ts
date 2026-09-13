@@ -64,12 +64,19 @@ export type Usage = {
 export type AgentDetail = {
   id: number;
   todos: Todo[];
-  memory: { path: string; size: number; hash: string }[];
+  memory: LibraryEntry[];
   runs: AgentRun[];
   usage: Usage;
   token_limit: number;
   over_token_limit: boolean;
+  idle: boolean;
   idle_streak: number;
+  window: {
+    number: number;
+    since_sequence: number;
+    reset_at: string | null;
+    reason: string | null;
+  };
 };
 
 export type FoundMessage = {
@@ -79,7 +86,24 @@ export type FoundMessage = {
   body: string;
 };
 
-export type LibraryEntry = { path: string; size: number; hash: string };
+export type LibraryEntry = {
+  path: string;
+  kind: "file" | "directory";
+  size: number;
+  hash: string | null;
+  modified_at: string;
+};
+
+export type LibraryDocument = { path: string; content: string; hash: string };
+
+type LibraryWriteResult =
+  | (LibraryEntry & { hash: string; conflict?: false })
+  | {
+      conflict: true;
+      path: string;
+      current_hash: string;
+      current_content: string;
+    };
 
 export type BackendEvent = { type: string } & Record<string, unknown>;
 
@@ -518,15 +542,24 @@ export class Backend {
     return this.call<LibraryEntry[]>("library.list", { path });
   }
 
+  mkdirLibrary(path: string) {
+    return this.call<LibraryEntry>("library.mkdir", { path });
+  }
+
+  memoryList(agent_id: number, path?: string) {
+    return this.call<LibraryEntry[]>("memory.list", { agent_id, path });
+  }
+
+  memoryRead(agent_id: number, path: string) {
+    return this.call<LibraryDocument>("memory.read", { agent_id, path });
+  }
+
   readLibrary(path: string) {
-    return this.call<{ path: string; content: string; hash: string }>(
-      "library.read",
-      { path },
-    );
+    return this.call<LibraryDocument>("library.read", { path });
   }
 
   writeLibrary(path: string, content: string, expected_hash?: string) {
-    return this.call<LibraryEntry & { conflict?: boolean }>("library.write", {
+    return this.call<LibraryWriteResult>("library.write", {
       path,
       content,
       expected_hash,

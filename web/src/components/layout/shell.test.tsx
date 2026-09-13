@@ -6,6 +6,7 @@ import {
   NavSubItem,
   PageHeader,
   PageTransition,
+  RowLink,
   Shell,
   Sidebar,
   Table,
@@ -118,6 +119,46 @@ describe("PageHeader", () => {
       '<div class="page-status"><span class="chip" data-tone="neutral">Archived</span></div>',
     );
     expect(html).not.toContain("page-lede");
+  });
+
+  it("renders an array of crumbs with separators and only ancestors clickable", () => {
+    const html = renderToStaticMarkup(
+      <PageHeader
+        title="notes.md"
+        crumb={[
+          { label: "Library", onSelect: () => {} },
+          { label: "runbooks", onSelect: () => {} },
+          { label: "notes.md", onSelect: () => {} },
+        ]}
+      />,
+    );
+    expect(html).toContain('aria-label="Breadcrumb"');
+    expect(html.match(/<button/g)).toHaveLength(2);
+    expect(html.match(/›/g)).toHaveLength(2);
+    expect(html).toContain('<span aria-current="page">notes.md</span>');
+  });
+
+  it("keeps a single crumb as a clickable back action", () => {
+    const html = renderToStaticMarkup(
+      <PageHeader
+        title="Helper"
+        crumb={{ label: "Members", onSelect: () => {} }}
+      />,
+    );
+    expect(html).toContain("Members</button>");
+    expect(html.match(/<button/g)).toHaveLength(1);
+    expect(html).not.toContain('aria-current="page"');
+  });
+
+  it("exposes folder row expansion on its row action", () => {
+    const html = renderToStaticMarkup(
+      <RowLink primary="runbooks" expanded={false} onSelect={() => {}} />,
+    );
+    expect(html).toContain('aria-expanded="false"');
+    expect(html).toContain("runbooks");
+    expect(
+      renderToStaticMarkup(<RowLink primary="notes.md" onSelect={() => {}} />),
+    ).not.toContain("aria-expanded");
   });
 
   it("renders no status slot without state", () => {

@@ -1,13 +1,40 @@
-.doc-glyph {
-  display: grid;
-  place-items: center;
-  width: 28px;
-  height: 28px;
+.file-tree {
+  min-width: 0;
+}
+
+.tree-lead {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding-left: calc(var(--tree-depth) * var(--space-5));
+  min-width: 0;
+}
+
+.tree-glyph {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--space-2);
+  width: var(--space-7);
   flex: none;
-  border: 1px solid rgb(var(--border-base));
-  border-radius: var(--radius-sm);
-  background: rgb(var(--bg-raised));
   color: rgb(var(--text-muted));
+}
+
+.tree-name {
+  white-space: normal;
+  overflow-wrap: anywhere;
+  min-width: 0;
+}
+
+.tree-time {
+  position: relative;
+  white-space: nowrap;
+}
+
+.library-create {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
 }
 
 .editor-shell {

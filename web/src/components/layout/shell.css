@@ -271,6 +271,21 @@
   color: rgb(var(--text-base));
 }
 
+.crumbs,
+.crumbs li {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+  color: rgb(var(--text-muted));
+  font-size: var(--text-xs);
+  overflow-wrap: anywhere;
+}
+
+.crumbs .crumb {
+  margin: 0;
+}
+
 .page-header-main {
   display: flex;
   align-items: flex-start;

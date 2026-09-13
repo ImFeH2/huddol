@@ -1,82 +1,187 @@
-import { FileText, Plus, Search, SquarePen, Trash2 } from "lucide-react";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { FolderPlus, Plus, Search, SquarePen, Trash2 } from "lucide-react";
+import { useCallback, useEffect, useState } from "react";
 import { useNavigate } from "@/app/router";
-import {
-  type Column,
-  Page,
-  PageBody,
-  PageHeader,
-  RowLink,
-  Table,
-  Toolbar,
-} from "@/components/layout/shell";
+import { Page, PageBody, PageHeader, Toolbar } from "@/components/layout/shell";
 import { ConfirmDialog, PromptDialog } from "@/components/ui/dialog";
 import {
   Button,
-  Chip,
   CountPill,
+  dismissToast,
   EmptyState,
+  IconButton,
   SearchField,
 } from "@/components/ui/index";
-import { OverflowMenu } from "@/components/ui/menu";
+import type { MenuAction } from "@/components/ui/menu";
+import { expandedFolders } from "@/features/library/tree";
+import { TreeView, type TreeViewProps } from "@/features/library/tree-view";
+import { reportLoadFailure } from "@/features/settings/saver";
 import { backend, type LibraryEntry } from "@/lib/backend";
-import {
-  documentFolder,
-  documentName,
-  formatBytes,
-  plural,
-} from "@/lib/format";
+import { plural } from "@/lib/format";
 import "@/features/library/library.css";
 
-const COLUMNS: Column[] = [
-  { key: "document", label: "Document" },
-  { key: "folder", label: "Folder", width: "220px", hideBelow: "md" },
-  { key: "size", label: "Size", align: "end", width: "120px" },
-  { key: "actions", label: "", width: "56px" },
-];
+type Creation = { kind: LibraryEntry["kind"]; initial: string };
 
-export function LibraryPage() {
+export function libraryActions(
+  entry: LibraryEntry,
+  handlers: {
+    rename: (entry: LibraryEntry) => void;
+    create: (creation: Creation) => void;
+    remove: (entry: LibraryEntry) => void;
+  },
+): MenuAction[] {
+  return [
+    {
+      id: "rename",
+      label: "Rename",
+      icon: <SquarePen size={15} />,
+      onSelect: () => handlers.rename(entry),
+    },
+    ...(entry.kind === "directory"
+      ? [
+          {
+            id: "document",
+            label: "New document inside",
+            icon: <Plus size={15} />,
+            onSelect: () =>
+              handlers.create({ kind: "file", initial: `${entry.path}/` }),
+          },
+          {
+            id: "folder",
+            label: "New folder inside",
+            icon: <FolderPlus size={15} />,
+            onSelect: () =>
+              handlers.create({ kind: "directory", initial: `${entry.path}/` }),
+          },
+        ]
+      : []),
+    {
+      id: "delete",
+      label: "Delete",
+      icon: <Trash2 size={15} />,
+      tone: "danger",
+      onSelect: () => handlers.remove(entry),
+    },
+  ];
+}
+
+export function deleteConsequence(
+  entry: LibraryEntry | null,
+  entries: LibraryEntry[],
+): string {
+  if (entry?.kind !== "directory")
+    return "The document is removed for every Member.";
+  const count = entries.filter(
+    (item) => item.kind === "file" && item.path.startsWith(`${entry.path}/`),
+  ).length;
+  return `Removes ${plural(count, "file")} for every Member.`;
+}
+
+function CreateActions({
+  onCreate,
+  disabled = false,
+}: {
+  onCreate: (creation: Creation) => void;
+  disabled?: boolean;
+}) {
+  return (
+    <>
+      <Button
+        variant="primary"
+        disabled={disabled}
+        onClick={() => onCreate({ kind: "file", initial: "" })}
+      >
+        <Plus size={16} />
+        New document
+      </Button>
+      <IconButton
+        label="New folder"
+        disabled={disabled}
+        onClick={() => onCreate({ kind: "directory", initial: "" })}
+      >
+        <FolderPlus size={16} />
+      </IconButton>
+    </>
+  );
+}
+
+export function LibraryContents({
+  onCreate,
+  disabled = false,
+  ...tree
+}: TreeViewProps & {
+  onCreate: (creation: Creation) => void;
+  disabled?: boolean;
+}) {
+  const needle = tree.query?.trim().toLowerCase() ?? "";
+  const count = tree.entries.filter(
+    (entry) =>
+      entry.kind === "file" && entry.path.toLowerCase().includes(needle),
+  ).length;
+  const empty = tree.entries.length === 0;
+  return (
+    <>
+      <CountPill>{plural(count, "document")}</CountPill>
+      {empty || (needle && count === 0) ? (
+        <EmptyState
+          title={empty ? "The Library is empty" : "No documents match"}
+          action={
+            empty ? (
+              <div className="library-create">
+                <CreateActions onCreate={onCreate} disabled={disabled} />
+              </div>
+            ) : undefined
+          }
+        />
+      ) : (
+        <TreeView {...tree} />
+      )}
+    </>
+  );
+}
+
+export function LibraryPage({ path }: { path?: string }) {
   const navigate = useNavigate();
   const [entries, setEntries] = useState<LibraryEntry[] | null>(null);
   const [query, setQuery] = useState("");
-  const [creating, setCreating] = useState(false);
+  const [expanded, setExpanded] = useState(() => expandedFolders(path));
+  const [creating, setCreating] = useState<Creation | null>(null);
   const [renaming, setRenaming] = useState<LibraryEntry | null>(null);
   const [doomed, setDoomed] = useState<LibraryEntry | null>(null);
+  const [failed, setFailed] = useState(false);
 
   const load = useCallback(async () => {
     try {
       setEntries(await backend.library());
+      setFailed(false);
+      dismissToast("library-load");
     } catch (failure) {
-      backend.reportFailure(failure);
+      setFailed(true);
+      reportLoadFailure("library-load", failure, () => void load());
     }
   }, []);
 
   useEffect(() => {
     void load();
+    return () => dismissToast("library-load");
   }, [load]);
 
-  useEffect(() => {
-    return backend.onEvent((event) => {
-      if (event.type === "library.updated") void load();
-    });
-  }, [load]);
-
-  const shown = useMemo(() => {
-    if (!entries) return [];
-    const needle = query.trim().toLowerCase();
-    if (!needle) return entries;
-    return entries.filter((entry) => entry.path.toLowerCase().includes(needle));
-  }, [entries, query]);
+  useEffect(
+    () =>
+      backend.onEvent((event) => {
+        if (event.type === "library.updated") void load();
+      }),
+    [load],
+  );
 
   return (
     <Page>
       <PageHeader
         title="Library"
         actions={
-          <Button variant="primary" onClick={() => setCreating(true)}>
-            <Plus size={16} />
-            New document
-          </Button>
+          <CreateActions
+            onCreate={setCreating}
+            disabled={entries === null || failed}
+          />
         }
       />
       <Toolbar>
@@ -90,102 +195,79 @@ export function LibraryPage() {
       </Toolbar>
       <PageBody>
         {entries === null ? null : (
-          <>
-            <CountPill>{plural(shown.length, "document")}</CountPill>
-            {shown.length === 0 ? (
-              <EmptyState
-                title={
-                  entries.length === 0
-                    ? "The Library is empty"
-                    : "No documents match"
-                }
-                action={
-                  entries.length === 0 ? (
-                    <Button variant="primary" onClick={() => setCreating(true)}>
-                      <Plus size={16} />
-                      New document
-                    </Button>
-                  ) : undefined
-                }
-              />
-            ) : (
-              <Table columns={COLUMNS} label="Library documents">
-                {shown.map((entry) => (
-                  <tr className="table-row" key={entry.path}>
-                    <td>
-                      <div className="cell-lead">
-                        <span className="doc-glyph" aria-hidden="true">
-                          <FileText size={15} />
-                        </span>
-                        <RowLink
-                          primary={documentName(entry.path)}
-                          onSelect={() =>
-                            navigate({ name: "document", path: entry.path })
-                          }
-                        />
-                      </div>
-                    </td>
-                    <td data-hide-below="md">
-                      {documentFolder(entry.path) ? (
-                        <Chip>{documentFolder(entry.path)}</Chip>
-                      ) : (
-                        <span className="muted">Root</span>
-                      )}
-                    </td>
-                    <td data-align="end" className="numeric muted">
-                      {formatBytes(entry.size)}
-                    </td>
-                    <td className="cell-actions">
-                      <OverflowMenu
-                        label={`Actions for ${entry.path}`}
-                        actions={[
-                          {
-                            id: "rename",
-                            label: "Rename",
-                            icon: <SquarePen size={15} />,
-                            onSelect: () => setRenaming(entry),
-                          },
-                          {
-                            id: "delete",
-                            label: "Delete",
-                            icon: <Trash2 size={15} />,
-                            tone: "danger",
-                            onSelect: () => setDoomed(entry),
-                          },
-                        ]}
-                      />
-                    </td>
-                  </tr>
-                ))}
-              </Table>
-            )}
-          </>
+          <LibraryContents
+            entries={entries}
+            disabled={failed}
+            query={query}
+            expanded={expanded}
+            revealPath={path}
+            onToggle={(folder) =>
+              setExpanded((current) => {
+                const next = new Set(current);
+                if (next.has(folder)) next.delete(folder);
+                else next.add(folder);
+                return next;
+              })
+            }
+            onOpen={(file) => navigate({ name: "document", path: file })}
+            onCreate={setCreating}
+            rowActions={(entry) =>
+              libraryActions(entry, {
+                rename: setRenaming,
+                create: setCreating,
+                remove: setDoomed,
+              }).map((action) => ({ ...action, disabled: failed }))
+            }
+          />
         )}
       </PageBody>
-
       <PromptDialog
-        open={creating}
-        onOpenChange={setCreating}
-        title="New document"
+        open={creating !== null}
+        onOpenChange={(next) => !next && setCreating(null)}
+        title={creating?.kind === "directory" ? "New folder" : "New document"}
         label="Path"
-        placeholder="runbooks/on-call.md"
-        submitLabel="Create document"
-        onSubmit={async (path) => {
-          await backend.writeLibrary(path, "");
+        initial={creating?.initial ?? ""}
+        submitLabel={
+          creating?.kind === "directory" ? "Create folder" : "Create document"
+        }
+        onSubmit={async (destination) => {
+          if (creating?.kind === "directory") {
+            await backend.mkdirLibrary(destination);
+            setExpanded(
+              (current) =>
+                new Set([...current, ...expandedFolders(destination)]),
+            );
+          } else {
+            await backend.writeLibrary(destination, "");
+            navigate({ name: "document", path: destination });
+          }
           await load();
-          navigate({ name: "document", path });
         }}
       />
       <PromptDialog
         open={renaming !== null}
         onOpenChange={(next) => !next && setRenaming(null)}
-        title="Rename document"
+        title={
+          renaming?.kind === "directory" ? "Rename folder" : "Rename document"
+        }
         label="New path"
         initial={renaming?.path ?? ""}
         submitLabel="Rename"
         onSubmit={async (destination) => {
-          if (renaming) await backend.moveLibrary(renaming.path, destination);
-          setRenaming(null);
+          if (renaming) {
+            await backend.moveLibrary(renaming.path, destination);
+            setExpanded(
+              (current) =>
+                new Set(
+                  [...current].map((folder) =>
+                    folder === renaming.path ||
+                    folder.startsWith(`${renaming.path}/`)
+                      ? destination + folder.slice(renaming.path.length)
+                      : folder,
+                  ),
+                ),
+            );
+          }
           await load();
         }}
       />
@@ -193,11 +275,12 @@ export function LibraryPage() {
         open={doomed !== null}
         onOpenChange={(next) => !next && setDoomed(null)}
         title={`Delete ${doomed?.path ?? ""}?`}
-        description="The document is removed for every Member."
-        confirmLabel="Delete document"
+        description={deleteConsequence(doomed, entries ?? [])}
+        confirmLabel={
+          doomed?.kind === "directory" ? "Delete folder" : "Delete document"
+        }
         onConfirm={async () => {
           if (doomed) await backend.deleteLibrary(doomed.path);
-          setDoomed(null);
           await load();
         }}
       />

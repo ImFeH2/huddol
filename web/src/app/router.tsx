@@ -14,7 +14,7 @@ export type Route =
   | { name: "discussion"; id: number }
   | { name: "members" }
   | { name: "member"; id: number }
-  | { name: "library" }
+  | { name: "library"; path?: string }
   | { name: "document"; path: string }
   | { name: "settings"; section: SettingsSection };
 
@@ -36,7 +36,7 @@ export function navIdOf(route: Route): NavId {
 
 export function pageKeyOf(route: Route): string {
   if ("id" in route) return `${route.name}:${route.id}`;
-  if ("path" in route) return `${route.name}:${route.path}`;
+  if ("path" in route && route.path) return `${route.name}:${route.path}`;
   return route.name;
 }
 
@@ -70,7 +70,7 @@ export function RouterProvider({ children }: { children: ReactNode }) {
 
 function paramOf(route: Route): string | number | null {
   if ("id" in route) return route.id;
-  if ("path" in route) return route.path;
+  if ("path" in route) return route.path ?? null;
   if ("section" in route) return route.section;
   return null;
 }

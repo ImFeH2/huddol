@@ -33,6 +33,8 @@
 }
 
 .dialog-title {
+  min-width: 0;
+  overflow-wrap: anywhere;
   margin: 0;
   font-size: var(--text-md);
   font-weight: var(--weight-semibold);

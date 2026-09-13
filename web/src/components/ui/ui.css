@@ -436,6 +436,18 @@ textarea.field[data-auto-grow="true"] {
   color: rgb(var(--green-200));
 }
 
+.tooltip-trigger {
+  display: inline-flex;
+  align-items: center;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-xs);
+  background: none;
+  color: inherit;
+  font: inherit;
+  cursor: help;
+}
+
 .count-pill {
   align-self: flex-start;
   padding: 3px var(--space-4);

@@ -59,6 +59,20 @@
   font-size: var(--text-xs);
 }
 
+.memory-content {
+  max-height: 50vh;
+  overflow: auto;
+  padding: var(--space-4);
+  border: 1px solid rgb(var(--border-base));
+  border-radius: var(--radius-sm);
+  background: rgb(var(--bg-base));
+  color: rgb(var(--text-base));
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  line-height: var(--leading-body);
+  letter-spacing: 0;
+}
+
 .turn-list {
   display: flex;
   flex-direction: column;

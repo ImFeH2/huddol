@@ -1,7 +1,13 @@
 import { Check, Save, SquarePen, Trash2 } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
-import { useNavigate } from "@/app/router";
-import { Page, PageBody, PageHeader, Toolbar } from "@/components/layout/shell";
+import { type Route, useNavigate } from "@/app/router";
+import {
+  type Crumb,
+  Page,
+  PageBody,
+  PageHeader,
+  Toolbar,
+} from "@/components/layout/shell";
 import { ConfirmDialog, PromptDialog } from "@/components/ui/dialog";
 import {
   Button,
@@ -12,8 +18,9 @@ import {
   toast,
 } from "@/components/ui/index";
 import { OverflowMenu } from "@/components/ui/menu";
+import { reportLoadFailure } from "@/features/settings/saver";
 import { BackendError, backend } from "@/lib/backend";
-import { documentFolder, formatBytes } from "@/lib/format";
+import { formatBytes } from "@/lib/format";
 import "@/features/library/library.css";
 
 type Loaded = { content: string; hash: string };
@@ -26,11 +33,46 @@ function conflictToastId(path: string): string {
   return `document-conflict:${path}`;
 }
 
+export function documentCrumbs(
+  path: string,
+  navigate: (route: Route) => void,
+): Crumb[] {
+  const parts = path.split("/");
+  return [
+    { label: "Library", onSelect: () => navigate({ name: "library" }) },
+    ...parts.map((label, index) => ({
+      label,
+      onSelect: () =>
+        navigate({
+          name: "library",
+          path: parts.slice(0, index + 1).join("/"),
+        }),
+    })),
+  ];
+}
+
+export function DocumentUnavailable({
+  code,
+}: {
+  code: "not_found" | "not_readable";
+}) {
+  return (
+    <EmptyState
+      title={
+        code === "not_readable" ? "Cannot open this file" : "Document not found"
+      }
+    />
+  );
+}
+
 export function DocumentPage({ path }: { path: string }) {
   const navigate = useNavigate();
   const [loaded, setLoaded] = useState<Loaded | null>(null);
   const [draft, setDraft] = useState("");
-  const [missing, setMissing] = useState(false);
+  const [unavailable, setUnavailable] = useState<
+    "not_found" | "not_readable" | null
+  >(null);
+  const [failed, setFailed] = useState(false);
   const [saved, setSaved] = useState<Saved>(null);
   const [busy, setBusy] = useState(false);
   const [renaming, setRenaming] = useState(false);
@@ -41,20 +83,27 @@ export function DocumentPage({ path }: { path: string }) {
       const document = await backend.readLibrary(path);
       setLoaded({ content: document.content, hash: document.hash });
       setDraft(document.content);
-      setMissing(false);
+      setUnavailable(null);
+      setFailed(false);
+      dismissToast(`document-load:${path}`);
       dismissToast(conflictToastId(path));
     } catch (failure) {
-      if (failure instanceof BackendError && failure.code === "not_found") {
-        setMissing(true);
+      setFailed(true);
+      if (
+        failure instanceof BackendError &&
+        (failure.code === "not_found" || failure.code === "not_readable")
+      ) {
+        setUnavailable(failure.code);
       } else {
-        backend.reportFailure(failure);
+        reportLoadFailure(`document-load:${path}`, failure, () => void load());
       }
     }
   }, [path]);
 
   useEffect(() => {
     void load();
-  }, [load]);
+    return () => dismissToast(`document-load:${path}`);
+  }, [load, path]);
 
   useEffect(() => () => dismissToast(conflictToastId(path)), [path]);
 
@@ -65,11 +114,7 @@ export function DocumentPage({ path }: { path: string }) {
   }, [saved]);
 
   const dirty = loaded !== null && draft !== loaded.content;
-  const folder = documentFolder(path);
-  const crumb = {
-    label: "Library",
-    onSelect: () => navigate({ name: "library" }),
-  };
+  const crumb = documentCrumbs(path, navigate);
 
   const save = async () => {
     if (!dirty || loaded === null) return;
@@ -97,12 +142,12 @@ export function DocumentPage({ path }: { path: string }) {
     }
   };
 
-  if (missing) {
+  if (unavailable) {
     return (
       <Page>
         <PageHeader title={path} crumb={crumb} />
         <PageBody>
-          <EmptyState title="Document not found" />
+          <DocumentUnavailable code={unavailable} />
         </PageBody>
       </Page>
     );
@@ -115,7 +160,11 @@ export function DocumentPage({ path }: { path: string }) {
         crumb={crumb}
         actions={
           <>
-            <Button variant="primary" disabled={!dirty || busy} onClick={save}>
+            <Button
+              variant="primary"
+              disabled={!dirty || busy || failed}
+              onClick={save}
+            >
               <Save size={16} />
               {busy ? "Saving" : "Save"}
             </Button>
@@ -141,7 +190,6 @@ export function DocumentPage({ path }: { path: string }) {
         }
       />
       <Toolbar>
-        {folder ? <Chip>{folder}</Chip> : null}
         <Chip>{formatBytes(new TextEncoder().encode(draft).length)}</Chip>
         {dirty ? <Chip tone="blue">Unsaved changes</Chip> : null}
         {saved ? (
@@ -164,6 +212,7 @@ export function DocumentPage({ path }: { path: string }) {
           <div className="editor">
             <Textarea
               aria-label="Document"
+              disabled={loaded === null || failed}
               value={draft}
               spellCheck={false}
               onChange={(event) => {

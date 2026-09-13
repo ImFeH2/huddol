@@ -22,23 +22,28 @@ import {
   Section,
   Table,
 } from "@/components/layout/shell";
-import { ConfirmDialog } from "@/components/ui/dialog";
+import { ConfirmDialog, Modal } from "@/components/ui/dialog";
 import {
   Avatar,
   Button,
   Chip,
   Dot,
+  dismissToast,
   Meter,
   StateDot,
   StatusText,
 } from "@/components/ui/index";
 import { OverflowMenu } from "@/components/ui/menu";
 import { Tooltip } from "@/components/ui/tooltip";
+import { TreeView } from "@/features/library/tree-view";
 import { agentStateLabel } from "@/features/members/state";
+import { reportLoadFailure } from "@/features/settings/saver";
 import {
   type AgentDetail,
   type AgentRun,
   backend,
+  type LibraryDocument,
+  type LibraryEntry,
   type Member,
   type Todo,
 } from "@/lib/backend";
@@ -48,11 +53,6 @@ import "@/features/members/members.css";
 const TODO_COLUMNS: Column[] = [
   { key: "todo", label: "Todo" },
   { key: "status", label: "Status", width: "160px" },
-];
-
-const MEMORY_COLUMNS: Column[] = [
-  { key: "path", label: "File" },
-  { key: "size", label: "Size", align: "end", width: "120px" },
 ];
 
 const TOOL_ICONS: Record<string, ReactNode> = {
@@ -105,14 +105,16 @@ function AgentPage({
   const load = useCallback(async () => {
     try {
       setDetail(await backend.agentDetail(member.id));
+      dismissToast(`agent-load:${member.id}`);
     } catch (failure) {
-      backend.reportFailure(failure);
+      reportLoadFailure(`agent-load:${member.id}`, failure, () => void load());
     }
   }, [member.id]);
 
   useEffect(() => {
     void load();
-  }, [load]);
+    return () => dismissToast(`agent-load:${member.id}`);
+  }, [load, member.id]);
 
   useEffect(() => {
     return backend.onEvent((event) => {
@@ -132,17 +134,7 @@ function AgentPage({
         status={
           <>
             <AgentState member={member} tokenLimit={tokenLimit} />
-            {detail?.over_token_limit ? (
-              <Chip tone="danger">
-                <CircleAlert size={12} />
-                Token ceiling
-              </Chip>
-            ) : null}
-            {detail && detail.idle_streak >= 3 ? (
-              <Chip tone="warning">
-                {plural(detail.idle_streak, "idle Turn")}
-              </Chip>
-            ) : null}
+            {detail ? <AgentDetailStatus detail={detail} /> : null}
           </>
         }
         crumb={{
@@ -186,7 +178,7 @@ function AgentPage({
             <div className="stat-grid">
               <Stat
                 label="Token spend"
-                value={detail.usage.total_tokens.toLocaleString()}
+                value={detail.usage.total_tokens.toLocaleString("en-US")}
                 detail={
                   detail.token_limit > 0 ? (
                     <>
@@ -196,7 +188,7 @@ function AgentPage({
                         label={`Token spend for ${member.name}`}
                       />
                       <span className="muted">
-                        of {detail.token_limit.toLocaleString()}
+                        of {detail.token_limit.toLocaleString("en-US")}
                       </span>
                     </>
                   ) : (
@@ -206,11 +198,11 @@ function AgentPage({
               />
               <Stat
                 label="Model requests"
-                value={detail.usage.requests.toLocaleString()}
+                value={detail.usage.requests.toLocaleString("en-US")}
                 detail={
                   <span className="muted">
-                    {detail.usage.input_tokens.toLocaleString()} in ·{" "}
-                    {detail.usage.output_tokens.toLocaleString()} out
+                    {detail.usage.input_tokens.toLocaleString("en-US")} in ·{" "}
+                    {detail.usage.output_tokens.toLocaleString("en-US")} out
                   </span>
                 }
               />
@@ -220,10 +212,14 @@ function AgentPage({
               />
               <Stat
                 label="Open Todos"
-                value={String(openTodos)}
+                value={openTodos.toLocaleString("en-US")}
                 detail={
                   <span className="muted">
-                    {plural(detail.memory.length, "Memory file")}
+                    {plural(
+                      detail.memory.filter((entry) => entry.kind === "file")
+                        .length,
+                      "Memory file",
+                    )}
                   </span>
                 }
               />
@@ -241,24 +237,7 @@ function AgentPage({
               )}
             </Section>
 
-            <Section title="Memory">
-              {detail.memory.length === 0 ? (
-                <p className="muted">No Memory files</p>
-              ) : (
-                <Table columns={MEMORY_COLUMNS} label="Memory files">
-                  {detail.memory.map((file) => (
-                    <tr className="table-row" key={file.path}>
-                      <td>
-                        <span className="mono">{file.path}</span>
-                      </td>
-                      <td data-align="end" className="numeric muted">
-                        {formatBytes(file.size)}
-                      </td>
-                    </tr>
-                  ))}
-                </Table>
-              )}
-            </Section>
+            <MemorySection agentId={member.id} entries={detail.memory} />
 
             <Section title="Recent Turns">
               {detail.runs.length === 0 ? (
@@ -287,6 +266,111 @@ function AgentPage({
         }}
       />
     </Page>
+  );
+}
+
+export function AgentDetailStatus({ detail }: { detail: AgentDetail }) {
+  return (
+    <>
+      {detail.over_token_limit ? (
+        <Chip tone="danger">
+          <CircleAlert size={12} />
+          Token ceiling
+        </Chip>
+      ) : null}
+      {detail.idle ? (
+        <Chip tone="warning">{plural(detail.idle_streak, "idle Turn")}</Chip>
+      ) : null}
+      {detail.window.number > 1 ? (
+        <Tooltip
+          focusable
+          label={[
+            detail.window.reason,
+            detail.window.reset_at ? formatTime(detail.window.reset_at) : null,
+          ]
+            .filter(Boolean)
+            .join(" · ")}
+        >
+          <Chip>Window {detail.window.number.toLocaleString("en-US")}</Chip>
+        </Tooltip>
+      ) : null}
+    </>
+  );
+}
+
+export function MemoryContent({ file }: { file: LibraryDocument }) {
+  return (
+    <>
+      <Chip>{formatBytes(new TextEncoder().encode(file.content).length)}</Chip>
+      <pre className="memory-content">{file.content}</pre>
+    </>
+  );
+}
+
+export function MemorySection({
+  agentId,
+  entries,
+}: {
+  agentId: number;
+  entries: LibraryEntry[];
+}) {
+  const [expanded, setExpanded] = useState<Set<string>>(() => new Set());
+  const [path, setPath] = useState<string | null>(null);
+  const [file, setFile] = useState<LibraryDocument | null>(null);
+
+  useEffect(() => {
+    if (path === null) return;
+    let active = true;
+    const toastId = `memory-read:${agentId}:${path}`;
+    const load = async () => {
+      try {
+        const result = await backend.memoryRead(agentId, path);
+        if (!active) return;
+        setFile(result);
+        dismissToast(toastId);
+      } catch (failure) {
+        if (active) reportLoadFailure(toastId, failure, () => void load());
+      }
+    };
+    void load();
+    return () => {
+      active = false;
+      dismissToast(toastId);
+    };
+  }, [agentId, path]);
+
+  return (
+    <Section title="Memory">
+      {entries.length === 0 ? (
+        <p className="muted">No Memory files</p>
+      ) : (
+        <TreeView
+          entries={entries}
+          expanded={expanded}
+          onToggle={(folder) =>
+            setExpanded((current) => {
+              const next = new Set(current);
+              if (next.has(folder)) next.delete(folder);
+              else next.add(folder);
+              return next;
+            })
+          }
+          onOpen={(next) => {
+            setFile(null);
+            setPath(next);
+          }}
+          readOnly
+        />
+      )}
+      <Modal
+        open={path !== null}
+        onOpenChange={(open) => !open && setPath(null)}
+        title={path ?? ""}
+        footer={null}
+      >
+        {file ? <MemoryContent file={file} /> : null}
+      </Modal>
+    </Section>
   );
 }
 

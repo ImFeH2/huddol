@@ -1,9 +1,9 @@
 export function plural(count: number, one: string, many = `${one}s`): string {
-  return `${count.toLocaleString()} ${count === 1 ? one : many}`;
+  return `${count.toLocaleString("en-US")} ${count === 1 ? one : many}`;
 }
 
 export function formatBytes(size: number): string {
-  if (size < 1024) return `${size} B`;
+  if (size < 1024) return `${size.toLocaleString("en-US")} B`;
   if (size < 1024 * 1024) return `${(size / 1024).toFixed(1)} kB`;
   return `${(size / (1024 * 1024)).toFixed(1)} MB`;
 }

@@ -6,11 +6,25 @@ describe("navIdOf", () => {
     expect(navIdOf({ name: "discussion", id: 4 })).toBe("discussions");
     expect(navIdOf({ name: "member", id: 2 })).toBe("members");
     expect(navIdOf({ name: "document", path: "a.md" })).toBe("library");
+    expect(navIdOf({ name: "library", path: "runbooks/on-call" })).toBe(
+      "library",
+    );
     expect(navIdOf({ name: "settings", section: "langfuse" })).toBe("settings");
   });
 });
 
 describe("pageKeyOf", () => {
+  it("remounts the Library for a different folder destination", () => {
+    expect(pageKeyOf({ name: "library", path: "runbooks" })).toBe(
+      "library:runbooks",
+    );
+    expect(pageKeyOf({ name: "library", path: "runbooks" })).not.toBe(
+      pageKeyOf({ name: "library", path: "notes" }),
+    );
+    expect(pageKeyOf({ name: "library", path: undefined })).toBe(
+      pageKeyOf({ name: "library" }),
+    );
+  });
   it("changes only when the page or its subject changes", () => {
     expect(pageKeyOf({ name: "discussion", id: 4 })).not.toBe(
       pageKeyOf({ name: "discussion", id: 5 }),
