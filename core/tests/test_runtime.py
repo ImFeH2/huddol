@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import sys
 from pathlib import Path
 
 import pytest
@@ -37,13 +38,19 @@ def world(tmp_path: Path):
     store.create_member("human", "You")
     store.create_member("agent", "Main")
     store.create_member("agent", "Helper")
+
+    def agent_directory_for(member_id: int) -> Path:
+        path = tmp_path / "agents" / str(member_id)
+        path.mkdir(parents=True, exist_ok=True)
+        return path
+
     deps = Dependencies(
         store=store,
         todos=agent_store,
         history=agent_store,
         settings=agent_store,
+        agent_directory_for=agent_directory_for,
         execution=ExecutionManager(
-            tmp_path,
             settings={"directories": {"native": [str(tmp_path)]}},
             enforce=False,
         ),
@@ -69,9 +76,7 @@ def test_unavailable_execution_does_not_disable_business_tools(
 
     room = mention(world)
     world.execution.close()
-    world.execution = ExecutionManager(
-        tmp_path, settings={"environment": {"kind": "invalid"}}
-    )
+    world.execution = ExecutionManager(settings={"environment": {"kind": "invalid"}})
 
     def respond(request, tools):
         assert "Commands and file editing are unavailable" in request.runtime_context
@@ -552,7 +557,7 @@ def test_runtime_context_removal_preserves_existing_history(
     assert world.history.runs(MAIN)[1].messages_json == original
 
 
-def test_runtime_context_carries_memory_and_todo_state(world) -> None:
+def test_runtime_context_carries_memory_and_todo_state(world, tmp_path: Path) -> None:
     mention(world)
     MarkdownTree(world.memory_tree_for(MAIN).root).write(
         "MEMORY.md", "- prior knowledge"
@@ -561,6 +566,11 @@ def test_runtime_context_carries_memory_and_todo_state(world) -> None:
     runner = RecordingRunner()
     Scheduler(world, runner).run_turn(MAIN)
     context = runner.requests[0].runtime_context
+    assert context.startswith(
+        f"Execution environment: native ({sys.platform})\n"
+        f"Writable directories:\n- {tmp_path}\n\n"
+    )
+    assert str(tmp_path / "agents" / str(MAIN)) not in context
     assert "prior knowledge" in context
     assert "unfinished work" in context
 

@@ -156,8 +156,6 @@ def main(argv: list[str] | None = None) -> int:
     directory.mkdir(parents=True, exist_ok=True)
     handlers = configure_logging(directory)
     log = logging.getLogger("huddol")
-    workspace = directory / "workspace"
-    workspace.mkdir(parents=True, exist_ok=True)
     store = SqliteStore(directory / "huddol.sqlite3")
     agent_store = SqliteAgentStore(store._db)
     agent_store.mark_interrupted()
@@ -168,8 +166,13 @@ def main(argv: list[str] | None = None) -> int:
         if member.is_agent and member.state == "running":
             store.set_agent_state(member.id, "idle")
 
+    def agent_directory_for(member_id: int) -> Path:
+        path = directory / "agents" / str(member_id)
+        path.mkdir(parents=True, exist_ok=True)
+        return path
+
     execution = ExecutionManager(
-        workspace, settings=agent_store.get_settings("execution"), tolerant=True
+        settings=agent_store.get_settings("execution"), tolerant=True
     )
     deps = Dependencies(
         store=store,
@@ -177,6 +180,7 @@ def main(argv: list[str] | None = None) -> int:
         history=agent_store,
         settings=agent_store,
         execution=execution,
+        agent_directory_for=agent_directory_for,
         library_tree=MarkdownTree(directory / "library"),
         memory_tree_for=lambda member_id: MarkdownTree(
             directory / "agents" / str(member_id) / "memory"

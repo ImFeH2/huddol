@@ -25,15 +25,12 @@ class ExecutionEnvironment(Protocol):
     def skipped(self) -> tuple[tuple[str, str], ...]: ...
 
     @property
-    def root(self) -> str: ...
-
-    @property
     def write_directories(self) -> tuple[str, ...]: ...
 
     def describe_environment(self) -> str: ...
 
     def run(
-        self, argv: Sequence[str], *, cwd: str | None = None, timeout: int | None = None
+        self, argv: Sequence[str], *, cwd: str, timeout: int | None = None
     ) -> RunResult: ...
 
     def edit(

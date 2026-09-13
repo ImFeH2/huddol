@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
+from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Any
 
 from huddol.core.context import advance_watermark, context_window
@@ -28,6 +29,7 @@ class Dependencies:
     execution: ExecutionControl
     library_tree: FileTree
     memory_tree_for: Any
+    agent_directory_for: Callable[[int], Path]
 
 
 @dataclass(frozen=True)
@@ -424,6 +426,12 @@ class AgentTools:
         timeout: int | None = None,
     ) -> dict[str, Any]:
         self._check("run")
+        if cwd is None:
+            cwd = str(self._deps.agent_directory_for(self._actor.member_id))
+        elif not (
+            PurePosixPath(cwd).is_absolute() or PureWindowsPath(cwd).is_absolute()
+        ):
+            cwd = str(self._deps.agent_directory_for(self._actor.member_id) / cwd)
         result = self._environment.run(list(argv), cwd=cwd, timeout=timeout)
         self._record("run", f"{' '.join(argv)} exited {result.exit_code}")
         return {
@@ -441,6 +449,10 @@ class AgentTools:
         replace_all: bool = False,
     ) -> dict[str, Any]:
         self._check("edit", path)
+        if not (
+            PurePosixPath(path).is_absolute() or PureWindowsPath(path).is_absolute()
+        ):
+            path = str(self._deps.agent_directory_for(self._actor.member_id) / path)
         result = self._environment.edit(
             path, old_text, new_text, replace_all=replace_all
         )

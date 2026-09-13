@@ -70,7 +70,6 @@ def main() -> int:
         }:
             raise DomainError("invalid_operation", "Unknown execution operation")
         environment = LocalExecution(
-            host_path(request["root"]),
             [host_path(item) for item in request["directories"]],
             tolerant=bool(request.get("tolerant", False)),
         )
@@ -85,23 +84,24 @@ def main() -> int:
         threading.Thread(target=disconnected, daemon=True).start()
         operation = request["operation"]
         if operation == "inspect":
-            probe = environment.run(["/bin/true"], timeout=10)
+            probe = environment.run(["/bin/true"], cwd="/", timeout=10)
             if probe.exit_code:
                 raise DomainError(
                     "sandbox_unavailable",
                     "Linux filesystem write protection is unavailable",
                 )
             return {
-                "root": environment.root,
                 "write_directories": list(environment.write_directories),
                 "skipped": list(environment.skipped),
-                "description": environment.describe_environment(),
             }
         params = request.get("params", {})
         if not isinstance(params, dict):
             raise DomainError(
                 "invalid_params", "Execution parameters must be an object"
             )
+        key = "cwd" if operation == "run" else "path"
+        if isinstance(params.get(key), str):
+            params[key] = host_path(params[key])
         if operation == "run":
             return asdict(environment.run(**params))
         return asdict(environment.edit(**params))

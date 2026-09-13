@@ -604,7 +604,7 @@ def test_the_data_directory_variable_is_honoured(tmp_path: Path) -> None:
         assert kernel.shutdown() == 0, kernel.stderr
 
 
-def test_the_working_root_is_a_workspace_inside_the_data_directory(
+def test_startup_has_no_workspace_or_working_directory_setting(
     tmp_path: Path,
 ) -> None:
     target = tmp_path / "somewhere" / "else"
@@ -614,10 +614,8 @@ def test_the_working_root_is_a_workspace_inside_the_data_directory(
         cwd=tmp_path,
     )
     assert code == 0, stderr
-    assert response(frames, 1)["result"]["working_directory"] == str(
-        target / "workspace"
-    )
-    assert (target / "workspace").is_dir()
+    assert "working_directory" not in response(frames, 1)["result"]
+    assert not (target / "workspace").exists()
 
 
 def test_run_file_lives_only_while_the_kernel_runs(tmp_path: Path) -> None:

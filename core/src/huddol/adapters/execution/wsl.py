@@ -77,18 +77,14 @@ class WslConnection:
     def __init__(
         self,
         distribution: str,
-        root: Path,
         directories: Sequence[str],
         *,
         tolerant: bool = False,
     ) -> None:
         self.distribution = distribution
-        self._host_root = str(root)
-        self._root = ""
         self._roots = tuple(directories)
         self._configured_directories = tuple(directories)
         self.skipped: tuple[tuple[str, str], ...] = ()
-        self._description = ""
         self._tolerant = tolerant
         self._worker: list[str] | None = None
         self._lock = threading.Lock()
@@ -136,7 +132,6 @@ class WslConnection:
         command = self._command()
         payload = {
             "operation": operation,
-            "root": self._host_root,
             "directories": list(
                 self._configured_directories if operation == "inspect" else self._roots
             ),
@@ -229,30 +224,25 @@ class WslConnection:
 
     def inspect(self) -> None:
         info = self._request("inspect")
-        self._root = info["root"]
         self._roots = tuple(info["write_directories"])
         self.skipped = tuple(tuple(item) for item in info["skipped"])
-        self._description = info["description"]
-
-    @property
-    def root(self) -> str:
-        return self._root
 
     @property
     def write_directories(self) -> tuple[str, ...]:
         return self._roots
 
     def apply_configuration(self, candidate: WslConnection) -> None:
-        self._root = candidate._root
         self._roots = candidate._roots
         self._configured_directories = candidate._configured_directories
         self.skipped = candidate.skipped
-        self._description = candidate._description
         self._tolerant = candidate._tolerant
 
     def describe_environment(self) -> str:
-        self.inspect()
-        return f"Execution environment: WSL ({self.distribution}).\n{self._description}"
+        listing = "\n".join(f"- {item}" for item in self.write_directories) or "- none"
+        return (
+            f"Execution environment: WSL ({self.distribution})\n"
+            f"Writable directories:\n{listing}"
+        )
 
     def run(
         self, argv: Sequence[str], *, cwd: str | None = None, timeout: int | None = None

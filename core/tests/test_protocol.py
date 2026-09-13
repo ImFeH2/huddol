@@ -51,13 +51,19 @@ def server(tmp_path: Path):
     store = SqliteStore(tmp_path / "huddol.sqlite3")
     agent_store = SqliteAgentStore(store._db)
     store.create_member("human", "You")
+
+    def agent_directory_for(member_id: int) -> Path:
+        path = tmp_path / "agents" / str(member_id)
+        path.mkdir(parents=True, exist_ok=True)
+        return path
+
     deps = Dependencies(
         store=store,
         todos=agent_store,
         history=agent_store,
         settings=agent_store,
+        agent_directory_for=agent_directory_for,
         execution=ExecutionManager(
-            tmp_path,
             settings={"directories": {"native": [str(tmp_path)]}},
             enforce=False,
         ),

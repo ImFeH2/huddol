@@ -6,6 +6,7 @@ from pathlib import Path, PurePosixPath
 
 import pytest
 
+from huddol.adapters.execution.editing import edit_file
 from huddol.adapters.execution.local import LocalExecution
 from huddol.adapters.sandbox.commands import (
     linux_command,
@@ -105,7 +106,7 @@ def test_windows_command_reenters_the_kernel_entrypoint() -> None:
 def test_edit_replaces_once_and_reports_a_diff(tmp_path: Path) -> None:
     target = tmp_path / "file.txt"
     target.write_text("alpha\nbeta\n", encoding="utf-8")
-    sandbox = LocalExecution(tmp_path, [str(tmp_path)], enforce=False)
+    sandbox = LocalExecution([str(tmp_path)], enforce=False)
     result = sandbox.edit(str(target), "beta", "gamma")
     assert target.read_text(encoding="utf-8") == "alpha\ngamma\n"
     assert result.replacements == 1
@@ -115,7 +116,7 @@ def test_edit_replaces_once_and_reports_a_diff(tmp_path: Path) -> None:
 def test_edit_refuses_ambiguous_matches_unless_replace_all(tmp_path: Path) -> None:
     target = tmp_path / "file.txt"
     target.write_text("x\nx\n", encoding="utf-8")
-    sandbox = LocalExecution(tmp_path, [str(tmp_path)], enforce=False)
+    sandbox = LocalExecution([str(tmp_path)], enforce=False)
     with pytest.raises(DomainError) as error:
         sandbox.edit(str(target), "x", "y")
     assert error.value.code == "ambiguous_match"
@@ -127,7 +128,7 @@ def test_edit_rejects_paths_outside_the_writable_roots(tmp_path: Path) -> None:
     allowed.mkdir()
     outside = tmp_path / "outside.txt"
     outside.write_text("secret", encoding="utf-8")
-    sandbox = LocalExecution(tmp_path, [str(allowed)])
+    sandbox = LocalExecution([str(allowed)])
     with pytest.raises(DomainError) as error:
         sandbox.edit(str(outside), "secret", "leaked")
     assert error.value.code == "not_writable"
@@ -137,15 +138,15 @@ def test_edit_rejects_paths_outside_the_writable_roots(tmp_path: Path) -> None:
 def test_edit_leaves_no_temporary_files(tmp_path: Path) -> None:
     target = tmp_path / "file.txt"
     target.write_text("a", encoding="utf-8")
-    sandbox = LocalExecution(tmp_path, [str(tmp_path)], enforce=False)
+    sandbox = LocalExecution([str(tmp_path)], enforce=False)
     sandbox.edit(str(target), "a", "b")
     assert list(tmp_path.glob("*.huddol-tmp")) == []
 
 
 def test_run_rejects_malformed_argv(tmp_path: Path) -> None:
-    sandbox = LocalExecution(tmp_path, enforce=False)
+    sandbox = LocalExecution(enforce=False)
     with pytest.raises(DomainError):
-        sandbox.run([])
+        sandbox.run([], cwd=str(tmp_path))
 
 
 @pytest.mark.parametrize("writable", [False, True])
@@ -153,20 +154,18 @@ def test_describe_environment_names_the_writable_roots(
     tmp_path: Path, writable: bool
 ) -> None:
     directories = [str(tmp_path)] if writable else []
-    sandbox = LocalExecution(tmp_path, directories, enforce=False)
+    sandbox = LocalExecution(directories, enforce=False)
     listing = f"- {tmp_path.resolve()}" if writable else "- none"
     assert sandbox.describe_environment() == (
-        f"Commands and file editing run on {sys.platform}. Always give paths in absolute form. "
-        f"Relative paths resolve against {tmp_path.resolve()}, which is not a project directory and is not writable.\n"
-        "You can read any path the host user can read.\n"
-        f"Configured writable directories:\n{listing}"
+        f"Execution environment: native ({sys.platform})\n"
+        f"Writable directories:\n{listing}"
     )
 
 
 @LINUX_ONLY
 def test_unsandboxed_run_executes_and_captures_output(tmp_path: Path) -> None:
-    sandbox = LocalExecution(tmp_path, enforce=False)
-    result = sandbox.run(["echo", "hello"])
+    sandbox = LocalExecution(enforce=False)
+    result = sandbox.run(["echo", "hello"], cwd=str(tmp_path))
     assert result.exit_code == 0
     assert result.stdout.strip() == "hello"
 
@@ -182,13 +181,17 @@ def test_sandboxed_run_allows_writes_inside_and_blocks_them_outside(
     protected.mkdir()
     (protected / "keep.txt").write_text("original", encoding="utf-8")
 
-    sandbox = LocalExecution(tmp_path, [str(writable)])
+    sandbox = LocalExecution([str(writable)])
 
-    inside = sandbox.run(["sh", "-c", f"echo ok > {writable}/probe.txt"])
+    inside = sandbox.run(
+        ["sh", "-c", f"echo ok > {writable}/probe.txt"], cwd=str(tmp_path)
+    )
     assert inside.exit_code == 0
     assert (writable / "probe.txt").read_text(encoding="utf-8").strip() == "ok"
 
-    outside = sandbox.run(["sh", "-c", f"echo hacked > {protected}/keep.txt"])
+    outside = sandbox.run(
+        ["sh", "-c", f"echo hacked > {protected}/keep.txt"], cwd=str(tmp_path)
+    )
     assert outside.exit_code != 0
     assert "Read-only file system" in outside.stderr
     assert (protected / "keep.txt").read_text(encoding="utf-8") == "original"
@@ -217,14 +220,48 @@ def test_tolerant_mode_keeps_the_usable_directories(tmp_path: Path) -> None:
 
 
 def test_a_sandbox_with_unusable_configuration_still_constructs(tmp_path: Path) -> None:
-    sandbox = LocalExecution(tmp_path, ["not-absolute"], enforce=False, tolerant=True)
+    sandbox = LocalExecution(["not-absolute"], enforce=False, tolerant=True)
     assert sandbox.write_directories == ()
     assert sandbox.skipped == (("not-absolute", "invalid_directory"),)
 
 
 def test_strict_mode_still_rejects_bad_input(tmp_path: Path) -> None:
     with pytest.raises(DomainError):
-        LocalExecution(tmp_path, ["not-absolute"], enforce=False)
+        LocalExecution(["not-absolute"], enforce=False)
+
+
+@pytest.mark.parametrize("cwd", [None, "", "relative/path"])
+def test_run_rejects_missing_or_relative_cwd(cwd) -> None:
+    environment = LocalExecution(enforce=False)
+    with pytest.raises(DomainError, match="^cwd must be an absolute path$") as error:
+        environment.run([sys.executable, "-c", "pass"], cwd=cwd)
+    assert error.value.code == "invalid_cwd"
+
+
+def test_run_rejects_an_omitted_cwd() -> None:
+    environment = LocalExecution(enforce=False)
+    with pytest.raises(DomainError, match="^cwd must be an absolute path$") as error:
+        environment.run([sys.executable, "-c", "pass"])
+    assert error.value.code == "invalid_cwd"
+
+
+@pytest.mark.parametrize("exists", [False, True])
+def test_run_rejects_a_cwd_that_is_not_a_directory(
+    tmp_path: Path, exists: bool
+) -> None:
+    target = tmp_path / "file"
+    if exists:
+        target.touch()
+    environment = LocalExecution(enforce=False)
+    with pytest.raises(DomainError) as error:
+        environment.run([sys.executable, "-c", "pass"], cwd=str(target))
+    assert error.value.code == "invalid_cwd"
+
+
+def test_edit_file_rejects_relative_paths(tmp_path: Path) -> None:
+    with pytest.raises(DomainError, match="^path must be an absolute path$") as error:
+        edit_file("file.txt", "before", "after", directories=[str(tmp_path)])
+    assert error.value.code == "invalid_path"
 
 
 def test_linux_command_renders_posix_paths_on_every_host() -> None:

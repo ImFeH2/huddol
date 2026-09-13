@@ -35,13 +35,11 @@ def entrypoint() -> list[str]:
 class LocalExecution:
     def __init__(
         self,
-        root: Path | str,
         write_directories: Sequence[str] = (),
         *,
         enforce: bool = True,
         tolerant: bool = False,
     ) -> None:
-        self._root = Path(root).resolve()
         self._enforce = enforce
         self._windows: WindowsWriteAccess | None = None
         self._lock = threading.RLock()
@@ -54,10 +52,6 @@ class LocalExecution:
             self.skipped = result.skipped
         else:
             self._roots = normalize_directories(write_directories)
-
-    @property
-    def root(self) -> str:
-        return str(self._root)
 
     @property
     def write_directories(self) -> tuple[str, ...]:
@@ -91,10 +85,8 @@ class LocalExecution:
     def describe_environment(self) -> str:
         listing = "\n".join(f"- {item}" for item in self.write_directories) or "- none"
         return (
-            f"Commands and file editing run on {sys.platform}. Always give paths in absolute form. "
-            f"Relative paths resolve against {self._root}, which is not a project directory and is not writable.\n"
-            "You can read any path the host user can read.\n"
-            f"Configured writable directories:\n{listing}"
+            f"Execution environment: native ({sys.platform})\n"
+            f"Writable directories:\n{listing}"
         )
 
     def _wrap(self, argv: Sequence[str], cwd: Path) -> list[str]:
@@ -119,11 +111,11 @@ class LocalExecution:
         )
 
     def _resolve_cwd(self, cwd: str | None) -> Path:
-        candidate = Path(cwd) if cwd is not None else self._root
-        target = candidate if candidate.is_absolute() else self._root / candidate
-        resolved = target.resolve()
+        if cwd is None or not Path(cwd).is_absolute():
+            raise DomainError("invalid_cwd", "cwd must be an absolute path")
+        resolved = Path(cwd).resolve()
         if not resolved.is_dir():
-            raise DomainError("invalid_cwd", f"{cwd or self.root} is not a directory")
+            raise DomainError("invalid_cwd", f"{cwd} is not a directory")
         return resolved
 
     def _execute(
@@ -198,7 +190,6 @@ class LocalExecution:
             path,
             old_text,
             new_text,
-            root=self.root,
             directories=list(self.write_directories),
             replace_all=replace_all,
         )

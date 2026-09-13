@@ -3,7 +3,6 @@ from __future__ import annotations
 import os
 import threading
 from collections.abc import Callable, Sequence
-from pathlib import Path
 from typing import Any
 
 from huddol.adapters.execution.local import LocalExecution
@@ -52,10 +51,6 @@ class BoundExecution:
         self._lookup = lookup
 
     @property
-    def root(self) -> str:
-        return self._lookup().root
-
-    @property
     def skipped(self) -> tuple[tuple[str, str], ...]:
         return self._lookup().skipped
 
@@ -67,7 +62,7 @@ class BoundExecution:
         return self._lookup().describe_environment()
 
     def run(
-        self, argv: Sequence[str], *, cwd: str | None = None, timeout: int | None = None
+        self, argv: Sequence[str], *, cwd: str, timeout: int | None = None
     ) -> RunResult:
         return self._lookup().run(argv, cwd=cwd, timeout=timeout)
 
@@ -80,13 +75,11 @@ class BoundExecution:
 class ExecutionManager:
     def __init__(
         self,
-        root: Path,
         *,
         settings: dict[str, object] | None = None,
         enforce: bool = True,
         tolerant: bool = False,
     ) -> None:
-        self._root = root
         self._enforce = enforce
         self._lock = threading.RLock()
         self._closed = False
@@ -120,13 +113,13 @@ class ExecutionManager:
     ) -> LocalExecution | WslConnection:
         if target["kind"] == "native":
             instance: LocalExecution | WslConnection = LocalExecution(
-                self._root, directories, enforce=self._enforce, tolerant=tolerant
+                directories, enforce=self._enforce, tolerant=tolerant
             )
         else:
             if os.name != "nt":
                 raise DomainError("wsl_unavailable", "WSL execution requires Windows")
             connection = WslConnection(
-                target["distribution"], self._root, directories, tolerant=tolerant
+                target["distribution"], directories, tolerant=tolerant
             )
             try:
                 connection.inspect()
@@ -173,7 +166,6 @@ class ExecutionManager:
                 "directories": {
                     name: list(items) for name, items in self._directories.items()
                 },
-                "working_directory": selected.root if selected else None,
                 "unusable_write_directories": [
                     {"path": path, "reason": reason}
                     for path, reason in selected.skipped

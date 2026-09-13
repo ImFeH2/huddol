@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 
 import pytest
@@ -9,6 +10,7 @@ from huddol.adapters.files.tree import MarkdownTree
 from huddol.adapters.sqlite.agent import SqliteAgentStore
 from huddol.adapters.sqlite.store import SqliteStore
 from huddol.core.errors import DomainError
+from huddol.ports.execution import EditResult, RunResult
 from huddol.tools import AgentTools, Dependencies, TurnBinding
 from huddol.tools.authorize import Actor, Authorizer
 
@@ -24,22 +26,26 @@ def world(tmp_path: Path):
     store.create_member("human", "You")
     store.create_member("agent", "Main")
     store.create_member("agent", "Other")
+
+    def agent_directory_for(member_id: int) -> Path:
+        path = tmp_path / "agents" / str(member_id)
+        path.mkdir(parents=True, exist_ok=True)
+        return path
+
     deps = Dependencies(
         store=store,
         todos=agent_store,
         history=agent_store,
         settings=agent_store,
-        execution=ExecutionManager(
-            tmp_path,
-            settings={"directories": {"native": [str(tmp_path)]}},
-            enforce=False,
-        ),
+        execution=ExecutionManager(enforce=False),
+        agent_directory_for=agent_directory_for,
         library_tree=MarkdownTree(tmp_path / "library"),
         memory_tree_for=lambda member_id: MarkdownTree(
             tmp_path / "agents" / str(member_id) / "memory"
         ),
     )
     yield deps
+    deps.execution.close()
     store.close()
 
 
@@ -47,6 +53,101 @@ def tools_for(deps: Dependencies, member_id: int, **kwargs) -> AgentTools:
     member = deps.store.get_member(member_id)
     assert member is not None
     return AgentTools(deps, Actor(member_id, member.is_agent), **kwargs)
+
+
+@pytest.mark.parametrize("member_id", [MAIN, OTHER])
+def test_run_defaults_to_the_agents_directory_on_first_use(
+    world, tmp_path: Path, member_id: int
+) -> None:
+    directory = tmp_path / "agents" / str(member_id)
+    assert not directory.exists()
+    tools = tools_for(world, member_id)
+    for _ in range(2):
+        result = tools.run([sys.executable, "-c", "import os; print(os.getcwd())"])
+        assert result["exit_code"] == 0
+        assert result["stdout"].strip() == str(directory)
+    assert directory.is_dir()
+
+
+def test_run_resolves_relative_cwd_under_the_agents_directory(world) -> None:
+    directory = world.agent_directory_for(MAIN) / "nested"
+    directory.mkdir()
+    result = tools_for(world, MAIN).run(
+        [sys.executable, "-c", "import os; print(os.getcwd())"], cwd="nested"
+    )
+    assert result["exit_code"] == 0
+    assert result["stdout"].strip() == str(directory)
+
+
+def test_run_keeps_absolute_cwd_without_creating_an_agent_directory(
+    world, tmp_path: Path
+) -> None:
+    result = tools_for(world, MAIN).run(
+        [sys.executable, "-c", "import os; print(os.getcwd())"], cwd=str(tmp_path)
+    )
+    assert result["exit_code"] == 0
+    assert result["stdout"].strip() == str(tmp_path)
+    assert not (tmp_path / "agents" / str(MAIN)).exists()
+
+
+@pytest.mark.parametrize(
+    "path", ["/home/agent/project", r"C:\project", r"\\server\share\project"]
+)
+def test_tools_forward_absolute_paths_in_both_platform_formats(
+    world, tmp_path: Path, monkeypatch, path: str
+) -> None:
+    tools = tools_for(world, MAIN)
+    calls = []
+
+    def run(argv, *, cwd, timeout):
+        calls.append((argv, cwd, timeout))
+        return RunResult(0, "", "", False)
+
+    def edit(path, old_text, new_text, *, replace_all):
+        calls.append((path, old_text, new_text, replace_all))
+        return EditResult(path, "", 1)
+
+    monkeypatch.setattr(tools._environment, "run", run)
+    monkeypatch.setattr(tools._environment, "edit", edit)
+    tools.run(["pwd"], cwd=path, timeout=7)
+    tools.edit(path, "before", "after", replace_all=True)
+    assert calls == [(["pwd"], path, 7), (path, "before", "after", True)]
+    assert not (tmp_path / "agents" / str(MAIN)).exists()
+
+
+def test_relative_edit_resolves_under_the_agents_directory_and_is_not_writable(
+    world, tmp_path: Path, monkeypatch
+) -> None:
+    directory = tmp_path / "agents" / str(MAIN)
+    tools = tools_for(world, MAIN)
+    paths = []
+    original = tools._environment.edit
+
+    def edit(path, *args, **kwargs):
+        paths.append(path)
+        return original(path, *args, **kwargs)
+
+    monkeypatch.setattr(tools._environment, "edit", edit)
+    assert not directory.exists()
+    with pytest.raises(DomainError) as error:
+        tools.edit("file.txt", "before", "after")
+    assert paths == [str(directory / "file.txt")]
+    assert error.value.code == "not_writable"
+    assert directory.is_dir()
+
+
+def test_edit_keeps_absolute_paths(world, tmp_path: Path) -> None:
+    directory = tmp_path / "writable"
+    directory.mkdir()
+    target = directory / "file.txt"
+    target.write_text("before", encoding="utf-8")
+    world.execution.configure(
+        {"write_directories": [str(directory)]}, lambda values: None
+    )
+    result = tools_for(world, MAIN).edit(str(target), "before", "after")
+    assert result["path"] == str(target)
+    assert target.read_text(encoding="utf-8") == "after"
+    assert not (tmp_path / "agents" / str(MAIN)).exists()
 
 
 @pytest.mark.parametrize("actor_id", [HUMAN, MAIN])

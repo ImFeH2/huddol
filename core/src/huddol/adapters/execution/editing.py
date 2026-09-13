@@ -15,7 +15,6 @@ def edit_file(
     old_text: str,
     new_text: str,
     *,
-    root: str,
     directories: list[str],
     replace_all: bool = False,
 ) -> EditResult:
@@ -24,9 +23,9 @@ def edit_file(
     if not isinstance(new_text, str):
         raise DomainError("invalid_edit", "new_text must be a string")
     candidate = Path(path)
-    target = (
-        candidate if candidate.is_absolute() else Path(root) / candidate
-    ).resolve()
+    if not candidate.is_absolute():
+        raise DomainError("invalid_path", "path must be an absolute path")
+    target = candidate.resolve()
     if not is_within(target, [Path(item).resolve() for item in directories]):
         raise DomainError(
             "not_writable", "Path is outside the configured writable directories"
