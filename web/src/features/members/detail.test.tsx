@@ -1,13 +1,27 @@
 import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { OrganizationProvider } from "@/app/organization";
+import { RouterProvider } from "@/app/router";
+import { ConfirmDialog } from "@/components/ui/dialog";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { TreeView } from "@/features/library/tree-view";
 import {
   AgentDetailStatus,
+  MemberPage,
   MemoryContent,
   MemorySection,
 } from "@/features/members/detail";
-import type { AgentDetail, LibraryEntry } from "@/lib/backend";
+import { type AgentDetail, backend, type LibraryEntry } from "@/lib/backend";
+
+vi.mock("@/components/ui/dialog", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/components/ui/dialog")>()),
+  ConfirmDialog: vi.fn(() => null),
+}));
+
+afterEach(() => {
+  vi.clearAllMocks();
+  vi.restoreAllMocks();
+});
 
 const detail: AgentDetail = {
   id: 2,
@@ -51,6 +65,42 @@ function status(value: AgentDetail) {
     </TooltipProvider>,
   );
 }
+
+describe("Agent deletion", () => {
+  it("describes leaving Discussions and keeps the delete action", async () => {
+    const refresh = vi.fn(async () => {});
+    const remove = vi
+      .spyOn(backend, "deleteAgent")
+      .mockResolvedValue({ id: 2 });
+    renderToStaticMarkup(
+      <TooltipProvider>
+        <RouterProvider>
+          <OrganizationProvider
+            value={{
+              members: [
+                { id: 2, name: "Helper", type: "agent", state: "idle" },
+              ],
+              humanId: 1,
+              discussions: [],
+              refresh,
+            }}
+          >
+            <MemberPage id={2} />
+          </OrganizationProvider>
+        </RouterProvider>
+      </TooltipProvider>,
+    );
+    const confirmation = vi.mocked(ConfirmDialog).mock.calls[0][0];
+    expect(confirmation.title).toBe("Delete Helper?");
+    expect(confirmation.description).toBe(
+      "It leaves every Discussion and stops running.",
+    );
+    expect(confirmation.confirmLabel).toBe("Delete Agent");
+    await confirmation.onConfirm();
+    expect(remove).toHaveBeenCalledExactlyOnceWith(2);
+    expect(refresh).toHaveBeenCalledOnce();
+  });
+});
 
 describe("Agent detail status", () => {
   it("uses the kernel idle flag even below the previous threshold", () => {

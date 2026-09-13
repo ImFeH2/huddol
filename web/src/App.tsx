@@ -252,8 +252,7 @@ export default function App() {
         event.type === "mention.acked" ||
         event.type === "mention.revoked" ||
         event.type === "discussion.created" ||
-        event.type === "discussion.updated" ||
-        event.type === "discussion.deleted"
+        event.type === "discussion.updated"
       ) {
         void refresh().catch(backend.reportFailure);
       }

@@ -1,13 +1,13 @@
-import { isValidElement, type ReactElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import {
   candidatesFor,
   completeMention,
-  highlightMentions,
   matchMembers,
   mentionQuery,
+  renderMentions,
 } from "@/features/mentions";
-import type { Member } from "@/lib/backend";
+import type { Member, MessageMention } from "@/lib/backend";
 
 const members: Member[] = [
   { id: 1, type: "human", name: "You", state: "idle" },
@@ -123,34 +123,104 @@ describe("candidatesFor", () => {
   });
 });
 
-describe("highlightMentions", () => {
-  function kinds(body: string, notifiable?: Set<number>) {
-    return highlightMentions(body, members, notifiable)
-      .filter((node) => isValidElement(node))
-      .map((node) => {
-        const element = node as ReactElement<{ label?: string }>;
-        return element.type === "mark" ? "mark" : element.props.label;
-      });
+describe("renderMentions", () => {
+  function render(body: string, mentions: MessageMention[], people = members) {
+    return renderToStaticMarkup(renderMentions(body, mentions, people));
   }
 
-  it("marks a mention that reaches someone in the discussion", () => {
-    expect(kinds("hi @Main", new Set([2]))).toEqual(["mark"]);
+  it.each([
+    ["@Main hello", 0, "<mark>@Main</mark> hello"],
+    ["hi @Main there", 3, "hi <mark>@Main</mark> there"],
+    ["hi @Main", 3, "hi <mark>@Main</mark>"],
+  ])("marks the recorded span in %s", (body, position, expected) => {
+    expect(render(body, [{ member_id: 2, position, length: 5 }])).toBe(
+      expected,
+    );
   });
 
-  it("explains a mention of someone outside the discussion in a tooltip", () => {
-    expect(kinds("about @Mainframe", new Set([2]))).toEqual([
-      "Not in this Discussion",
+  it("marks adjacent spans without dropping text", () => {
+    expect(
+      render("@Main@You", [
+        { member_id: 2, position: 0, length: 5 },
+        { member_id: 1, position: 5, length: 4 },
+      ]),
+    ).toBe("<mark>@Main</mark><mark>@You</mark>");
+  });
+
+  it("leaves unrecorded mentions and surrounding text intact", () => {
+    expect(
+      render("mail@Main @Nobody @You @Main", [
+        { member_id: 1, position: 18, length: 4 },
+      ]),
+    ).toBe("mail@Main @Nobody <mark>@You</mark> @Main");
+  });
+
+  it("renders an empty mention list as plain text", () => {
+    expect(renderMentions("@Main and @You", [], members)).toEqual([
+      "@Main and @You",
     ]);
+    expect(renderMentions("", [], members)).toEqual([""]);
   });
 
-  it("distinguishes the two inside one message", () => {
-    expect(kinds("@Main please review @Mainframe work", new Set([2]))).toEqual([
-      "mark",
-      "Not in this Discussion",
-    ]);
+  it.each([
+    [-1, 5],
+    [20, 5],
+    [3, 6],
+    [3, 0],
+    [3, -1],
+    [3.5, 4],
+    [3, 4.5],
+    [Number.NaN, 5],
+    [3, Number.POSITIVE_INFINITY],
+  ])("ignores malformed position %s and length %s", (position, length) => {
+    expect(render("hi @Main", [{ member_id: 2, position, length }])).toBe(
+      "hi @Main",
+    );
   });
 
-  it("treats every match as reaching when no membership is given", () => {
-    expect(kinds("@Main and @Mainframe")).toEqual(["mark", "mark"]);
+  it("does not let an invalid span hide a valid one", () => {
+    expect(
+      render("hi @Main", [
+        { member_id: 1, position: 0, length: 100 },
+        { member_id: 2, position: 3, length: 5 },
+      ]),
+    ).toBe("hi <mark>@Main</mark>");
+  });
+
+  it("sorts spans without changing the records and ignores overlaps", () => {
+    const mentions = [
+      { member_id: 1, position: 6, length: 4 },
+      { member_id: 2, position: 0, length: 5 },
+      { member_id: 2, position: 0, length: 5 },
+      { member_id: 3, position: 3, length: 5 },
+    ];
+    const original = mentions.map((mention) => ({ ...mention }));
+    expect(render("@Main @You", mentions)).toBe(
+      "<mark>@Main</mark> <mark>@You</mark>",
+    );
+    expect(mentions).toEqual(original);
+  });
+
+  it("keeps the recorded text when a member is renamed or removed", () => {
+    const mentions = [{ member_id: 2, position: 0, length: 5 }];
+    expect(
+      render("@Main", mentions, [{ ...members[1], name: "Renamed" }]),
+    ).toBe("<mark>@Main</mark>");
+    expect(render("@Main", mentions, [])).toBe("<mark>@Main</mark>");
+  });
+
+  it("uses kernel code-point offsets before and inside spans", () => {
+    expect(
+      render("😀 hi @A😀 and @You!", [
+        { member_id: 2, position: 5, length: 3 },
+        { member_id: 1, position: 13, length: 4 },
+      ]),
+    ).toBe("😀 hi <mark>@A😀</mark> and <mark>@You</mark>!");
+  });
+
+  it("escapes text inside and outside recorded spans", () => {
+    expect(
+      render("<b>@Main</b>", [{ member_id: 2, position: 3, length: 5 }]),
+    ).toBe("&lt;b&gt;<mark>@Main</mark>&lt;/b&gt;");
   });
 });

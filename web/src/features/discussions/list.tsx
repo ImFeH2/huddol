@@ -4,7 +4,6 @@ import {
   MessageSquare,
   Plus,
   Search,
-  Trash2,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useOrganization } from "@/app/organization";
@@ -18,7 +17,6 @@ import {
   Table,
   Toolbar,
 } from "@/components/layout/shell";
-import { ConfirmDialog } from "@/components/ui/dialog";
 import {
   Badge,
   Button,
@@ -93,7 +91,6 @@ export function DiscussionsPage() {
   const [results, setResults] = useState<FoundMessage[] | null>(null);
   const [archived, setArchived] = useState(false);
   const [creating, setCreating] = useState(false);
-  const [doomed, setDoomed] = useState<DiscussionSummary | null>(null);
 
   const load = useCallback(async () => {
     try {
@@ -114,8 +111,7 @@ export function DiscussionsPage() {
         event.type === "mention.acked" ||
         event.type === "mention.revoked" ||
         event.type === "discussion.created" ||
-        event.type === "discussion.updated" ||
-        event.type === "discussion.deleted"
+        event.type === "discussion.updated"
       ) {
         void load();
       }
@@ -252,7 +248,6 @@ export function DiscussionsPage() {
                   await backend.archiveDiscussion(item.id, !item.archived);
                   await load();
                 }}
-                onDelete={() => setDoomed(item)}
               />
             ))}
           </Table>
@@ -264,34 +259,20 @@ export function DiscussionsPage() {
         onOpenChange={setCreating}
         onCreated={(id) => navigate({ name: "discussion", id })}
       />
-      <ConfirmDialog
-        open={doomed !== null}
-        onOpenChange={(next) => !next && setDoomed(null)}
-        title={`Delete “${doomed?.topic ?? ""}”?`}
-        description="Every message in it is removed."
-        confirmLabel="Delete Discussion"
-        onConfirm={async () => {
-          if (doomed) await backend.deleteDiscussion(doomed.id);
-          setDoomed(null);
-          await load();
-        }}
-      />
     </Page>
   );
 }
 
-function DiscussionRow({
+export function DiscussionRow({
   item,
   byId,
   onOpen,
   onArchive,
-  onDelete,
 }: {
   item: DiscussionSummary;
   byId: Map<number, Member>;
   onOpen: () => void;
   onArchive: () => void;
-  onDelete: () => void;
 }) {
   const people = item.member_ids
     .map((id) => byId.get(id))
@@ -357,13 +338,6 @@ function DiscussionRow({
                 <Archive size={15} />
               ),
               onSelect: onArchive,
-            },
-            {
-              id: "delete",
-              label: "Delete",
-              icon: <Trash2 size={15} />,
-              tone: "danger",
-              onSelect: onDelete,
             },
           ]}
         />

@@ -258,7 +258,7 @@ function AgentPage({
         open={doomed}
         onOpenChange={setDoomed}
         title={`Delete ${member.name}?`}
-        description="Its Memory, Todos and history are removed."
+        description="It leaves every Discussion and stops running."
         confirmLabel="Delete Agent"
         onConfirm={async () => {
           await backend.deleteAgent(member.id);

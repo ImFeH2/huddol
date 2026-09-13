@@ -155,13 +155,6 @@
   font-weight: var(--weight-medium);
 }
 
-.message-text .mention-reference {
-  color: rgb(var(--text-muted));
-  font-weight: var(--weight-medium);
-  border-bottom: 1px dashed rgb(var(--border-interactive-hover));
-  cursor: help;
-}
-
 .message-actions {
   display: flex;
   align-items: center;

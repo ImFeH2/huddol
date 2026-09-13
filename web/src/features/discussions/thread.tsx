@@ -1,4 +1,4 @@
-import { Archive, ArchiveRestore, Check, Trash2, Users } from "lucide-react";
+import { Archive, ArchiveRestore, Check, Users } from "lucide-react";
 import {
   Fragment,
   useCallback,
@@ -10,7 +10,6 @@ import {
 import { useOrganization } from "@/app/organization";
 import { useNavigate } from "@/app/router";
 import { Page, PageBody, PageHeader } from "@/components/layout/shell";
-import { ConfirmDialog } from "@/components/ui/dialog";
 import {
   Avatar,
   AvatarStack,
@@ -23,7 +22,7 @@ import { OverflowMenu } from "@/components/ui/menu";
 import { Tooltip } from "@/components/ui/tooltip";
 import { Composer } from "@/features/discussions/composer";
 import { DiscussionMembersDialog } from "@/features/discussions/members";
-import { highlightMentions } from "@/features/mentions";
+import { renderMentions } from "@/features/mentions";
 import {
   BackendError,
   backend,
@@ -41,7 +40,6 @@ export function ThreadPage({ id }: { id: number }) {
   const [loadFailed, setLoadFailed] = useState(false);
   const [busy, setBusy] = useState(false);
   const [ackBusy, setAckBusy] = useState(false);
-  const [doomed, setDoomed] = useState(false);
   const [editingMembers, setEditingMembers] = useState(false);
   const [fresh, setFresh] = useState<ReadonlySet<number>>(new Set());
   const bottom = useRef<HTMLDivElement>(null);
@@ -80,8 +78,7 @@ export function ThreadPage({ id }: { id: number }) {
         event.type === "message.created" ||
         event.type === "mention.acked" ||
         event.type === "mention.revoked" ||
-        event.type === "discussion.updated" ||
-        event.type === "discussion.deleted"
+        event.type === "discussion.updated"
       ) {
         void load();
       }
@@ -240,13 +237,6 @@ export function ThreadPage({ id }: { id: number }) {
                         icon: <Archive size={15} />,
                         onSelect: () => void archive(true),
                       },
-                  {
-                    id: "delete",
-                    label: "Delete",
-                    icon: <Trash2 size={15} />,
-                    tone: "danger",
-                    onSelect: () => setDoomed(true),
-                  },
                 ]}
               />
             </>
@@ -286,7 +276,6 @@ export function ThreadPage({ id }: { id: number }) {
                     pending={awaiting.has(message.id)}
                     acknowledged={acknowledged.has(message.id)}
                     busy={ackBusy}
-                    memberIds={memberIds}
                     onAck={() => void ack([message.id])}
                     onRevoke={() => void ack([message.id], true)}
                   />
@@ -318,18 +307,6 @@ export function ThreadPage({ id }: { id: number }) {
           }}
         />
       ) : null}
-
-      <ConfirmDialog
-        open={doomed}
-        onOpenChange={setDoomed}
-        title={`Delete “${detail?.topic ?? ""}”?`}
-        description="Every message in it is removed."
-        confirmLabel="Delete Discussion"
-        onConfirm={async () => {
-          await backend.deleteDiscussion(id);
-          navigate({ name: "discussions" });
-        }}
-      />
     </Page>
   );
 }
@@ -341,7 +318,6 @@ export function MessageRow({
   pending,
   acknowledged,
   busy,
-  memberIds,
   onAck,
   onRevoke,
 }: {
@@ -351,7 +327,6 @@ export function MessageRow({
   pending: boolean;
   acknowledged: boolean;
   busy: boolean;
-  memberIds: ReadonlySet<number>;
   onAck: () => void;
   onRevoke: () => void;
 }) {
@@ -378,7 +353,7 @@ export function MessageRow({
           </div>
         )}
         <div className="message-text">
-          {highlightMentions(message.body, members, memberIds)}
+          {renderMentions(message.body, message.mentions, members)}
         </div>
         {pending ? (
           <div className="message-actions">

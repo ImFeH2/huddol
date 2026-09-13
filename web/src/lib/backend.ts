@@ -14,11 +14,18 @@ export type DiscussionSummary = {
   unread: number;
 };
 
+export type MessageMention = {
+  member_id: number;
+  position: number;
+  length: number;
+};
+
 export type Message = {
   id: number;
   sender_id: number;
   sender_name: string;
   body: string;
+  mentions: MessageMention[];
   created_at: string;
 };
 
@@ -84,6 +91,7 @@ export type FoundMessage = {
   id: number;
   sender_name: string;
   body: string;
+  mentions: MessageMention[];
 };
 
 export type LibraryEntry = {
@@ -524,10 +532,6 @@ export class Backend {
       discussion_id,
       archived,
     });
-  }
-
-  deleteDiscussion(discussion_id: number) {
-    return this.call<{ id: number }>("discussion.delete", { discussion_id });
   }
 
   searchMessages(query: string) {

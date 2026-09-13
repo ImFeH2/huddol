@@ -1,64 +1,38 @@
 import type { ReactNode } from "react";
-import { Tooltip } from "@/components/ui/tooltip";
-import type { Member } from "@/lib/backend";
+import type { Member, MessageMention } from "@/lib/backend";
 
-export function highlightMentions(
+export function renderMentions(
   body: string,
-  members: Member[],
-  notifiable?: ReadonlySet<number>,
+  mentions: MessageMention[],
+  _members: Member[],
 ): ReactNode[] {
-  const byName = new Map(
-    members.map((member) => [member.name.toLowerCase(), member] as const),
-  );
-  const names = members
-    .map((member) => member.name)
-    .sort((a, b) => b.length - a.length);
+  if (mentions.length === 0) return [body];
+  const characters = Array.from(body);
   const nodes: ReactNode[] = [];
   let index = 0;
-  let key = 0;
 
-  while (index < body.length) {
-    const at = body.indexOf("@", index);
-    if (at < 0) break;
-
-    const before = at > 0 ? body[at - 1] : "";
-    if (before && /[\p{L}\p{N}]/u.test(before)) {
-      index = at + 1;
+  for (const { position, length } of [...mentions].sort(
+    (a, b) => a.position - b.position,
+  )) {
+    const end = position + length;
+    if (
+      !Number.isInteger(position) ||
+      !Number.isInteger(length) ||
+      position < index ||
+      length <= 0 ||
+      end > characters.length
+    )
       continue;
-    }
 
-    const matched = names.find((name) => {
-      const end = at + 1 + name.length;
-      if (body.slice(at + 1, end).toLowerCase() !== name.toLowerCase())
-        return false;
-      const after = body[end];
-      return !after || !/[\p{L}\p{N}]/u.test(after);
-    });
-
-    if (!matched) {
-      index = at + 1;
-      continue;
-    }
-
-    if (at > index) nodes.push(body.slice(index, at));
-    const text = body.slice(at, at + 1 + matched.length);
-    const member = byName.get(matched.toLowerCase());
-    const reaches =
-      notifiable === undefined ||
-      (member !== undefined && notifiable.has(member.id));
+    if (position > index)
+      nodes.push(characters.slice(index, position).join(""));
     nodes.push(
-      reaches ? (
-        <mark key={`m${key++}`}>{text}</mark>
-      ) : (
-        <Tooltip key={`m${key++}`} label="Not in this Discussion">
-          <span className="mention-reference">{text}</span>
-        </Tooltip>
-      ),
+      <mark key={position}>{characters.slice(position, end).join("")}</mark>,
     );
-    index = at + 1 + matched.length;
+    index = end;
   }
 
-  if (index < body.length) nodes.push(body.slice(index));
+  if (index < characters.length) nodes.push(characters.slice(index).join(""));
   return nodes.length > 0 ? nodes : [body];
 }
 

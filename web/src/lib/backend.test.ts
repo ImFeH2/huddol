@@ -4,6 +4,8 @@ import {
   BackendError,
   type Connection,
   connectionFrom,
+  type DiscussionDetail,
+  type FoundMessage,
   type Frame,
   resolveConnection,
   type Socket,
@@ -392,7 +394,68 @@ describe("Backend", () => {
     ).not.toThrow();
   });
 
-  it("sends the search query under the method the core exposes", async () => {
+  it("preserves recorded mentions in Discussion reads", async () => {
+    const { backend, connected } = harness();
+    const socket = await connected();
+    const promise = backend.readDiscussion(1);
+    await vi.waitFor(() => expect(socket.sent).toHaveLength(1));
+    expect(socket.sent[0]).toMatchObject({
+      method: "discussion.read",
+      params: { discussion_id: 1 },
+    });
+    const result: DiscussionDetail = {
+      id: 1,
+      topic: "Release",
+      members: [],
+      total_messages: 1,
+      archived: false,
+      read_through: 0,
+      awaiting_ack: [],
+      acknowledged: [],
+      messages: [
+        {
+          id: 4,
+          sender_id: 1,
+          sender_name: "You",
+          body: "hi @Main",
+          created_at: "2026-01-01T00:00:00Z",
+          mentions: [{ member_id: 2, position: 3, length: 5 }],
+        },
+      ],
+    };
+    socket.reply({ type: "response", id: socket.sent[0].id, result });
+    await expect(promise).resolves.toEqual(result);
+  });
+
+  it("keeps archiving and Agent deletion but exposes no Discussion deletion", async () => {
+    const { backend, connected } = harness();
+    const socket = await connected();
+    expect(backend).not.toHaveProperty("deleteDiscussion");
+    const pending = [
+      backend.archiveDiscussion(1, true),
+      backend.archiveDiscussion(1, false),
+      backend.deleteAgent(2),
+    ];
+    await vi.waitFor(() => expect(socket.sent).toHaveLength(3));
+    expect(
+      socket.sent.map(({ method, params }) => ({ method, params })),
+    ).toEqual([
+      {
+        method: "discussion.archive",
+        params: { discussion_id: 1, archived: true },
+      },
+      {
+        method: "discussion.archive",
+        params: { discussion_id: 1, archived: false },
+      },
+      { method: "organization.delete_agent", params: { agent_id: 2 } },
+    ]);
+    for (const request of socket.sent)
+      socket.reply({ type: "response", id: request.id, result: { id: 1 } });
+    await Promise.all(pending);
+  });
+
+  it("sends the search query and preserves recorded mentions in results", async () => {
     const { backend, connected } = harness();
     const socket = await connected();
     const promise = backend.searchMessages("deadline");
@@ -401,8 +464,24 @@ describe("Backend", () => {
       method: "discussion.search",
       params: { query: "deadline" },
     });
-    socket.reply({ type: "response", id: socket.sent[0].id, result: [] });
-    await expect(promise).resolves.toEqual([]);
+    const result: FoundMessage[] = [
+      {
+        discussion_id: 1,
+        id: 4,
+        sender_name: "You",
+        body: "@Main deadline",
+        mentions: [{ member_id: 2, position: 0, length: 5 }],
+      },
+      {
+        discussion_id: 1,
+        id: 5,
+        sender_name: "You",
+        body: "@Main deadline",
+        mentions: [],
+      },
+    ];
+    socket.reply({ type: "response", id: socket.sent[0].id, result });
+    await expect(promise).resolves.toEqual(result);
   });
 
   it("sends Library and Memory tree requests with their kernel parameters", async () => {
