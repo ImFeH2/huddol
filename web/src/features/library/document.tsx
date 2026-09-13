@@ -1,3 +1,4 @@
+import { clsx } from "clsx";
 import { Check, Save, SquarePen, Trash2 } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import { type Route, useNavigate } from "@/app/router";
@@ -21,7 +22,6 @@ import { OverflowMenu } from "@/components/ui/menu";
 import { reportLoadFailure } from "@/features/settings/saver";
 import { BackendError, backend } from "@/lib/backend";
 import { formatBytes } from "@/lib/format";
-import "@/features/library/library.css";
 
 type Loaded = { content: string; hash: string };
 
@@ -194,8 +194,10 @@ export function DocumentPage({ path }: { path: string }) {
         {dirty ? <Chip tone="blue">Unsaved changes</Chip> : null}
         {saved ? (
           <span
-            className="saved-chip"
-            data-fading={saved === "fading" ? "true" : undefined}
+            className={clsx(
+              "inline-flex animate-pop-in transition-opacity duration-(--duration-slow) ease-standard",
+              saved === "fading" && "opacity-0",
+            )}
             onTransitionEnd={() =>
               setSaved((current) => (current === "fading" ? null : current))
             }
@@ -208,8 +210,8 @@ export function DocumentPage({ path }: { path: string }) {
         ) : null}
       </Toolbar>
       <PageBody variant="flush">
-        <div className="editor-shell">
-          <div className="editor">
+        <div className="flex flex-1 min-h-0 flex-col gap-4 px-8 pb-6">
+          <div className="grid flex-1 min-h-0 grid-rows-[minmax(0,1fr)] items-stretch font-mono tracking-[0]">
             <Textarea
               aria-label="Document"
               disabled={loaded === null || failed}

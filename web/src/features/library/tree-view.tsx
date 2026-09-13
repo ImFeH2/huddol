@@ -1,5 +1,5 @@
 import { ChevronDown, ChevronRight, FileText, Folder } from "lucide-react";
-import { type CSSProperties, useEffect, useMemo, useRef } from "react";
+import { useEffect, useMemo, useRef } from "react";
 import { type Column, RowLink, Table } from "@/components/layout/shell";
 import { Chip, CountPill } from "@/components/ui/index";
 import { type MenuAction, OverflowMenu } from "@/components/ui/menu";
@@ -13,7 +13,6 @@ import {
   formatTime,
   relativeTime,
 } from "@/lib/format";
-import "@/features/library/library.css";
 
 export type TreeViewProps = {
   entries: LibraryEntry[];
@@ -78,7 +77,7 @@ export function TreeView({
   }, [revealPath, needle, entries, expanded]);
 
   return (
-    <div ref={container} className="file-tree">
+    <div ref={container} className="min-w-0">
       <Table
         columns={columns}
         label={readOnly ? "Memory files" : "Library documents"}
@@ -87,13 +86,16 @@ export function TreeView({
           const folder = node.kind === "directory";
           const open = expanded.has(node.path);
           return (
-            <tr className="table-row" key={node.path} data-path={node.path}>
+            <tr key={node.path} data-path={node.path}>
               <td>
                 <div
-                  className="tree-lead"
-                  style={{ "--tree-depth": depth } as CSSProperties}
+                  className="flex min-w-0 items-center gap-2"
+                  style={{ paddingLeft: depth * 16 }}
                 >
-                  <span className="tree-glyph" aria-hidden="true">
+                  <span
+                    className="flex w-8 flex-none items-center justify-end gap-1 text-fg-muted"
+                    aria-hidden="true"
+                  >
                     {folder ? (
                       <>
                         {open ? (
@@ -110,7 +112,7 @@ export function TreeView({
                   {folder || node.hash !== null ? (
                     <RowLink
                       primary={
-                        <span className="tree-name">
+                        <span className="min-w-0 whitespace-normal wrap-anywhere">
                           {documentName(node.path)}
                         </span>
                       }
@@ -120,7 +122,9 @@ export function TreeView({
                       }
                     />
                   ) : (
-                    <span className="tree-name">{documentName(node.path)}</span>
+                    <span className="min-w-0 whitespace-normal wrap-anywhere">
+                      {documentName(node.path)}
+                    </span>
                   )}
                   {folder ? (
                     <CountPill>
@@ -137,18 +141,24 @@ export function TreeView({
                   <Chip>{documentFolder(node.path) ?? "Root"}</Chip>
                 </td>
               ) : null}
-              <td data-align="end" className="numeric muted">
+              <td
+                data-align="end"
+                className="tabular-nums whitespace-nowrap text-fg-muted"
+              >
                 {folder ? null : formatBytes(node.size)}
               </td>
-              <td data-hide-below="sm" className="muted">
+              <td data-hide-below="sm" className="text-fg-muted">
                 <Tooltip label={formatTime(node.modified_at)} focusable>
-                  <time className="tree-time" dateTime={node.modified_at}>
+                  <time
+                    className="relative whitespace-nowrap"
+                    dateTime={node.modified_at}
+                  >
                     {relativeTime(node.modified_at)}
                   </time>
                 </Tooltip>
               </td>
               {actions ? (
-                <td className="cell-actions">
+                <td className="relative z-1 w-12 text-right">
                   <OverflowMenu
                     label={`Actions for ${node.path}`}
                     actions={actions(node)}

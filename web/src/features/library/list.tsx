@@ -17,7 +17,6 @@ import { TreeView, type TreeViewProps } from "@/features/library/tree-view";
 import { reportLoadFailure } from "@/features/settings/saver";
 import { backend, type LibraryEntry } from "@/lib/backend";
 import { plural } from "@/lib/format";
-import "@/features/library/library.css";
 
 type Creation = { kind: LibraryEntry["kind"]; initial: string };
 
@@ -126,7 +125,7 @@ export function LibraryContents({
           title={empty ? "The Library is empty" : "No documents match"}
           action={
             empty ? (
-              <div className="library-create">
+              <div className="flex items-center gap-2">
                 <CreateActions onCreate={onCreate} disabled={disabled} />
               </div>
             ) : undefined
