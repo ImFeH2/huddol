@@ -78,9 +78,7 @@ describe("Execution settings", () => {
     expect(html).toContain("Execution environment");
     expect(html).toContain("WSL · Debian");
     expect(html).toContain("Writable directories");
-    expect(html).toContain(
-      '<span class="chip" data-tone="neutral">Native</span>',
-    );
+    expect(html).toMatch(/Writable directories <span[^>]*>Native<\/span>/);
     expect(html).toMatch(/<textarea[^>]*>\/work<\/textarea>/);
     expect(html).not.toContain("Next start");
   });
@@ -94,8 +92,8 @@ describe("Execution settings", () => {
     const html = renderToStaticMarkup(
       <ExecutionForm initial={wsl} onSave={async () => wsl} />,
     );
-    expect(html).toContain(
-      '<span class="chip" data-tone="neutral">WSL · Debian</span>',
+    expect(html).toMatch(
+      /Writable directories <span[^>]*>WSL · Debian<\/span>/,
     );
     expect(html).toMatch(/<textarea[^>]*>\/home\/you\n\/srv<\/textarea>/);
     expect(html).not.toMatch(/<textarea[^>]*>\/work<\/textarea>/);
@@ -117,8 +115,8 @@ describe("Execution settings", () => {
       <ExecutionForm initial={failed} onSave={async () => failed} />,
     );
     expect(html).toContain("WSL · Missing");
-    expect(html).toContain(
-      '<span class="chip" data-tone="neutral">WSL · Missing</span>',
+    expect(html).toMatch(
+      /Writable directories <span[^>]*>WSL · Missing<\/span>/,
     );
     expect(html).toMatch(/<textarea[^>]*><\/textarea>/);
     expect(html).toContain("WSL is unavailable");
@@ -127,10 +125,9 @@ describe("Execution settings", () => {
     expect(html).toContain("invalid_directory");
     expect(html).not.toContain("banner");
     expect(html).not.toContain('role="status"');
-    expect(html).toContain('<span class="chip" data-tone="danger">');
-    expect(html.match(/<span class="chip" data-tone="warning">/g)).toHaveLength(
-      2,
-    );
+    expect(html).toContain(">Unavailable</span>");
+    expect(html).toContain(">Probe failed</span>");
+    expect(html).toContain(">invalid_directory</span>");
   });
 
   it("shows no fact list for a healthy environment", () => {

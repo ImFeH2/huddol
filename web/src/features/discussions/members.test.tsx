@@ -23,7 +23,6 @@ describe("discussion member picker", () => {
     expect(html).toContain("Helper");
     expect(html.match(/type="checkbox"/g)).toHaveLength(2);
     expect(html.match(/checked=""/g)).toHaveLength(1);
-    expect(html.match(/class="checkbox"/g)).toHaveLength(2);
   });
 
   it("links labels to unique controls across picker instances", () => {

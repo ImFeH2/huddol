@@ -124,7 +124,7 @@ describe("thread page", () => {
     expect(html).toContain("<h1>Release notes</h1>");
     expect(html).toContain('placeholder="Message Release notes"');
     expect(html).toContain('aria-label="Send · Enter"');
-    expect(html).toContain('data-auto-grow="true"');
+    expect(html).toMatch(/<textarea[^>]*rows="1"[^>]*aria-label="Message"/);
     expect(html).not.toContain("crumb");
     expect(html).not.toContain("thread-strip");
     expect(html).not.toContain("thread-banner");

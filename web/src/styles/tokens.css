@@ -1,4 +1,5 @@
 @theme static {
+  --spacing: 4px;
   --color-*: initial;
   --text-*: initial;
   --font-*: initial;

@@ -1,3 +1,4 @@
+import { clsx } from "clsx";
 import {
   type ButtonHTMLAttributes,
   type InputHTMLAttributes,
@@ -8,7 +9,6 @@ import {
   useRef,
 } from "react";
 import { Tooltip } from "@/components/ui/tooltip";
-import "@/components/ui/ui.css";
 
 export {
   dismissToast,
@@ -18,7 +18,79 @@ export {
   toast,
 } from "@/components/ui/toast";
 
-type ButtonProps = ButtonHTMLAttributes<HTMLButtonElement> & {
+const buttonVariants = {
+  default:
+    "border-line-interactive bg-transparent text-fg shadow-button hover:enabled:bg-surface-hover hover:enabled:border-line-hover active:enabled:bg-gray-600 disabled:text-fg-disabled",
+  primary:
+    "border-blue-500 bg-blue-500 text-gray-0 shadow-button hover:enabled:bg-blue-300 hover:enabled:border-blue-300 active:enabled:bg-blue-700 active:enabled:border-blue-700 disabled:bg-blue-700/45 disabled:border-transparent disabled:text-gray-0/55",
+  ghost:
+    "border-transparent bg-transparent text-fg-muted shadow-none hover:enabled:bg-surface-hover hover:enabled:text-fg active:enabled:bg-gray-600",
+  danger:
+    "border-line-interactive bg-transparent text-danger shadow-button hover:enabled:bg-red-500/18 hover:enabled:border-red-500 hover:enabled:text-red-100 active:enabled:not-hover:bg-gray-600",
+};
+
+const buttonSizes = {
+  md: "h-8 px-3 gap-2 text-sm",
+  sm: "h-[26px] px-2 gap-1 text-xs",
+};
+
+const iconButtonSizes = {
+  md: "size-8 border-line-interactive shadow-button aria-pressed:border-blue-500/50",
+  sm: "size-[26px] border-transparent shadow-none",
+};
+
+const inputClasses =
+  "w-full border border-line-interactive rounded-sm bg-app text-fg text-sm shadow-button transition-[border-color,box-shadow] duration-(--duration-fast) ease-linear hover:enabled:not-focus:border-line-hover placeholder:text-fg-muted focus:border-line-focus focus:outline-none focus:shadow-[0_0_0_3px_color-mix(in_srgb,var(--color-ring)_40%,transparent)] [&::-webkit-search-cancel-button]:appearance-none [&[type=number]]:[appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-inner-spin-button]:m-0 [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-outer-spin-button]:m-0";
+
+const badgeTones = {
+  default: "bg-surface-raised text-fg-muted",
+  unread:
+    "bg-blue-500 text-gray-0 animate-pop-in [animation-duration:var(--duration-base)]",
+  pending: "bg-yellow-300 text-gray-1100",
+};
+
+const chipTones = {
+  neutral: "border-line bg-gray-800 text-fg-muted",
+  blue: "border-blue-500/50 bg-blue-500/18 text-blue-100",
+  warning: "border-yellow-300/50 bg-yellow-300/16 text-yellow-200",
+  danger: "border-red-500/60 bg-red-500/18 text-red-100",
+  success: "border-green-500/70 bg-green-500/22 text-green-200",
+};
+
+const stateDotStates = {
+  idle: "bg-gray-500",
+  running: "bg-green-200 animate-breathe",
+  paused: "bg-yellow-300",
+};
+
+const dotTones = {
+  grey: "bg-gray-500",
+  blue: "bg-blue-300",
+  green: "bg-green-200",
+  yellow: "bg-yellow-300",
+  red: "bg-red-300",
+};
+
+const avatarClasses =
+  "inline-flex items-center justify-center flex-none font-semibold tracking-[0] select-none";
+
+const avatarSizes = {
+  xs: "size-[18px] rounded-xs text-[9px]",
+  sm: "size-[22px] rounded-sm text-[10px]",
+  md: "size-[26px] rounded-sm text-xs",
+  lg: "size-10 rounded-md text-sm",
+};
+
+const meterTones = {
+  normal: "bg-blue-300",
+  warning: "bg-yellow-200",
+  danger: "bg-red-300",
+};
+
+type ButtonProps = Omit<
+  ButtonHTMLAttributes<HTMLButtonElement>,
+  "className"
+> & {
   variant?: "default" | "primary" | "ghost" | "danger";
   size?: "md" | "sm";
   ref?: Ref<HTMLButtonElement>;
@@ -28,21 +100,25 @@ export function Button({
   variant = "default",
   size = "md",
   type = "button",
-  className,
   ...rest
 }: ButtonProps) {
   return (
     <button
-      type={type}
-      className={className ? `button ${className}` : "button"}
-      data-variant={variant}
-      data-size={size}
       {...rest}
+      type={type}
+      className={clsx(
+        "inline-flex items-center justify-center py-0 border rounded-sm font-medium leading-body whitespace-nowrap cursor-pointer transition-[background-color,border-color,color,box-shadow] duration-(--duration-fast) ease-linear disabled:cursor-not-allowed disabled:shadow-none [&_svg]:flex-none",
+        buttonVariants[variant],
+        buttonSizes[size],
+      )}
     />
   );
 }
 
-type IconButtonProps = ButtonHTMLAttributes<HTMLButtonElement> & {
+type IconButtonProps = Omit<
+  ButtonHTMLAttributes<HTMLButtonElement>,
+  "className"
+> & {
   label: string;
   size?: "md" | "sm";
   pressed?: boolean;
@@ -54,19 +130,20 @@ export function IconButton({
   size = "md",
   pressed,
   type = "button",
-  className,
   children,
   ...rest
 }: IconButtonProps) {
   return (
     <Tooltip label={label}>
       <button
+        {...rest}
         type={type}
-        className={className ? `icon-button ${className}` : "icon-button"}
-        data-size={size}
+        className={clsx(
+          "inline-flex items-center justify-center flex-none border rounded-sm bg-transparent text-fg-muted cursor-pointer transition-[background-color,border-color] duration-(--duration-fast) ease-linear hover:enabled:bg-surface-hover hover:enabled:border-line-hover disabled:not-aria-pressed:text-fg-disabled disabled:cursor-not-allowed aria-pressed:bg-blue-500/18 aria-pressed:text-blue-100",
+          iconButtonSizes[size],
+        )}
         aria-label={label}
         aria-pressed={pressed}
-        {...rest}
       >
         {children}
       </button>
@@ -75,16 +152,20 @@ export function IconButton({
 }
 
 export function Input({
-  className,
   type,
   ...rest
-}: InputHTMLAttributes<HTMLInputElement> & { ref?: Ref<HTMLInputElement> }) {
-  const base = type === "checkbox" ? "checkbox" : "field";
+}: Omit<InputHTMLAttributes<HTMLInputElement>, "className"> & {
+  ref?: Ref<HTMLInputElement>;
+}) {
   return (
     <input
-      type={type}
-      className={className ? `${base} ${className}` : base}
       {...rest}
+      type={type}
+      className={
+        type === "checkbox"
+          ? "appearance-none inline-grid place-content-center size-[14px] flex-none m-0 border border-line-interactive rounded-xs bg-app cursor-pointer checked:border-line-focus checked:bg-line-focus checked:after:content-[''] checked:after:w-1 checked:after:h-2 checked:after:border-fg checked:after:border-r-2 checked:after:border-b-2 checked:after:[transform:translateY(-1px)_rotate(45deg)] disabled:opacity-50 disabled:cursor-not-allowed"
+          : clsx(inputClasses, "h-8 px-3 py-0")
+      }
     />
   );
 }
@@ -107,12 +188,11 @@ function assignRef<T>(ref: Ref<T> | undefined, value: T | null) {
 }
 
 export function Textarea({
-  className,
   ref,
   autoGrow = false,
   maxRows,
   ...rest
-}: TextareaHTMLAttributes<HTMLTextAreaElement> & {
+}: Omit<TextareaHTMLAttributes<HTMLTextAreaElement>, "className"> & {
   ref?: Ref<HTMLTextAreaElement>;
   autoGrow?: boolean;
   maxRows?: number;
@@ -141,13 +221,16 @@ export function Textarea({
 
   return (
     <textarea
+      {...rest}
       ref={(element) => {
         inner.current = element;
         assignRef(ref, element);
       }}
-      className={className ? `field ${className}` : "field"}
-      data-auto-grow={autoGrow ? "true" : undefined}
-      {...rest}
+      className={clsx(
+        inputClasses,
+        "h-auto resize-none py-2 px-3 leading-body",
+        autoGrow ? "min-h-0 overflow-y-auto" : "min-h-18",
+      )}
     />
   );
 }
@@ -155,10 +238,15 @@ export function Textarea({
 export function SearchField({
   icon,
   ...rest
-}: InputHTMLAttributes<HTMLInputElement> & { icon: ReactNode }) {
+}: Omit<InputHTMLAttributes<HTMLInputElement>, "className"> & {
+  icon: ReactNode;
+}) {
   return (
-    <div className="search-field">
-      <span className="search-field-icon" aria-hidden="true">
+    <div className="relative flex flex-1 min-w-40 [&>input:not([type=checkbox])]:pl-[34px]">
+      <span
+        className="absolute left-3 top-1/2 -translate-y-1/2 flex text-fg-muted pointer-events-none"
+        aria-hidden="true"
+      >
         {icon}
       </span>
       <Input type="search" {...rest} />
@@ -173,17 +261,21 @@ export function Field({
   children,
 }: {
   label: ReactNode;
-  htmlFor: string;
+  htmlFor?: string;
   hint?: ReactNode;
   children: ReactNode;
 }) {
   return (
-    <div className="form-field">
-      <label className="form-label" htmlFor={htmlFor}>
-        {label}
-      </label>
+    <div className="flex flex-col gap-2">
+      {htmlFor === undefined ? (
+        <span className="text-xs font-medium text-fg-muted">{label}</span>
+      ) : (
+        <label className="text-xs font-medium text-fg-muted" htmlFor={htmlFor}>
+          {label}
+        </label>
+      )}
       {children}
-      {hint ? <p className="form-hint">{hint}</p> : null}
+      {hint ? <p className="text-xs text-fg-muted">{hint}</p> : null}
     </div>
   );
 }
@@ -196,7 +288,12 @@ export function Badge({
   children: ReactNode;
 }) {
   return (
-    <span className="badge" data-tone={tone}>
+    <span
+      className={clsx(
+        "inline-flex items-center justify-center gap-1 py-0 px-[6px] min-w-5 h-5 rounded-full text-xs font-medium tabular-nums tracking-[0] whitespace-nowrap",
+        badgeTones[tone],
+      )}
+    >
       {children}
     </span>
   );
@@ -210,14 +307,23 @@ export function Chip({
   children: ReactNode;
 }) {
   return (
-    <span className="chip" data-tone={tone}>
+    <span
+      className={clsx(
+        "inline-flex items-center gap-[5px] h-5 py-0 px-2 border rounded-xs text-xs font-medium leading-none whitespace-nowrap",
+        chipTones[tone],
+      )}
+    >
       {children}
     </span>
   );
 }
 
 export function CountPill({ children }: { children: ReactNode }) {
-  return <p className="count-pill">{children}</p>;
+  return (
+    <p className="self-start py-[3px] px-3 rounded-full bg-gray-800 text-fg-muted text-xs font-medium tabular-nums">
+      {children}
+    </p>
+  );
 }
 
 export function StateDot({
@@ -230,10 +336,18 @@ export function StateDot({
   const label =
     state === "running" ? "Running" : state === "paused" ? "Paused" : "Idle";
   return (
-    <span className="dot-wrap">
-      <span className="dot" data-state={state} role="img" aria-label={label} />
+    <span className="relative inline-flex flex-none items-center justify-center size-2">
+      <span
+        className={clsx("size-2 rounded-full", stateDotStates[state])}
+        data-state={state}
+        role="img"
+        aria-label={label}
+      />
       {ping && state === "running" ? (
-        <span className="dot-ping" aria-hidden="true" />
+        <span
+          className="absolute inset-0 rounded-full bg-green-200/55 animate-ping"
+          aria-hidden="true"
+        />
       ) : null}
     </span>
   );
@@ -244,7 +358,7 @@ export function Dot({
 }: {
   tone: "grey" | "blue" | "green" | "yellow" | "red";
 }) {
-  return <span className="dot" data-tone={tone} />;
+  return <span className={clsx("size-2 rounded-full", dotTones[tone])} />;
 }
 
 export function StatusText({
@@ -255,7 +369,7 @@ export function StatusText({
   children: ReactNode;
 }) {
   return (
-    <span className="status-text">
+    <span className="inline-flex items-center gap-2 whitespace-nowrap">
       {dot}
       {children}
     </span>
@@ -296,8 +410,7 @@ export function Avatar({
 }) {
   return (
     <span
-      className="avatar"
-      data-size={size}
+      className={clsx(avatarClasses, avatarSizes[size], "text-gray-1100")}
       style={{ background: hueFor(name) }}
       aria-hidden="true"
     >
@@ -318,14 +431,21 @@ export function AvatarStack({
   const shown = names.length > max ? names.slice(0, max) : names;
   const hidden = names.length - shown.length;
   return (
-    <span className="avatar-stack" role="img" aria-label={names.join(", ")}>
+    <span
+      className="inline-flex items-center [&>span]:shadow-[0_0_0_2px_var(--color-surface)] [&>span+span]:-ml-[6px]"
+      role="img"
+      aria-label={names.join(", ")}
+    >
       {shown.map((name) => (
         <Avatar key={name} name={name} size={size} />
       ))}
       {hidden > 0 ? (
         <span
-          className="avatar avatar-more"
-          data-size={size}
+          className={clsx(
+            avatarClasses,
+            avatarSizes[size],
+            "bg-gray-700 text-fg-muted",
+          )}
           aria-hidden="true"
         >
           +{hidden}
@@ -347,21 +467,33 @@ export function Meter({
   const ratio = max > 0 ? Math.min(1, value / max) : 0;
   const tone = ratio >= 1 ? "danger" : ratio >= 0.8 ? "warning" : "normal";
   return (
-    <div className="meter" data-tone={tone}>
+    <div className="w-full h-1 rounded-full bg-gray-700 overflow-hidden [.spend-cell_&]:w-24">
       <meter
-        className="meter-native"
+        className="absolute size-px opacity-0 pointer-events-none"
         aria-label={label}
         value={value}
         min={0}
         max={max}
       />
-      <span className="meter-fill" style={{ width: `${ratio * 100}%` }} />
+      <span
+        className={clsx(
+          "block h-full rounded-full transition-[width] duration-(--duration-slow) ease-standard",
+          meterTones[tone],
+        )}
+        style={{ width: `${ratio * 100}%` }}
+      />
     </div>
   );
 }
 
 export function Spinner({ label }: { label: string }) {
-  return <span className="spinner" role="status" aria-label={label} />;
+  return (
+    <span
+      className="inline-block size-4 flex-none border-2 border-gray-600 border-t-blue-300 rounded-full animate-spin"
+      role="status"
+      aria-label={label}
+    />
+  );
 }
 
 export function EmptyState({
@@ -372,7 +504,7 @@ export function EmptyState({
   action?: ReactNode;
 }) {
   return (
-    <div className="empty">
+    <div className="flex flex-col items-center justify-center gap-2 py-8 px-6 text-fg-muted text-center [&_h3]:text-fg">
       <h3>{title}</h3>
       {action}
     </div>

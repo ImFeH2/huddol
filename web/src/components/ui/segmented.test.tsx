@@ -18,10 +18,10 @@ describe("Segmented", () => {
         onChange={() => {}}
       />,
     );
-    expect(html).toContain(
-      '<fieldset class="segmented"><legend class="visually-hidden">Filter by kind</legend>',
+    expect(html).toMatch(
+      /<fieldset[^>]*><legend[^>]*>Filter by kind<\/legend>/,
     );
-    expect(html.match(/class="segment"/g)).toHaveLength(3);
+    expect(html.match(/<button[^>]*type="button"/g)).toHaveLength(3);
     expect(html.match(/aria-pressed="true"/g)).toHaveLength(1);
     expect(html).toContain('aria-pressed="true">Agents</button>');
     expect(html).toContain('aria-pressed="false">All</button>');

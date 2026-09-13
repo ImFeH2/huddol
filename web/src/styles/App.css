@@ -2,130 +2,132 @@
 @import "@fontsource-variable/inter";
 @import "@/styles/tokens.css";
 
-*,
-*::before,
-*::after {
-  box-sizing: border-box;
-}
+@layer base {
+  *,
+  *::before,
+  *::after {
+    box-sizing: border-box;
+  }
 
-html,
-body,
-#root {
-  height: 100%;
-  margin: 0;
-}
+  html,
+  body,
+  #root {
+    height: 100%;
+    margin: 0;
+  }
 
-body {
-  background: var(--color-surface);
-  color: var(--color-fg);
-  font-family: var(--font-sans);
-  font-size: var(--text-sm);
-  font-weight: var(--font-weight-normal);
-  line-height: var(--leading-body);
-  letter-spacing: var(--tracking-body);
-  -webkit-font-smoothing: antialiased;
-  overflow: hidden;
-}
+  body {
+    background: var(--color-surface);
+    color: var(--color-fg);
+    font-family: var(--font-sans);
+    font-size: var(--text-sm);
+    font-weight: var(--font-weight-normal);
+    line-height: var(--leading-body);
+    letter-spacing: var(--tracking-body);
+    -webkit-font-smoothing: antialiased;
+    overflow: hidden;
+  }
 
-h1,
-h2,
-h3,
-p,
-figure,
-ul,
-ol {
-  margin: 0;
-}
+  h1,
+  h2,
+  h3,
+  p,
+  figure,
+  ul,
+  ol {
+    margin: 0;
+  }
 
-ul,
-ol {
-  padding: 0;
-  list-style: none;
-}
+  ul,
+  ol {
+    padding: 0;
+    list-style: none;
+  }
 
-h1 {
-  font-size: var(--text-lg);
-  font-weight: var(--font-weight-semibold);
-  line-height: var(--leading-title);
-  letter-spacing: var(--tracking-title);
-}
+  h1 {
+    font-size: var(--text-lg);
+    font-weight: var(--font-weight-semibold);
+    line-height: var(--leading-title);
+    letter-spacing: var(--tracking-title);
+  }
 
-h2 {
-  font-size: var(--text-md);
-  font-weight: var(--font-weight-semibold);
-  letter-spacing: var(--tracking-title);
-}
+  h2 {
+    font-size: var(--text-md);
+    font-weight: var(--font-weight-semibold);
+    letter-spacing: var(--tracking-title);
+  }
 
-h3 {
-  font-size: var(--text-sm);
-  font-weight: var(--font-weight-semibold);
-}
+  h3 {
+    font-size: var(--text-sm);
+    font-weight: var(--font-weight-semibold);
+  }
 
-button,
-input,
-textarea,
-select {
-  font: inherit;
-  letter-spacing: inherit;
-  color: inherit;
-}
+  button,
+  input,
+  textarea,
+  select {
+    font: inherit;
+    letter-spacing: inherit;
+    color: inherit;
+  }
 
-table {
-  border-collapse: collapse;
-  border-spacing: 0;
-}
+  table {
+    border-collapse: collapse;
+    border-spacing: 0;
+  }
 
-a {
-  color: var(--color-primary);
-  text-decoration: underline;
-  text-decoration-color: color-mix(
-    in srgb,
-    var(--color-blue-500) 45%,
-    transparent
-  );
-  text-underline-offset: 2px;
-  transition:
-    color var(--duration-fast) linear,
-    text-decoration-color var(--duration-fast) linear;
-}
+  a {
+    color: var(--color-primary);
+    text-decoration: underline;
+    text-decoration-color: color-mix(
+      in srgb,
+      var(--color-blue-500) 45%,
+      transparent
+    );
+    text-underline-offset: 2px;
+    transition:
+      color var(--duration-fast) linear,
+      text-decoration-color var(--duration-fast) linear;
+  }
 
-a:hover {
-  color: var(--color-blue-100);
-  text-decoration-color: var(--color-blue-100);
-}
+  a:hover {
+    color: var(--color-blue-100);
+    text-decoration-color: var(--color-blue-100);
+  }
 
-a:focus-visible,
-button:focus-visible,
-input:focus-visible,
-textarea:focus-visible,
-[tabindex]:focus-visible {
-  outline: 2px solid var(--color-ring);
-  outline-offset: 2px;
-}
+  a:focus-visible,
+  button:focus-visible,
+  input:focus-visible,
+  textarea:focus-visible,
+  [tabindex]:focus-visible {
+    outline: 2px solid var(--color-ring);
+    outline-offset: 2px;
+  }
 
-a:focus-visible {
-  text-decoration: none;
-}
+  a:focus-visible {
+    text-decoration: none;
+  }
 
-::-webkit-scrollbar {
-  width: 10px;
-  height: 10px;
-}
+  ::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
 
-::-webkit-scrollbar-thumb {
-  background: var(--color-gray-700);
-  border: 2px solid transparent;
-  background-clip: content-box;
-  border-radius: 9999px;
-}
+  ::-webkit-scrollbar-thumb {
+    background: var(--color-gray-700);
+    border: 2px solid transparent;
+    background-clip: content-box;
+    border-radius: 9999px;
+  }
 
-::-webkit-scrollbar-thumb:hover {
-  background: var(--color-gray-600);
-  background-clip: content-box;
-}
+  ::-webkit-scrollbar-thumb:hover {
+    background: var(--color-gray-600);
+    background-clip: content-box;
+  }
 
-::-webkit-scrollbar-track {
-  background: transparent;
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
 }
 
 .boot {

@@ -1,6 +1,5 @@
 import * as RadioGroup from "@radix-ui/react-radio-group";
 import { useId } from "react";
-import "@/components/ui/ui.css";
 
 export function Choices({
   label,
@@ -18,7 +17,7 @@ export function Choices({
   const id = useId();
   return (
     <RadioGroup.Root
-      className="choice-list"
+      className="flex flex-col gap-2"
       name={id}
       aria-label={label}
       value={value}
@@ -27,13 +26,13 @@ export function Choices({
       orientation="vertical"
     >
       {options.map((option, index) => (
-        <div className="choice-option" key={option.value}>
+        <div className="flex items-center gap-2" key={option.value}>
           <RadioGroup.Item
-            className="choice-control"
+            className="grid place-items-center size-[14px] p-0 border border-line-interactive rounded-full bg-app cursor-pointer data-[state=checked]:border-line-focus disabled:opacity-50 disabled:cursor-not-allowed"
             value={option.value}
             id={`${id}-${index}`}
           >
-            <RadioGroup.Indicator className="choice-indicator" />
+            <RadioGroup.Indicator className="size-2 rounded-full bg-line-focus" />
           </RadioGroup.Item>
           <label htmlFor={`${id}-${index}`}>{option.label}</label>
         </div>

@@ -1,8 +1,14 @@
 import * as ToastPrimitive from "@radix-ui/react-toast";
+import { clsx } from "clsx";
 import { CircleAlert, CircleCheck, Info, X } from "lucide-react";
 import { useSyncExternalStore } from "react";
 import { Button, IconButton } from "@/components/ui/index";
-import "@/components/ui/toast.css";
+
+const toastTones = {
+  success: "text-success",
+  danger: "text-danger",
+  info: "text-primary",
+};
 
 export type ToastTone = "success" | "danger" | "info";
 
@@ -117,8 +123,7 @@ function ToneIcon({ tone }: { tone: ToastTone }) {
 function ToastView({ item }: { item: ToastItem }) {
   return (
     <ToastPrimitive.Root
-      className="toast"
-      data-tone={item.tone}
+      className="flex items-start gap-3 p-3 pl-4 border border-line rounded-md bg-surface-raised text-fg text-sm shadow-popover origin-bottom-right data-[state=open]:animate-rise-in data-[state=open]:[animation-timing-function:var(--ease-out)] data-[state=closed]:animate-fade-in data-[state=closed]:[animation-direction:reverse] data-[swipe=move]:[transform:translateX(var(--radix-toast-swipe-move-x))] data-[swipe=cancel]:[transform:translateX(0)] data-[swipe=cancel]:transition-[transform] data-[swipe=cancel]:duration-(--duration-base) data-[swipe=cancel]:ease-out data-[swipe=end]:animate-fade-in data-[swipe=end]:[animation-timing-function:var(--ease-standard)] data-[swipe=end]:[animation-direction:reverse] [&_button]:flex-none"
       type={item.tone === "danger" ? "foreground" : "background"}
       duration={item.duration ?? Infinity}
       open={item.open}
@@ -129,15 +134,18 @@ function ToastView({ item }: { item: ToastItem }) {
         if (!item.closable) event.preventDefault();
       }}
     >
-      <span className="toast-icon" aria-hidden="true">
+      <span
+        className={clsx("flex flex-none pt-[2px]", toastTones[item.tone])}
+        aria-hidden="true"
+      >
         <ToneIcon tone={item.tone} />
       </span>
-      <div className="toast-body">
-        <ToastPrimitive.Title className="toast-title">
+      <div className="flex flex-1 flex-col gap-[2px] min-w-0 pt-[3px]">
+        <ToastPrimitive.Title className="m-0 font-medium leading-body">
           {item.title}
         </ToastPrimitive.Title>
         {item.description ? (
-          <ToastPrimitive.Description className="toast-description">
+          <ToastPrimitive.Description className="m-0 text-fg-muted text-xs leading-4 wrap-anywhere">
             {item.description}
           </ToastPrimitive.Description>
         ) : null}
@@ -168,7 +176,7 @@ export function Toaster() {
         <ToastView key={`${item.id}:${item.revision}`} item={item} />
       ))}
       <ToastPrimitive.Viewport
-        className="toast-viewport"
+        className="fixed right-6 bottom-6 z-(--layer-toast) flex flex-col gap-2 w-[min(360px,calc(100vw-48px))] m-0 p-0 list-none outline-none"
         label="Notifications"
       />
     </ToastPrimitive.Provider>

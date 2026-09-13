@@ -1,6 +1,16 @@
+import { clsx } from "clsx";
 import { MoreHorizontal } from "lucide-react";
 import { type ReactNode, useEffect, useId, useRef, useState } from "react";
-import "@/components/ui/menu.css";
+
+const menuAlignments = {
+  end: "right-0 origin-top-right",
+  start: "left-0 origin-top-left",
+};
+
+const menuItemTones = {
+  default: "text-fg disabled:text-fg-disabled hover:enabled:bg-surface-hover",
+  danger: "text-danger hover:enabled:bg-red-500/20 hover:enabled:text-red-100",
+};
 
 export type MenuAction = {
   id: string;
@@ -56,10 +66,10 @@ export function OverflowMenu({
   };
 
   return (
-    <div className="menu" ref={wrapper}>
+    <div className="relative inline-flex" ref={wrapper}>
       <button
         type="button"
-        className="menu-trigger"
+        className="inline-flex items-center justify-center size-7 border border-transparent rounded-sm bg-transparent text-fg-muted cursor-pointer transition-[background-color,border-color,color] duration-(--duration-fast) ease-linear hover:bg-surface-hover hover:border-line-interactive hover:text-fg aria-expanded:bg-surface-hover aria-expanded:border-line-interactive aria-expanded:text-fg"
         aria-label={label}
         aria-haspopup="menu"
         aria-expanded={open}
@@ -82,9 +92,11 @@ export function OverflowMenu({
       </button>
       {open ? (
         <div
-          className="menu-list"
+          className={clsx(
+            "absolute top-[calc(100%+var(--spacing))] z-(--layer-menu) min-w-42 p-1 rounded-sm bg-surface-raised shadow-popover animate-pop-in",
+            menuAlignments[align],
+          )}
           id={menuId}
-          data-align={align}
           ref={list}
           role="menu"
           aria-label={label}
@@ -110,8 +122,10 @@ export function OverflowMenu({
               key={action.id}
               type="button"
               role="menuitem"
-              className="menu-item"
-              data-tone={action.tone ?? "default"}
+              className={clsx(
+                "flex items-center gap-2 w-full h-7 py-0 px-2 border-0 rounded-xs bg-transparent text-sm text-left whitespace-nowrap cursor-pointer transition-[background-color,color] duration-(--duration-fast) ease-linear focus-visible:bg-surface-hover disabled:cursor-not-allowed",
+                menuItemTones[action.tone ?? "default"],
+              )}
               disabled={action.disabled}
               onClick={() => {
                 setOpen(false);
@@ -120,7 +134,7 @@ export function OverflowMenu({
               }}
             >
               {action.icon ? (
-                <span className="menu-item-icon" aria-hidden="true">
+                <span className="flex text-fg-muted" aria-hidden="true">
                   {action.icon}
                 </span>
               ) : null}

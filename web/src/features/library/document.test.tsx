@@ -27,7 +27,7 @@ describe("document hierarchy", () => {
     expect(html).toContain(">on-call</button>");
     expect(html).toContain('<span aria-current="page">notes.md</span>');
     expect(html.match(/›/g)).toHaveLength(3);
-    expect(html).not.toContain('data-tone="neutral">runbooks/on-call');
+    expect(html).not.toContain(">runbooks/on-call</span>");
   });
 
   it("navigates to the root or the selected folder's full path", () => {

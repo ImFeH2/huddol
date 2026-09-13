@@ -5,7 +5,6 @@ import {
   useRef,
   useState,
 } from "react";
-import "@/components/ui/ui.css";
 
 export type TabItem<T extends string> = { id: T; label: string };
 
@@ -66,9 +65,9 @@ export function Tabs<T extends string>({
   };
 
   return (
-    <div className="tabs">
+    <div className="flex flex-col gap-6">
       <div
-        className="tab-list"
+        className="relative flex gap-4 border-b border-line"
         role="tablist"
         aria-label={label}
         ref={list}
@@ -88,7 +87,7 @@ export function Tabs<T extends string>({
               type="button"
               role="tab"
               id={`${id}-tab-${tab.id}`}
-              className="tab"
+              className="h-9 py-0 px-[2px] border-0 rounded-xs bg-transparent text-fg-muted text-sm font-medium whitespace-nowrap cursor-pointer transition-[color] duration-(--duration-fast) ease-linear hover:text-fg aria-selected:text-fg"
               aria-selected={selected}
               aria-controls={`${id}-panel-${tab.id}`}
               tabIndex={selected ? 0 : -1}
@@ -100,7 +99,7 @@ export function Tabs<T extends string>({
         })}
         {indicator ? (
           <span
-            className="tab-indicator"
+            className="absolute left-0 -bottom-px h-[2px] rounded-t-full bg-blue-300 transition-[transform,width] duration-(--duration-base) ease-transform"
             aria-hidden="true"
             style={{
               transform: `translateX(${indicator.left}px)`,
@@ -111,7 +110,7 @@ export function Tabs<T extends string>({
       </div>
       <div
         key={value}
-        className="tab-panel"
+        className="flex flex-col gap-4 animate-rise-in"
         role="tabpanel"
         id={`${id}-panel-${value}`}
         aria-labelledby={`${id}-tab-${value}`}

@@ -1,6 +1,5 @@
 import { ArrowLeft } from "lucide-react";
 import { Children, type ReactNode, useRef } from "react";
-import "@/components/ui/ui.css";
 import "@/components/layout/shell.css";
 
 export function Shell({
@@ -283,7 +282,7 @@ export function Table({
                 {column.label ? (
                   column.label
                 ) : (
-                  <span className="visually-hidden">Actions</span>
+                  <span className="sr-only">Actions</span>
                 )}
               </th>
             ))}

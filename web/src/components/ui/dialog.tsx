@@ -2,7 +2,6 @@ import * as Dialog from "@radix-ui/react-dialog";
 import { X } from "lucide-react";
 import { type ReactNode, useEffect, useId, useRef, useState } from "react";
 import { Button, Field, IconButton, Input, toast } from "@/components/ui/index";
-import "@/components/ui/dialog.css";
 
 export function dialogFocusTarget<
   T extends { disabled?: boolean },
@@ -45,13 +44,14 @@ export function Modal({
 }) {
   const opener = useRef<HTMLElement | null>(null);
   const content = useRef<HTMLDivElement>(null);
+  const footerElement = useRef<HTMLDivElement>(null);
   return (
     <Dialog.Root open={open} onOpenChange={onOpenChange}>
       <Dialog.Portal>
-        <Dialog.Overlay className="dialog-overlay" />
+        <Dialog.Overlay className="fixed inset-0 z-(--layer-overlay) bg-gray-1100/60 animate-fade-in [animation-duration:var(--duration-fast)] [animation-timing-function:var(--ease-out)]" />
         <Dialog.Content
           ref={content}
-          className="dialog"
+          className="fixed top-1/2 left-1/2 z-(--layer-dialog) flex flex-col gap-4 w-[min(440px,calc(100vw-48px))] p-6 border border-line rounded-lg bg-surface-raised shadow-dialog [transform:translate(-50%,-50%)] origin-center animate-pop-in"
           onOpenAutoFocus={(event) => {
             opener.current =
               document.activeElement instanceof HTMLElement
@@ -67,9 +67,9 @@ export function Modal({
                 >("input, textarea, select"),
               ),
               Array.from(
-                root.querySelectorAll<HTMLButtonElement>(
-                  ".dialog-footer button",
-                ),
+                footerElement.current?.querySelectorAll<HTMLButtonElement>(
+                  "button",
+                ) ?? [],
               ),
             );
             (target ?? root).focus();
@@ -80,8 +80,10 @@ export function Modal({
           }}
           {...(description ? {} : { "aria-describedby": undefined })}
         >
-          <div className="dialog-head">
-            <Dialog.Title className="dialog-title">{title}</Dialog.Title>
+          <div className="flex items-start justify-between gap-3">
+            <Dialog.Title className="min-w-0 wrap-anywhere m-0 text-md font-semibold tracking-title">
+              {title}
+            </Dialog.Title>
             <Dialog.Close asChild>
               <IconButton label="Close" size="sm">
                 <X size={15} />
@@ -89,12 +91,16 @@ export function Modal({
             </Dialog.Close>
           </div>
           {description ? (
-            <Dialog.Description className="dialog-description">
+            <Dialog.Description className="-mt-4 mx-0 mb-0 text-fg-muted text-sm">
               {description}
             </Dialog.Description>
           ) : null}
-          {children ? <div className="dialog-body">{children}</div> : null}
-          <div className="dialog-footer">{footer}</div>
+          {children ? (
+            <div className="flex flex-col gap-4">{children}</div>
+          ) : null}
+          <div ref={footerElement} className="flex justify-end gap-2">
+            {footer}
+          </div>
         </Dialog.Content>
       </Dialog.Portal>
     </Dialog.Root>

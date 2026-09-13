@@ -87,7 +87,7 @@ describe("Agent settings", () => {
     expect(html).toMatch(
       /<input[^>]*id="[^"]*-memory_index_bytes"[^>]*aria-invalid="true"/,
     );
-    expect(html).toMatch(/<button[^>]*type="submit"[^>]*disabled=""/);
+    expect(html).toMatch(/<button(?=[^>]*type="submit")[^>]*disabled=""/);
     expect(html).not.toContain("Enter a");
   });
 

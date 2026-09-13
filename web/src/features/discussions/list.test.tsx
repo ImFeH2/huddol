@@ -34,7 +34,7 @@ describe("discussions page", () => {
     expect(html).toContain('aria-pressed="false"');
     expect(html.match(/New Discussion/g)).toHaveLength(1);
     expect(html).not.toContain("No Discussions yet");
-    expect(html).not.toContain("count-pill");
+    expect(html).not.toContain("0 Discussions");
     expect(html).not.toContain("Refresh");
     expect(html).not.toContain("Delete");
   });

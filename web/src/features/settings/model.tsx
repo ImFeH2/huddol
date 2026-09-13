@@ -170,8 +170,7 @@ export function ModelPanel() {
         aria-label="Model settings"
         disabled={disabled}
       >
-        <div className="form-field">
-          <span className="form-label">Provider</span>
+        <Field label="Provider">
           <Segmented
             label="Provider"
             value={String(values.api_type ?? "")}
@@ -181,7 +180,7 @@ export function ModelPanel() {
               setValues({ ...values, api_type });
             }}
           />
-        </div>
+        </Field>
         <Field label="Base URL" htmlFor={baseUrlId}>
           <Input
             ref={first}

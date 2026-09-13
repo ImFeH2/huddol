@@ -1,6 +1,5 @@
 import * as TooltipPrimitive from "@radix-ui/react-tooltip";
 import type { ReactElement, ReactNode } from "react";
-import "@/components/ui/ui.css";
 
 export function TooltipProvider({ children }: { children: ReactNode }) {
   return (
@@ -25,8 +24,13 @@ export function Tooltip({
     <TooltipPrimitive.Root>
       <TooltipPrimitive.Trigger
         asChild={!focusable}
-        type={focusable ? "button" : undefined}
-        className={focusable ? "tooltip-trigger" : undefined}
+        {...(focusable
+          ? {
+              type: "button" as const,
+              className:
+                "inline-flex items-center p-0 border-0 rounded-xs bg-transparent text-inherit [font:inherit] cursor-help",
+            }
+          : {})}
         onFocus={(event) => {
           if (!event.currentTarget.matches(":focus-visible"))
             event.preventDefault();
@@ -36,7 +40,7 @@ export function Tooltip({
       </TooltipPrimitive.Trigger>
       <TooltipPrimitive.Portal>
         <TooltipPrimitive.Content
-          className="tooltip"
+          className="z-(--layer-tooltip) max-w-70 py-1 px-2 rounded-sm bg-surface-raised text-fg text-xs font-medium leading-4 whitespace-pre-line shadow-tooltip origin-(--radix-tooltip-content-transform-origin) animate-pop-in select-none"
           side={side}
           sideOffset={6}
           collisionPadding={8}

@@ -1,8 +1,8 @@
 import * as Popover from "@radix-ui/react-popover";
+import { clsx } from "clsx";
 import { ChevronDown } from "lucide-react";
 import { useEffect, useId, useRef, useState } from "react";
 import { Button, IconButton, Input, Spinner } from "@/components/ui/index";
-import "@/components/ui/menu.css";
 
 export function filterOptions(options: string[], value: string): string[] {
   const query = value.trim().toLowerCase();
@@ -87,7 +87,10 @@ export function Combobox({
   return (
     <Popover.Root open={expanded} onOpenChange={changeOpen}>
       <Popover.Anchor asChild>
-        <div className="combobox" ref={anchor}>
+        <div
+          className="relative flex min-w-0 [&>input]:pr-[38px] [&>button]:absolute [&>button]:right-1 [&>button]:top-1/2 [&>button]:-translate-y-1/2"
+          ref={anchor}
+        >
           <Input
             ref={input}
             id={id}
@@ -154,7 +157,7 @@ export function Combobox({
       </Popover.Anchor>
       <Popover.Portal>
         <Popover.Content
-          className="menu-list combobox-panel"
+          className="relative top-auto z-(--layer-menu) min-w-0 w-(--radix-popover-trigger-width) max-w-(--radix-popover-content-available-width) max-h-[min(320px,var(--radix-popover-content-available-height))] overflow-auto p-1 rounded-sm bg-surface-raised shadow-popover origin-(--radix-popover-content-transform-origin) animate-pop-in"
           role="presentation"
           align="start"
           sideOffset={4}
@@ -187,12 +190,14 @@ export function Combobox({
               <button
                 type="button"
                 role="option"
-                className="menu-item"
+                className={clsx(
+                  "flex items-center gap-2 w-full h-auto min-h-7 py-0 px-2 border-0 rounded-xs text-fg text-sm text-left whitespace-normal wrap-anywhere cursor-pointer transition-[background-color,color] duration-(--duration-fast) ease-linear hover:enabled:bg-surface-hover focus-visible:bg-surface-hover disabled:text-fg-disabled disabled:cursor-not-allowed",
+                  index === activeIndex ? "bg-surface-hover" : "bg-transparent",
+                )}
                 key={option}
                 id={`${listId}-${index}`}
                 tabIndex={-1}
                 aria-selected={option === value}
-                data-active={index === activeIndex}
                 onPointerDown={(event) => event.preventDefault()}
                 onClick={() => select(option)}
               >

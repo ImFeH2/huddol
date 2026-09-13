@@ -89,9 +89,9 @@ describe("Model settings", () => {
     expect(html).toMatch(
       /<fieldset[^>]*aria-label="Model settings"[^>]*disabled=""/,
     );
-    expect(html).toMatch(/<button[^>]*type="submit"[^>]*disabled=""/);
+    expect(html).toMatch(/<button(?=[^>]*type="submit")[^>]*disabled=""/);
     expect(html).toMatch(
-      /<button[^>]*type="button"[^>]*disabled=""[^>]*>Test<\/button>/,
+      /<button(?=[^>]*type="button")(?=[^>]*disabled="")[^>]*>Test<\/button>/,
     );
     expect(html).not.toContain("Compaction");
     expect(html).not.toContain('type="number"');
