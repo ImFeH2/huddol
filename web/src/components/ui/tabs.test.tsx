@@ -4,7 +4,7 @@ import { Tabs, tabIndexAfterKey } from "@/components/ui/tabs";
 
 const tabs = [
   { id: "model", label: "Model" },
-  { id: "limits", label: "Limits" },
+  { id: "agent", label: "Agent" },
   { id: "langfuse", label: "Langfuse" },
 ] as const;
 
@@ -29,12 +29,7 @@ describe("tabIndexAfterKey", () => {
 describe("Tabs", () => {
   it("wires the selected tab to its panel with roving focus", () => {
     const html = renderToStaticMarkup(
-      <Tabs
-        label="Settings"
-        tabs={[...tabs]}
-        value="limits"
-        onChange={() => {}}
-      >
+      <Tabs label="Settings" tabs={[...tabs]} value="agent" onChange={() => {}}>
         <p>0 means no ceiling.</p>
       </Tabs>,
     );

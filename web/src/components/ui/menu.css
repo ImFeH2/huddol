@@ -92,3 +92,42 @@
   display: flex;
   color: rgb(var(--text-muted));
 }
+
+.combobox {
+  position: relative;
+  display: flex;
+  min-width: 0;
+}
+
+.combobox > .field {
+  padding-right: calc(26px + var(--space-4));
+}
+
+.combobox > .icon-button {
+  position: absolute;
+  right: var(--space-2);
+  top: 50%;
+  transform: translateY(-50%);
+}
+
+.combobox-panel {
+  position: relative;
+  top: auto;
+  min-width: 0;
+  width: var(--radix-popover-trigger-width);
+  max-width: var(--radix-popover-content-available-width);
+  max-height: min(320px, var(--radix-popover-content-available-height));
+  overflow: auto;
+  transform-origin: var(--radix-popover-content-transform-origin);
+}
+
+.combobox-panel .menu-item {
+  height: auto;
+  min-height: 28px;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.combobox-panel .menu-item[data-active="true"] {
+  background: rgb(var(--bg-hover));
+}

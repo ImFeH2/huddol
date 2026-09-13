@@ -30,7 +30,7 @@ describe("pageKeyOf", () => {
       pageKeyOf({ name: "discussion", id: 5 }),
     );
     expect(pageKeyOf({ name: "settings", section: "model" })).toBe(
-      pageKeyOf({ name: "settings", section: "limits" }),
+      pageKeyOf({ name: "settings", section: "agent" }),
     );
     expect(pageKeyOf({ name: "library" })).not.toBe(
       pageKeyOf({ name: "document", path: "library" }),
