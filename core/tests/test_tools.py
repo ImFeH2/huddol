@@ -606,6 +606,20 @@ def test_read_and_search_return_stored_mentions_not_current_names(
     assert human.search_messages("nobody")[0]["mentions"] == []
 
 
+@pytest.mark.parametrize("path", ["", ".", "./", "/", " / ", "///", " \t\n", "/ \t/\n"])
+def test_tree_tools_accept_root_paths(world, path) -> None:
+    tools = tools_for(world, MAIN)
+    tools.write_library("a/b.md", "shared")
+    tools.write_memory("notes.md", "private")
+    assert tools.list_library(path=path) == tools.list_library()
+    assert tools.list_memory(path=path) == tools.list_memory()
+    result = tools.run_library(
+        [sys.executable, "-c", "import os; print(os.getcwd())"], cwd=path
+    )
+    assert result["exit_code"] == 0
+    assert result["stdout"].strip() == str(world.library_tree.root)
+
+
 def test_library_conflict_returns_the_current_content(world) -> None:
     author = tools_for(world, MAIN)
     author.write_library("shared.md", "first")

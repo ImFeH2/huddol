@@ -24,6 +24,8 @@ from pydantic_ai.messages import (
     ModelMessage,
     ModelRequest,
     ModelResponse,
+    ToolCallPart,
+    ToolReturnPart,
     UserPromptPart,
 )
 from pydantic_ai.models import (
@@ -442,7 +444,10 @@ class PydanticModelRunner:
 
         @agent.tool(
             sequential=True,
-            description="Memory holds private Markdown files and MEMORY.md is protected from deletion or movement.",
+            description=(
+                "Memory holds private Markdown files and MEMORY.md is protected from deletion or movement. "
+                'Paths are relative to the tree root; omit path or pass "" for the root.'
+            ),
         )
         def memory(
             ctx: RunContext[AgentTools],
@@ -498,7 +503,10 @@ class PydanticModelRunner:
 
         @agent.tool(
             sequential=True,
-            description="Library holds any text file for the whole organization; run executes a command inside the Library with only the Library writable.",
+            description=(
+                "Library holds any text file for the whole organization; run executes a command inside the Library with only the Library writable. "
+                'Paths are relative to the tree root; omit path or pass "" for the root.'
+            ),
         )
         def library(
             ctx: RunContext[AgentTools],
@@ -611,7 +619,7 @@ class PydanticModelRunner:
                 if previous is not None:
                     previous.shutdown()
             observability = self._observability
-        history = _decode_history(request.history_json)
+        history = _settle_tool_calls(_decode_history(request.history_json))
         if not history:
             history.append(
                 ModelRequest(
@@ -678,7 +686,7 @@ class PydanticModelRunner:
                 fill_response_cost(response)
                 request.persist(
                     ModelMessagesTypeAdapter.dump_json(
-                        [*ctx.messages, response]
+                        _settle_tool_calls([*ctx.messages, response])
                     ).decode("utf-8")
                 )
             except Exception:
@@ -718,9 +726,9 @@ class PydanticModelRunner:
             except Exception as failure:  # noqa: BLE001
                 messages = request.history_json
                 if captured:
-                    messages = ModelMessagesTypeAdapter.dump_json(captured).decode(
-                        "utf-8"
-                    )
+                    messages = ModelMessagesTypeAdapter.dump_json(
+                        _settle_tool_calls(captured)
+                    ).decode("utf-8")
                 input_tokens = _last_input_tokens(captured[history_length:])
                 error = f"{type(failure).__name__}: {failure}"
                 context_exceeded = is_context_exceeded(failure)
@@ -747,6 +755,22 @@ class PydanticModelRunner:
             input_tokens=input_tokens,
             context_exceeded=context_exceeded,
         )
+
+
+def _settle_tool_calls(messages: list[ModelMessage]) -> list[ModelMessage]:
+    if messages and isinstance(messages[-1], ModelResponse):
+        parts = [
+            ToolReturnPart(
+                tool_name=call.tool_name,
+                tool_call_id=call.tool_call_id,
+                content="This call was not executed because the Turn ended first.",
+            )
+            for call in messages[-1].parts
+            if isinstance(call, ToolCallPart)
+        ]
+        if parts:
+            return [*messages, ModelRequest(parts=parts)]
+    return messages
 
 
 def _decode_history(raw: str) -> list[Any]:

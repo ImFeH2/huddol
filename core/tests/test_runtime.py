@@ -921,7 +921,13 @@ def test_second_model_call_failure_keeps_saved_response_and_completed_tool_retur
     saved = ModelMessagesTypeAdapter.validate_json(persisted[0])
     run = world.history.runs(MAIN)[0]
     captured = ModelMessagesTypeAdapter.validate_json(run.messages_json)
-    assert captured[:-1] == saved
+    assert captured[:-1] == saved[:-1]
+    assert isinstance(saved[-1], ModelRequest)
+    assert isinstance(saved[-1].parts[0], ToolReturnPart)
+    assert saved[-1].parts[0].tool_call_id == "read"
+    assert saved[-1].parts[0].content == (
+        "This call was not executed because the Turn ended first."
+    )
     assert isinstance(captured[-1], ModelRequest)
     assert len(captured[-1].parts) == 1
     returned = captured[-1].parts[0]

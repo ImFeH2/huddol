@@ -31,6 +31,7 @@ from huddol.adapters.model.runner import (
     PydanticModelRunner,
     is_context_exceeded,
 )
+from huddol.core.errors import DomainError
 from huddol.runtime.reminder import Reminder, ReminderItem, TurnRequest
 
 
@@ -112,6 +113,125 @@ class Builder:
         )
 
 
+def assert_settlement(message, calls) -> None:
+    assert isinstance(message, ModelRequest)
+    assert all(isinstance(part, ToolReturnPart) for part in message.parts)
+    assert [
+        (part.tool_name, part.tool_call_id, part.content) for part in message.parts
+    ] == [
+        (
+            call.tool_name,
+            call.tool_call_id,
+            "This call was not executed because the Turn ended first.",
+        )
+        for call in calls
+    ]
+
+
+@pytest.mark.parametrize("with_text", [False, True])
+def test_next_turn_settles_unanswered_history_calls(settings, with_text) -> None:
+    calls = [
+        ToolCallPart("library", {"action": "list"}, tool_call_id="library-list"),
+        ToolCallPart("memory", {"action": "list"}, tool_call_id="memory-list"),
+    ]
+    history = [
+        ModelRequest(parts=[UserPromptPart("Old prompt")]),
+        ModelResponse(parts=[TextPart("Checking"), *calls] if with_text else calls),
+    ]
+    received = []
+    persisted = []
+
+    def respond(messages, info):
+        received.append(messages)
+        assert messages[:2] == history
+        assert_settlement(
+            ModelRequest(
+                parts=[
+                    part
+                    for part in messages[2].parts
+                    if isinstance(part, ToolReturnPart)
+                ]
+            ),
+            calls,
+        )
+        return ModelResponse(parts=[TextPart("Done")])
+
+    outcome = PydanticModelRunner(
+        settings, build_model=lambda config: FunctionModel(respond)
+    ).run(
+        replace(
+            request(),
+            history_json=ModelMessagesTypeAdapter.dump_json(history).decode(),
+            persist=persisted.append,
+        ),
+        None,
+    )
+    assert outcome.error is None
+    assert len(received) == 1
+    assert persisted == [outcome.messages_json]
+    saved = ModelMessagesTypeAdapter.validate_json(outcome.messages_json)
+    assert saved[:2] == history
+    assert_settlement(saved[2], calls)
+    assert '"block":"resident"' not in outcome.messages_json
+
+
+def test_exhausted_tool_retries_settle_failure_history_and_allow_next_turn(
+    settings,
+) -> None:
+    persisted = []
+    calls = []
+
+    def respond(messages, info):
+        call = ToolCallPart(
+            "library",
+            {"action": "read", "path": "missing.md"},
+            tool_call_id=f"read-{len(calls)}",
+        )
+        calls.append(call)
+        return ModelResponse(parts=[call])
+
+    class Tools:
+        def read_library(self, path):
+            raise DomainError("not_found", "File does not exist")
+
+    outcome = PydanticModelRunner(
+        settings, build_model=lambda config: FunctionModel(respond)
+    ).run(replace(request(), persist=persisted.append), Tools())
+    assert outcome.error is not None and "exceeded max retries" in outcome.error
+    assert len(calls) == len(persisted) == 3
+    for raw, call in zip(persisted, calls, strict=True):
+        assert_settlement(ModelMessagesTypeAdapter.validate_json(raw)[-1], [call])
+    saved = ModelMessagesTypeAdapter.validate_json(outcome.messages_json)
+    assert saved[-2].parts == [calls[-1]]
+    assert_settlement(saved[-1], [calls[-1]])
+    received = []
+
+    def resume(messages, info):
+        received.append(messages)
+        assert_settlement(
+            ModelRequest(
+                parts=[
+                    part
+                    for message in messages
+                    for part in message.parts
+                    if isinstance(part, ToolReturnPart)
+                ]
+            ),
+            [calls[-1]],
+        )
+        return ModelResponse(parts=[TextPart("Recovered")])
+
+    following = PydanticModelRunner(
+        settings, build_model=lambda config: FunctionModel(resume)
+    ).run(replace(request(), history_json=outcome.messages_json), None)
+    assert following.error is None
+    assert len(received) == 1
+    assert (
+        ModelMessagesTypeAdapter.validate_json(following.messages_json)[: len(saved)]
+        == saved
+    )
+
+
 def test_prompt_does_not_warn_against_bare_numbers() -> None:
     assert "bare number" not in SYSTEM_PROMPT
 
@@ -170,10 +290,12 @@ def test_each_response_persists_the_complete_history_without_ephemeral(
     assert len(persisted) == len(responses) == 2
     first, second = [ModelMessagesTypeAdapter.validate_json(raw) for raw in persisted]
     assert (responses[0].usage.cost is not None) == priced
-    assert first[-1] == responses[0]
-    assert first[-2].parts[0].content == original.prompt
+    assert_settlement(first[-1], responses[0].parts)
+    assert first[-2] == responses[0]
+    assert first[-3].parts[0].content == original.prompt
     assert second == ModelMessagesTypeAdapter.validate_json(outcome.messages_json)
-    assert second[: len(first)] == first
+    assert second[: len(first) - 1] == first[:-1]
+    assert "This call was not executed" not in persisted[1]
     assert second[-1] == responses[1]
     assert second[-2].metadata == {
         "huddol": {"block": "durable", "environment": "environment B"}
@@ -766,6 +888,7 @@ def test_streaming_appends_ephemeral_only_to_the_outgoing_copy() -> None:
     "action,params,expected",
     [
         ("list", {"path": "topics"}, ("topics",)),
+        ("list", {"path": ""}, ("",)),
         (
             "edit",
             {
@@ -795,6 +918,13 @@ def test_model_tree_actions_forward_their_arguments(
             return invoke
 
     def respond(messages, info):
+        definition = next(
+            tool for tool in info.function_tools if tool.name == namespace
+        )
+        assert (
+            'Paths are relative to the tree root; omit path or pass "" for the root.'
+            in definition.description
+        )
         nonlocal responses
         responses += 1
         if responses == 1:

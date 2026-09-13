@@ -623,7 +623,11 @@ class AgentTools:
         self._check("library.run")
         library = self._library()
         root = library.root
-        directory = (root / cwd).resolve() if cwd is not None else root
+        directory = (
+            root
+            if cwd is None or not cwd.replace("/", "").strip()
+            else (root / cwd).resolve()
+        )
         if not directory.is_relative_to(root) or not directory.is_dir():
             raise DomainError(
                 "invalid_cwd", "cwd must be a directory inside the Library"

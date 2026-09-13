@@ -43,6 +43,47 @@ def test_creates_reads_and_lists_nested_files_and_empty_directories(tree) -> Non
     assert tree.root.is_absolute()
 
 
+@pytest.mark.parametrize("markdown_only", [False, True])
+@pytest.mark.parametrize("path", ["", ".", "./", "/", " / ", "///", " \t\n", "/ \t/\n"])
+def test_root_paths_allow_listing_and_mkdir_but_not_file_operations(
+    tmp_path, markdown_only, path
+) -> None:
+    tree = DirectoryTree(tmp_path / "tree", markdown_only=markdown_only)
+    tree.write("a/b.md", "content")
+    assert tree.list(path) == tree.list()
+    entry = tree.mkdir(path)
+    assert entry.path == "" and entry.kind == "directory"
+    assert entry.size == 0 and entry.content_hash is None
+    for operation in (
+        lambda: tree.read(path),
+        lambda: tree.write(path, "replacement"),
+        lambda: tree.edit(path, "content", "replacement"),
+        lambda: tree.delete(path),
+        lambda: tree.move(path, "x"),
+        lambda: tree.move("a/b.md", path),
+        lambda: tree.move("a", path),
+    ):
+        with pytest.raises(DomainError) as error:
+            operation()
+        assert error.value.code == "invalid_path"
+        assert str(error.value) == "Path must name a file or folder inside the tree"
+    assert tree.read("a/b.md")[0] == "content"
+
+
+@pytest.mark.parametrize("markdown_only", [False, True])
+def test_leading_dot_slash_resolves_relative_paths(tmp_path, markdown_only) -> None:
+    tree = DirectoryTree(tmp_path / "tree", markdown_only=markdown_only)
+    assert tree.mkdir("./a").path == "a"
+    assert tree.write("./a/b.md", "content").path == "a/b.md"
+    assert tree.read("./a/b.md") == tree.read("a/b.md")
+    assert tree.list("./a") == tree.list("a")
+    tree.edit("./a/b.md", "content", "updated")
+    assert tree.read("a/b.md")[0] == "updated"
+    assert tree.move("./a/b.md", "./a/c.md").path == "a/c.md"
+    tree.delete("./a/c.md")
+    assert tree.list("a") == ()
+
+
 def test_overwrite_requires_matching_expected_hash(tree) -> None:
     entry = tree.write("doc.md", "first")
     with pytest.raises(DomainError) as missing:
@@ -61,10 +102,9 @@ def test_overwrite_requires_matching_expected_hash(tree) -> None:
         "../escape.md",
         "/etc/passwd.md",
         "a/../../b.md",
-        "",
-        "   ",
-        ".",
-        "./file.md",
+        "./../escape.md",
+        "./.hidden",
+        "./a/.hidden/file.md",
         ".hidden",
         "a/.hidden/file.md",
         "a\\..\\b.md",

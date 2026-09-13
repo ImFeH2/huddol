@@ -29,9 +29,18 @@ class DirectoryTree:
     def root(self) -> Path:
         return self._root
 
-    def _resolve(self, path: str, *, file: bool = False) -> Path:
-        if not isinstance(path, str) or not path.strip() or "\0" in path:
-            raise DomainError("invalid_path", "Path must not be empty or contain NUL")
+    def _resolve(
+        self, path: str, *, file: bool = False, allow_root: bool = False
+    ) -> Path:
+        if not isinstance(path, str) or "\0" in path:
+            raise DomainError("invalid_path", "Path must be a string without NUL")
+        if path in (".", "./") or not path.replace("/", "").strip():
+            if allow_root:
+                return self._root
+            raise DomainError(
+                "invalid_path", "Path must name a file or folder inside the tree"
+            )
+        path = path.removeprefix("./")
         parts = path.replace("\\", "/").split("/")
         pure = PurePosixPath(path.replace("\\", "/"))
         if (
@@ -54,7 +63,7 @@ class DirectoryTree:
         return target
 
     def _relative(self, target: Path) -> str:
-        return target.relative_to(self._root).as_posix()
+        return "" if target == self._root else target.relative_to(self._root).as_posix()
 
     def _content(self, target: Path) -> str:
         try:
@@ -85,7 +94,7 @@ class DirectoryTree:
         )
 
     def list(self, path: str | None = None) -> tuple[TreeEntry, ...]:
-        base = self._root if path is None else self._resolve(path)
+        base = self._root if path is None else self._resolve(path, allow_root=True)
         if not base.is_dir():
             return ()
         found = []
@@ -164,7 +173,7 @@ class DirectoryTree:
         return self._entry(target), result.diff
 
     def mkdir(self, path: str) -> TreeEntry:
-        target = self._resolve(path)
+        target = self._resolve(path, allow_root=True)
         if target.exists() and not target.is_dir():
             raise DomainError("invalid_path", "Path is a file")
         target.mkdir(parents=True, exist_ok=True)
