@@ -780,6 +780,8 @@ def test_history_is_preserved_or_reset_without_rewriting_old_prompts(
         assert len(saved) == 3
         assert saved[0].parts[0].content == scheduler.resident_block(MAIN)
     else:
+        key = saved[0].metadata.pop("huddol")["cache_key"]
+        assert len(key) == 32
         assert saved[: len(prior)] == prior
         assert saved[-2].metadata == {
             "huddol": {"block": "durable", "environment": scheduler.environment_facts()}

@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 import threading
 from dataclasses import replace
+from itertools import pairwise
 from typing import Any
 
 import pytest
@@ -19,7 +21,11 @@ from pydantic_ai.messages import (
     UserPromptPart,
 )
 from pydantic_ai.models import ModelRequestParameters
+from pydantic_ai.models.anthropic import AnthropicModel
 from pydantic_ai.models.function import FunctionModel
+from pydantic_ai.models.openai import OpenAIChatModel, OpenAIResponsesModel
+from pydantic_ai.providers.anthropic import AnthropicProvider
+from pydantic_ai.providers.openai import OpenAIProvider
 from pydantic_ai.usage import RequestUsage
 
 from huddol.adapters.model.config import ModelConfig
@@ -128,6 +134,40 @@ def assert_settlement(message, calls) -> None:
     ]
 
 
+def cache_key(messages) -> str:
+    key = messages[0].metadata["huddol"]["cache_key"]
+    assert re.fullmatch(r"[0-9a-f]{32}", key)
+    return key
+
+
+def without_cache_key(messages) -> list:
+    first = messages[0]
+    huddol = {
+        name: value
+        for name, value in first.metadata["huddol"].items()
+        if name != "cache_key"
+    }
+    metadata = {
+        name: value for name, value in first.metadata.items() if name != "huddol"
+    }
+    if huddol:
+        metadata["huddol"] = huddol
+    return [replace(first, metadata=metadata or None), *messages[1:]]
+
+
+def flattened(messages) -> list[tuple]:
+    parts: list[tuple] = []
+    for message in messages:
+        for part in message.parts:
+            if isinstance(part, ToolCallPart):
+                parts.append(("call", part.tool_call_id, part.args_as_json_str()))
+            elif isinstance(part, ToolReturnPart):
+                parts.append(("return", part.tool_call_id, part.model_response_str()))
+            else:
+                parts.append((part.part_kind, part.content))
+    return parts
+
+
 @pytest.mark.parametrize("with_text", [False, True])
 def test_next_turn_settles_unanswered_history_calls(settings, with_text) -> None:
     calls = [
@@ -143,7 +183,7 @@ def test_next_turn_settles_unanswered_history_calls(settings, with_text) -> None
 
     def respond(messages, info):
         received.append(messages)
-        assert messages[:2] == history
+        assert without_cache_key(messages)[:2] == history
         assert_settlement(
             ModelRequest(
                 parts=[
@@ -170,7 +210,7 @@ def test_next_turn_settles_unanswered_history_calls(settings, with_text) -> None
     assert len(received) == 1
     assert persisted == [outcome.messages_json]
     saved = ModelMessagesTypeAdapter.validate_json(outcome.messages_json)
-    assert saved[:2] == history
+    assert without_cache_key(saved)[:2] == history
     assert_settlement(saved[2], calls)
     assert '"block":"resident"' not in outcome.messages_json
 
@@ -310,7 +350,11 @@ def test_each_response_persists_the_complete_history_without_ephemeral(
     ]
     assert first[0].parts[0].content == original.resident
     assert first[0].metadata == {
-        "huddol": {"block": "resident", "environment": "environment A"}
+        "huddol": {
+            "block": "resident",
+            "environment": "environment A",
+            "cache_key": cache_key(first),
+        }
     }
     assert all("EPHEMERAL" not in raw for raw in persisted)
     if prior:
@@ -473,7 +517,11 @@ def test_resident_is_inserted_only_for_empty_history(settings) -> None:
     assert len(messages) == 3
     assert messages[0].parts[0].content == original.resident
     assert messages[0].metadata == {
-        "huddol": {"block": "resident", "environment": "environment A"}
+        "huddol": {
+            "block": "resident",
+            "environment": "environment A",
+            "cache_key": cache_key(messages),
+        }
     }
     assert messages[1].parts[0].content == original.reminder.render()
     second = runner.run(
@@ -501,7 +549,7 @@ def test_history_is_never_trimmed_by_its_byte_length(settings) -> None:
     )
     assert outcome.error is None
     saved = ModelMessagesTypeAdapter.validate_json(outcome.messages_json)
-    assert saved[:2] == history
+    assert without_cache_key(saved)[:2] == history
     assert saved[-2].parts[0].content == original.prompt
 
 
@@ -539,7 +587,11 @@ def test_durable_changes_are_persisted_once_and_survive_runner_restarts(
     assert (outcome.error is not None) == fail
     saved = ModelMessagesTypeAdapter.validate_json(outcome.messages_json)
     assert saved[0].metadata == {
-        "huddol": {"block": "resident", "environment": initial or ""}
+        "huddol": {
+            "block": "resident",
+            "environment": initial or "",
+            "cache_key": cache_key(saved),
+        }
     }
     durable = [
         message
@@ -867,7 +919,7 @@ def test_streaming_appends_ephemeral_only_to_the_outgoing_copy() -> None:
 
     original = [ModelRequest(parts=[UserPromptPart("Reminder")])]
     model = LiveModel(
-        lambda: FunctionModel(stream_function=stream), lambda: "EPHEMERAL"
+        lambda: FunctionModel(stream_function=stream), lambda: "EPHEMERAL", "key"
     )
 
     async def run():
@@ -881,6 +933,142 @@ def test_streaming_appends_ephemeral_only_to_the_outgoing_copy() -> None:
     asyncio.run(run())
     assert "EPHEMERAL" in received[0]
     assert len(original[0].parts) == 1
+
+
+def test_the_cache_key_is_created_with_the_window_and_kept_by_later_turns(
+    settings,
+) -> None:
+    runner = PydanticModelRunner(settings, build_model=Builder())
+    first = runner.run(request(), None)
+    key = cache_key(ModelMessagesTypeAdapter.validate_json(first.messages_json))
+    restarted = PydanticModelRunner(settings, build_model=Builder())
+    second = restarted.run(replace(request(), history_json=first.messages_json), None)
+    saved = ModelMessagesTypeAdapter.validate_json(second.messages_json)
+    assert cache_key(saved) == key
+    assert second.messages_json.count('"cache_key"') == 1
+    fresh = restarted.run(request(), None)
+    assert cache_key(ModelMessagesTypeAdapter.validate_json(fresh.messages_json)) != key
+
+
+def test_a_window_without_a_cache_key_receives_one_on_its_next_turn(
+    settings,
+) -> None:
+    history = [
+        ModelRequest(parts=[UserPromptPart("Old prompt")]),
+        ModelResponse(parts=[TextPart("Old response")]),
+    ]
+    raw = ModelMessagesTypeAdapter.dump_json(history).decode()
+    runner = PydanticModelRunner(settings, build_model=Builder())
+    outcome = runner.run(replace(request(), history_json=raw), None)
+    saved = ModelMessagesTypeAdapter.validate_json(outcome.messages_json)
+    key = cache_key(saved)
+    assert saved[0].metadata == {"huddol": {"cache_key": key}}
+    assert without_cache_key(saved)[:2] == history
+    again = runner.run(replace(request(), history_json=outcome.messages_json), None)
+    assert cache_key(ModelMessagesTypeAdapter.validate_json(again.messages_json)) == key
+
+
+@pytest.mark.parametrize("given", [None, {"temperature": 0.5}])
+def test_the_cache_key_reaches_each_provider_in_its_own_setting(given) -> None:
+    seen: dict[str, Any] = {}
+
+    def recording(base: type) -> type:
+        class Recording(base):
+            async def request(self, messages, model_settings, model_request_parameters):
+                seen[base.__name__] = model_settings
+                return ModelResponse(parts=[TextPart("ok")])
+
+        return Recording
+
+    provider = OpenAIProvider(base_url="https://example.invalid/v1", api_key="unused")
+    wrapped = [
+        recording(OpenAIChatModel)("chat", provider=provider),
+        recording(OpenAIResponsesModel)("responses", provider=provider),
+        recording(AnthropicModel)(
+            "claude", provider=AnthropicProvider(api_key="unused")
+        ),
+    ]
+    for model in wrapped:
+        live = LiveModel(lambda model=model: model, lambda: "", "window-key")
+        asyncio.run(
+            live.request(
+                [ModelRequest(parts=[UserPromptPart("hi")])],
+                given,
+                ModelRequestParameters(),
+            )
+        )
+    assert seen == {
+        "OpenAIChatModel": {**(given or {}), "openai_prompt_cache_key": "window-key"},
+        "OpenAIResponsesModel": {
+            **(given or {}),
+            "openai_prompt_cache_key": "window-key",
+        },
+        "AnthropicModel": {**(given or {}), "anthropic_cache": True},
+    }
+    untouched = []
+    plain = FunctionModel(
+        lambda messages, info: (
+            untouched.append(info.model_settings),
+            ModelResponse(parts=[TextPart("ok")]),
+        )[1]
+    )
+    asyncio.run(
+        LiveModel(lambda: plain, lambda: "", "window-key").request(
+            [ModelRequest(parts=[UserPromptPart("hi")])],
+            given,
+            ModelRequestParameters(),
+        )
+    )
+    assert untouched == [given]
+
+
+@pytest.mark.parametrize("start", ["empty", "unanswered"])
+def test_every_call_extends_what_the_previous_call_sent(settings, start) -> None:
+    sent = []
+    plan = iter(["tool", "text", "tool", "tool", "text", "text"])
+
+    def respond(messages, info):
+        sent.append(flattened(messages))
+        if next(plan) == "tool":
+            return ModelResponse(
+                parts=[
+                    ToolCallPart(
+                        "todo", {"action": "list"}, tool_call_id=f"c{len(sent)}"
+                    )
+                ]
+            )
+        return ModelResponse(parts=[TextPart(f"done {len(sent)}")])
+
+    class Tools:
+        def list_todos(self):
+            return [{"id": len(sent), "title": "Work"}]
+
+    original = request()
+    if start == "unanswered":
+        history = [
+            ModelRequest(parts=[UserPromptPart("Old prompt")]),
+            ModelResponse(
+                parts=[
+                    TextPart("Checking"),
+                    ToolCallPart("library", {"action": "list"}, tool_call_id="old"),
+                ]
+            ),
+        ]
+        original = replace(
+            original,
+            history_json=ModelMessagesTypeAdapter.dump_json(history).decode(),
+        )
+    runner = PydanticModelRunner(
+        settings, build_model=lambda config: FunctionModel(respond)
+    )
+    for _ in range(3):
+        outcome = runner.run(original, Tools())
+        assert outcome.error is None
+        original = replace(original, history_json=outcome.messages_json)
+    assert len(sent) == 6
+    for previous, current in pairwise(sent):
+        assert current[: len(previous)] == previous
+        assert len(current) > len(previous)
 
 
 @pytest.mark.parametrize("namespace", ["memory", "library"])

@@ -4,6 +4,7 @@ import asyncio
 import json
 import logging
 import threading
+import uuid
 from collections.abc import AsyncIterator, Callable, Sequence
 from contextlib import asynccontextmanager
 from dataclasses import replace
@@ -156,10 +157,14 @@ def build_observability(config: ObservabilityConfig) -> Observability:
 
 class LiveModel(WrapperModel):
     def __init__(
-        self, resolve: Callable[[], Model], ephemeral: Callable[[], str]
+        self,
+        resolve: Callable[[], Model],
+        ephemeral: Callable[[], str],
+        cache_key: str,
     ) -> None:
         self._resolve = resolve
         self._ephemeral = ephemeral
+        self._cache_key = cache_key
         super().__init__(resolve())
 
     @property
@@ -181,15 +186,28 @@ class LiveModel(WrapperModel):
             replace(last, parts=[*last.parts, UserPromptPart(text)]),
         ]
 
+    def _caching(
+        self, wrapped: Model, model_settings: ModelSettings | None
+    ) -> ModelSettings | None:
+        if isinstance(wrapped, OpenAIChatModel | OpenAIResponsesModel):
+            caching: dict[str, Any] = {"openai_prompt_cache_key": self._cache_key}
+        elif isinstance(wrapped, AnthropicModel):
+            caching = {"anthropic_cache": True}
+        else:
+            return model_settings
+        return cast(ModelSettings, {**(model_settings or {}), **caching})
+
     async def request(
         self,
         messages: list[ModelMessage],
         model_settings: ModelSettings | None,
         model_request_parameters: ModelRequestParameters,
     ) -> ModelResponse:
-        outgoing = self._outgoing(messages)
-        return await self.wrapped.request(
-            outgoing, model_settings, model_request_parameters
+        wrapped = self.wrapped
+        return await wrapped.request(
+            self._outgoing(messages),
+            self._caching(wrapped, model_settings),
+            model_request_parameters,
         )
 
     @asynccontextmanager
@@ -200,9 +218,12 @@ class LiveModel(WrapperModel):
         model_request_parameters: ModelRequestParameters,
         run_context: RunContext[Any] | None = None,
     ) -> AsyncIterator[StreamedResponse]:
-        outgoing = self._outgoing(messages)
-        async with self.wrapped.request_stream(
-            outgoing, model_settings, model_request_parameters, run_context
+        wrapped = self.wrapped
+        async with wrapped.request_stream(
+            self._outgoing(messages),
+            self._caching(wrapped, model_settings),
+            model_request_parameters,
+            run_context,
         ) as response:
             yield response
 
@@ -632,10 +653,12 @@ class PydanticModelRunner:
                         "huddol": {
                             "block": "resident",
                             "environment": request.environment() or "",
+                            "cache_key": uuid.uuid4().hex,
                         }
                     },
                 )
             )
+        cache_key = _cache_key(history)
         hooks: Hooks[AgentTools] = Hooks()
 
         @hooks.on.before_model_request
@@ -652,7 +675,7 @@ class PydanticModelRunner:
                 return request_context
             previous = next(
                 (
-                    message.metadata["huddol"]["environment"]
+                    message.metadata["huddol"].get("environment")
                     for message in reversed(request_context.messages)
                     if isinstance(message, ModelRequest)
                     and message.metadata is not None
@@ -709,7 +732,7 @@ class PydanticModelRunner:
                 usage=counted,
                 deps=tools,
                 message_history=history,
-                model=LiveModel(self._resolve_model, request.ephemeral),
+                model=LiveModel(self._resolve_model, request.ephemeral, cache_key),
                 capabilities=[
                     hooks,
                     *(
@@ -759,6 +782,21 @@ class PydanticModelRunner:
             input_tokens=input_tokens,
             context_exceeded=context_exceeded,
         )
+
+
+def _cache_key(history: list[ModelMessage]) -> str:
+    for index, message in enumerate(history):
+        if not isinstance(message, ModelRequest):
+            continue
+        metadata = dict(message.metadata or {})
+        huddol = dict(metadata.get("huddol") or {})
+        key = huddol.get("cache_key")
+        if not isinstance(key, str) or not key:
+            key = uuid.uuid4().hex
+            huddol["cache_key"] = key
+            history[index] = replace(message, metadata={**metadata, "huddol": huddol})
+        return key
+    return uuid.uuid4().hex
 
 
 def _settle_tool_calls(messages: list[ModelMessage]) -> list[ModelMessage]:
