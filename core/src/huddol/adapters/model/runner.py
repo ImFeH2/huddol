@@ -9,6 +9,7 @@ from contextlib import asynccontextmanager
 from dataclasses import replace
 from typing import Any, Literal, cast
 
+import pydantic_ai
 from pydantic_ai import (
     Agent,
     ModelMessagesTypeAdapter,
@@ -16,7 +17,7 @@ from pydantic_ai import (
     RunContext,
     capture_run_messages,
 )
-from pydantic_ai._cost import fill_response_cost
+from pydantic_ai._genai_prices import fill_response_cost
 from pydantic_ai.capabilities import Hooks
 from pydantic_ai.common_tools.duckduckgo import duckduckgo_search_tool
 from pydantic_ai.exceptions import ModelHTTPError
@@ -24,6 +25,7 @@ from pydantic_ai.messages import (
     ModelMessage,
     ModelRequest,
     ModelResponse,
+    RetryPromptPart,
     ToolCallPart,
     ToolReturnPart,
     UserPromptPart,
@@ -60,6 +62,8 @@ from huddol.core.errors import DomainError
 from huddol.ports.agent import SettingsStore
 from huddol.runtime.reminder import TurnOutcome, TurnRequest
 from huddol.tools import AgentTools
+
+pydantic_ai.BANNER_ENABLED = False
 
 
 def is_context_exceeded(error: BaseException) -> bool:
@@ -758,19 +762,33 @@ class PydanticModelRunner:
 
 
 def _settle_tool_calls(messages: list[ModelMessage]) -> list[ModelMessage]:
-    if messages and isinstance(messages[-1], ModelResponse):
-        parts = [
-            ToolReturnPart(
-                tool_name=call.tool_name,
-                tool_call_id=call.tool_call_id,
-                content="This call was not executed because the Turn ended first.",
-            )
-            for call in messages[-1].parts
-            if isinstance(call, ToolCallPart)
-        ]
-        if parts:
-            return [*messages, ModelRequest(parts=parts)]
-    return messages
+    if not messages:
+        return messages
+    trailing = messages[-1] if isinstance(messages[-1], ModelRequest) else None
+    response = messages[-2] if trailing is not None and len(messages) > 1 else None
+    if trailing is None:
+        response = messages[-1]
+    if not isinstance(response, ModelResponse):
+        return messages
+    answered = {
+        part.tool_call_id
+        for part in (trailing.parts if trailing is not None else ())
+        if isinstance(part, ToolReturnPart | RetryPromptPart)
+    }
+    parts = [
+        ToolReturnPart(
+            tool_name=call.tool_name,
+            tool_call_id=call.tool_call_id,
+            content="This call was not executed because the Turn ended first.",
+        )
+        for call in response.parts
+        if isinstance(call, ToolCallPart) and call.tool_call_id not in answered
+    ]
+    if not parts:
+        return messages
+    if trailing is None:
+        return [*messages, ModelRequest(parts=parts)]
+    return [*messages[:-1], replace(trailing, parts=[*trailing.parts, *parts])]
 
 
 def _decode_history(raw: str) -> list[Any]:
