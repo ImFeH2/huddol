@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import shutil
 from collections.abc import Sequence
 from pathlib import Path, PurePath
@@ -30,7 +31,10 @@ def linux_command(
     write_directories: Sequence[Path],
     *,
     bwrap: str | None = None,
+    root: bool | None = None,
 ) -> list[str]:
+    if root is None:
+        root = hasattr(os, "geteuid") and os.geteuid() == 0
     command = [
         bwrap or bubblewrap_executable(),
         "--die-with-parent",
@@ -39,13 +43,22 @@ def linux_command(
         "/",
         "--dev",
         "/dev",
+        # A fresh procfs: the read-only bind of / would leave /proc read-only,
+        # and a bubblewrap started inside the sandbox must write its uid map.
+        "--proc",
+        "/proc",
         "--unshare-user",
     ]
-    for root in bind_order(write_directories):
-        rendered = root.as_posix()
+    for directory in bind_order(write_directories):
+        rendered = directory.as_posix()
         command.extend(("--bind", rendered, rendered))
-    directory = cwd.as_posix() if isinstance(cwd, PurePath) else str(cwd)
-    command.extend(("--chdir", directory, "--cap-drop", "ALL", "--", *argv))
+    working = cwd.as_posix() if isinstance(cwd, PurePath) else str(cwd)
+    command.extend(("--chdir", working, "--cap-drop", "ALL"))
+    if root:
+        # Since Linux 5.12 a nested user namespace may map uid 0 only when its
+        # creator held CAP_SETFCAP; a root caller keeps just that one.
+        command.extend(("--cap-add", "CAP_SETFCAP"))
+    command.extend(("--", *argv))
     return command
 
 

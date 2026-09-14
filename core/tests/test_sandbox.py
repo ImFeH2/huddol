@@ -51,12 +51,14 @@ def test_bind_order_puts_shallow_paths_first() -> None:
     assert bind_order(roots) == (Path("/a"), Path("/a/b"), Path("/a/b/c"))
 
 
-def test_linux_command_carries_the_required_isolation_flags() -> None:
+@pytest.mark.parametrize("root", [False, True])
+def test_linux_command_carries_the_required_isolation_flags(root: bool) -> None:
     command = linux_command(
         ["ls"],
         "/work",
         [PurePosixPath("/w/deep/nested"), PurePosixPath("/w")],
         bwrap="/usr/bin/bwrap",
+        root=root,
     )
     assert command[:1] == ["/usr/bin/bwrap"]
     for flag in ("--die-with-parent", "--unshare-user"):
@@ -65,7 +67,10 @@ def test_linux_command_carries_the_required_isolation_flags() -> None:
         "/",
         "/",
     ]
-    assert command[-4:] == ["--cap-drop", "ALL", "--", "ls"]
+    assert command.index("--ro-bind") < command.index("--proc")
+    assert command[command.index("--proc") + 1] == "/proc"
+    kept = ["--cap-add", "CAP_SETFCAP"] if root else []
+    assert command[-4 - len(kept) :] == ["--cap-drop", "ALL", *kept, "--", "ls"]
     shallow = command.index("/w")
     deep = command.index("/w/deep/nested")
     assert shallow < deep
