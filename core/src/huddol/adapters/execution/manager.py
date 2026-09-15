@@ -58,8 +58,11 @@ class BoundExecution:
     def write_directories(self) -> tuple[str, ...]:
         return self._lookup().write_directories
 
-    def describe_environment(self) -> str:
-        return self._lookup().describe_environment()
+    def describe_environment(self, labeled: Sequence[tuple[str, str]] = ()) -> str:
+        return self._lookup().describe_environment(labeled)
+
+    def execution_path(self, path: str) -> str:
+        return self._lookup().execution_path(path)
 
     def run(
         self,
@@ -74,9 +77,21 @@ class BoundExecution:
         )
 
     def edit(
-        self, path: str, old_text: str, new_text: str, *, replace_all: bool = False
+        self,
+        path: str,
+        old_text: str,
+        new_text: str,
+        *,
+        replace_all: bool = False,
+        write_directories: Sequence[str] | None = None,
     ) -> EditResult:
-        return self._lookup().edit(path, old_text, new_text, replace_all=replace_all)
+        return self._lookup().edit(
+            path,
+            old_text,
+            new_text,
+            replace_all=replace_all,
+            write_directories=write_directories,
+        )
 
 
 class ExecutionManager:

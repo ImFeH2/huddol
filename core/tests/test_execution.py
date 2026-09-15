@@ -96,6 +96,18 @@ def test_worker_reuses_linux_run_edit_and_sandbox_without_business_services(
         assert overridden.exit_code != 0
         assert (library / "new.txt").read_text().strip() == "created"
         assert path.read_text(encoding="utf-8") == "after😀"
+        overridden_edit = connection.edit(
+            str(library / "new.txt"),
+            "created",
+            "updated",
+            write_directories=[str(library)],
+        )
+        assert overridden_edit.replacements == 1
+        assert (library / "new.txt").read_text().strip() == "updated"
+        with pytest.raises(DomainError, match="outside"):
+            connection.edit(
+                str(path), "after", "denied", write_directories=[str(library)]
+            )
         assert connection.write_directories == (str(allowed),)
         candidate = WslConnection("test", [])
         monkeypatch.setattr(
@@ -274,12 +286,12 @@ def test_worker_translates_host_paths_without_a_root(
         params = {"argv": ["pwd"], "cwd": path}
     elif operation == "edit":
         params = {"path": path, "old_text": "before", "new_text": "after"}
-    if override and operation == "run":
+    if override and operation in ("run", "edit"):
         params["write_directories"] = [r"C:\allowed"]
     request = {
         "operation": operation,
         "directories": ["invalid-configured-root"]
-        if override and operation == "run"
+        if override and operation in ("run", "edit")
         else [r"C:\allowed"],
         "params": params,
     }
@@ -692,6 +704,93 @@ def test_wsl_run_sends_optional_write_directories_to_the_worker(monkeypatch) -> 
         assert connection.write_directories == ("configured",)
     finally:
         connection.close()
+
+
+def test_execution_path_translation_is_cached_per_wsl_connection(monkeypatch) -> None:
+    calls = []
+
+    def translate(argv):
+        calls.append(argv)
+        return b"/mnt/c/data/agents/2/memory\n"
+
+    monkeypatch.setattr("huddol.adapters.execution.wsl.wsl_output", translate)
+    path = r"C:\data\agents\2\memory"
+    assert LocalExecution().execution_path(path) == path
+    for distribution in ("first", "second"):
+        connection = WslConnection(distribution, [])
+        try:
+            for _ in range(2):
+                assert connection.execution_path(path) == "/mnt/c/data/agents/2/memory"
+        finally:
+            connection.close()
+    assert calls == [
+        ["-d", name, "--exec", "wslpath", "-u", path] for name in ("first", "second")
+    ]
+
+
+@pytest.mark.parametrize("override", [None, [], [r"C:\Library"]])
+def test_wsl_edit_sends_optional_write_directories(monkeypatch, override) -> None:
+    connection = WslConnection("test", ["configured"])
+    calls = []
+
+    def request(operation, params):
+        calls.append((operation, params))
+        return {"path": params["path"], "diff": "", "replacements": 1}
+
+    monkeypatch.setattr(connection, "_request", request)
+    try:
+        connection.edit(
+            r"C:\Library\note.txt", "old", "new", write_directories=override
+        )
+        params = {
+            "path": r"C:\Library\note.txt",
+            "old_text": "old",
+            "new_text": "new",
+            "replace_all": False,
+        }
+        if override is not None:
+            params["write_directories"] = override
+        assert calls == [("edit", params)]
+        assert connection.write_directories == ("configured",)
+    finally:
+        connection.close()
+
+
+@pytest.mark.parametrize("override", [None, [], "other"])
+def test_local_edit_override_does_not_change_configuration(tmp_path, override) -> None:
+    configured = tmp_path / "configured"
+    other = tmp_path / "other"
+    configured.mkdir()
+    other.mkdir()
+    for root in (configured, other):
+        (root / "file.txt").write_text("before", encoding="utf-8")
+    environment = LocalExecution([str(configured)])
+    roots = [str(other)] if override == "other" else override
+    try:
+        for root in (configured, other):
+            if (root == configured and override is None) or (
+                root == other and override == "other"
+            ):
+                assert (
+                    environment.edit(
+                        str(root / "file.txt"),
+                        "before",
+                        "after",
+                        write_directories=roots,
+                    ).replacements
+                    == 1
+                )
+            else:
+                with pytest.raises(DomainError, match="outside"):
+                    environment.edit(
+                        str(root / "file.txt"),
+                        "before",
+                        "after",
+                        write_directories=roots,
+                    )
+        assert environment.write_directories == (str(configured),)
+    finally:
+        environment.close()
 
 
 def test_windows_write_access_is_cached_separately_for_each_root_set(

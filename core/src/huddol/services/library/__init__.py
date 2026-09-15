@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+from stat import S_ISREG
 
 from huddol.ports.files import FileTree, TreeEntry
 
@@ -21,14 +22,25 @@ class Library:
     def root(self) -> Path:
         return self._tree.root
 
-    def snapshot(self) -> dict[str, str | None]:
-        return {
-            item.path: item.content_hash for item in self.list() if item.kind == "file"
-        }
+    def snapshot(self) -> dict[str, tuple[int, int]]:
+        files = {}
+        for directory, _, names in self.root.walk():
+            for name in names:
+                path = directory / name
+                try:
+                    stat = path.stat()
+                except FileNotFoundError:
+                    continue
+                if S_ISREG(stat.st_mode):
+                    files[path.relative_to(self.root).as_posix()] = (
+                        stat.st_size,
+                        stat.st_mtime_ns,
+                    )
+        return files
 
     @staticmethod
     def changes(
-        before: dict[str, str | None], after: dict[str, str | None]
+        before: dict[str, tuple[int, int]], after: dict[str, tuple[int, int]]
     ) -> tuple[str, ...]:
         return tuple(
             sorted(

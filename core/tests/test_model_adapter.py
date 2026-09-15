@@ -149,8 +149,6 @@ def test_the_full_tool_surface_matches_the_specification() -> None:
         "run",
         "edit",
         "todo",
-        "memory",
-        "library",
         "history",
         "web_search",
     }

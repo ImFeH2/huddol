@@ -223,16 +223,16 @@ def test_exhausted_tool_retries_settle_failure_history_and_allow_next_turn(
 
     def respond(messages, info):
         call = ToolCallPart(
-            "library",
-            {"action": "read", "path": "missing.md"},
+            "history",
+            {"action": "read", "sequence": 99},
             tool_call_id=f"read-{len(calls)}",
         )
         calls.append(call)
         return ModelResponse(parts=[call])
 
     class Tools:
-        def read_library(self, path):
-            raise DomainError("not_found", "File does not exist")
+        def read_history(self, sequence):
+            raise DomainError("not_found", "Run does not exist")
 
     outcome = PydanticModelRunner(
         settings, build_model=lambda config: FunctionModel(respond)
@@ -1071,90 +1071,50 @@ def test_every_call_extends_what_the_previous_call_sent(settings, start) -> None
         assert len(current) > len(previous)
 
 
-@pytest.mark.parametrize("namespace", ["memory", "library"])
 @pytest.mark.parametrize(
-    "action,params,expected",
+    "name,params,expected",
     [
-        ("list", {"path": "topics"}, ("topics",)),
-        ("list", {"path": ""}, ("",)),
+        (
+            "run",
+            {"argv": ["rg", "needle"], "cwd": "/data/library", "timeout": 7},
+            (["rg", "needle"], "/data/library", 7),
+        ),
         (
             "edit",
             {
-                "path": "note.md",
+                "path": "memory/MEMORY.md",
                 "old_text": "before",
                 "new_text": "",
                 "replace_all": True,
             },
-            ("note.md", "before", "", True),
+            ("memory/MEMORY.md", "before", "", True),
         ),
-        ("mkdir", {"path": "topics"}, ("topics",)),
-        ("move", {"path": "topics", "destination": "renamed"}, ("topics", "renamed")),
     ],
 )
-def test_model_tree_actions_forward_their_arguments(
-    settings, namespace, action, params, expected
+def test_model_file_tools_forward_arguments_without_tree_tools(
+    settings, name, params, expected
 ) -> None:
     calls = []
-    responses = 0
 
     class Tools:
-        def __getattr__(self, name):
-            def invoke(*args):
-                calls.append((name, args))
-                return {"ok": True}
-
-            return invoke
-
-    def respond(messages, info):
-        definition = next(
-            tool for tool in info.function_tools if tool.name == namespace
-        )
-        assert (
-            'Paths are relative to the tree root; omit path or pass "" for the root.'
-            in definition.description
-        )
-        nonlocal responses
-        responses += 1
-        if responses == 1:
-            return ModelResponse(
-                parts=[ToolCallPart(namespace, {"action": action, **params})]
-            )
-        return ModelResponse(parts=[TextPart("Done")])
-
-    outcome = PydanticModelRunner(
-        settings, build_model=lambda config: FunctionModel(respond)
-    ).run(request(), Tools())
-    assert outcome.error is None
-    assert calls == [(f"{action}_{namespace}", expected)]
-
-
-def test_model_library_run_forwards_argv_cwd_and_timeout(settings) -> None:
-    calls = []
-
-    class Tools:
-        def run_library(self, argv, cwd, timeout):
-            calls.append((argv, cwd, timeout))
+        def run(self, *args):
+            calls.append(args)
             return {"exit_code": 0, "stdout": "", "stderr": "", "truncated": False}
 
+        def edit(self, *args):
+            calls.append(args)
+            return {"path": args[0], "diff": "", "replacements": 1}
+
     def respond(messages, info):
+        names = {tool.name for tool in info.function_tools}
+        assert {"run", "edit"} <= names
+        assert names.isdisjoint({"memory", "library"})
         if not calls:
-            return ModelResponse(
-                parts=[
-                    ToolCallPart(
-                        "library",
-                        {
-                            "action": "run",
-                            "argv": ["rg", "needle"],
-                            "cwd": "topics",
-                            "timeout": 7,
-                        },
-                    )
-                ]
-            )
+            return ModelResponse(parts=[ToolCallPart(name, params)])
         return ModelResponse(parts=[TextPart("Done")])
 
     outcome = PydanticModelRunner(
         settings, build_model=lambda config: FunctionModel(respond)
     ).run(request(), Tools())
     assert outcome.error is None
-    assert calls == [(["rg", "needle"], "topics", 7)]
+    assert calls == [expected]

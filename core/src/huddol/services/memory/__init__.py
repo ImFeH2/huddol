@@ -10,21 +10,19 @@ class Memory:
     def __init__(self, tree: FileTree) -> None:
         self._tree = tree
 
-    def _ensure_index(self) -> None:
+    def _ensure_index(self) -> bool:
         try:
             self._tree.read(INDEX)
         except DomainError as error:
             if error.code == "not_readable":
-                return
+                return True
             if error.code != "not_found":
                 raise
-            self._tree.write(INDEX, "")
-
-    def _protect(self, path: str) -> None:
-        if (
-            self._tree.root / path.replace("\\", "/")
-        ).resolve() == self._tree.root / INDEX:
-            raise DomainError("protected", "MEMORY.md cannot be deleted or moved")
+            try:
+                self._tree.write(INDEX, "")
+            except (OSError, DomainError):
+                return False
+        return True
 
     def list(self, path: str | None = None) -> tuple[TreeEntry, ...]:
         self._ensure_index()
@@ -52,16 +50,15 @@ class Memory:
 
     def move(self, source: str, destination: str) -> TreeEntry:
         self._ensure_index()
-        self._protect(source)
         return self._tree.move(source, destination)
 
     def delete(self, path: str) -> None:
         self._ensure_index()
-        self._protect(path)
         self._tree.delete(path)
 
     def index(self, limit_bytes: int) -> str:
-        self._ensure_index()
+        if not self._ensure_index():
+            return ""
         content, _ = self._tree.read(INDEX)
         encoded = content.encode("utf-8")
         if len(encoded) <= limit_bytes:

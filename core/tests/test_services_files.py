@@ -93,20 +93,16 @@ def test_library_and_memory_are_separate_trees(
     assert [item.path for item in memory.list()] == ["MEMORY.md", "private.md"]
 
 
-def test_memory_creates_and_protects_its_index(memory: Memory) -> None:
+def test_memory_recreates_its_index_after_deletion_or_movement(memory: Memory) -> None:
     entries = memory.list()
     assert [(entry.path, entry.kind, entry.size) for entry in entries] == [
         ("MEMORY.md", "file", 0)
     ]
-    for operation in (
-        lambda: memory.delete("MEMORY.md"),
-        lambda: memory.move("MEMORY.md", "other.md"),
-    ):
-        with pytest.raises(DomainError) as error:
-            operation()
-        assert error.value.code == "protected"
-        assert str(error.value) == "MEMORY.md cannot be deleted or moved"
+    memory.delete("MEMORY.md")
     assert memory.index(100) == ""
+    memory.move("MEMORY.md", "other.md")
+    assert memory.index(100) == ""
+    assert memory.read("other.md")[0] == ""
 
 
 def test_memory_directory_operations_and_edit(memory: Memory) -> None:
@@ -120,7 +116,9 @@ def test_memory_directory_operations_and_edit(memory: Memory) -> None:
     assert [item.path for item in memory.list()] == ["MEMORY.md"]
 
 
-def test_library_snapshots_detect_presence_and_hash_changes(library: Library) -> None:
+def test_library_snapshots_detect_presence_and_metadata_changes(
+    library: Library,
+) -> None:
     library.write("changed.txt", "before")
     library.write("removed.txt", "gone")
     library.write("retained.txt", "same")
@@ -141,7 +139,47 @@ def test_library_snapshots_detect_presence_and_hash_changes(library: Library) ->
         "removed.txt",
     )
     assert Library.changes(after, after) == ()
-    assert "empty" not in after and after["new-binary"] is None
+    assert "empty" not in after
+    stat = (library.root / "new-binary").stat()
+    assert after["new-binary"] == (1, stat.st_mtime_ns)
+
+
+def test_library_snapshot_reads_metadata_only_including_hidden_files(
+    library, monkeypatch
+) -> None:
+    import os
+
+    hidden = library.root / ".hidden"
+    hidden.mkdir()
+    target = hidden / "note.txt"
+    target.write_text("before", encoding="utf-8")
+    stat = target.stat()
+
+    def fail(*args, **kwargs):
+        pytest.fail("Snapshots must not read file contents")
+
+    monkeypatch.setattr(library._tree, "list", fail)
+    monkeypatch.setattr(Path, "open", fail)
+    before = library.snapshot()
+    assert before == {".hidden/note.txt": (stat.st_size, stat.st_mtime_ns)}
+    os.utime(target, ns=(stat.st_atime_ns, stat.st_mtime_ns + 1_000_000_000))
+    assert Library.changes(before, library.snapshot()) == (".hidden/note.txt",)
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        OSError("Read-only filesystem"),
+        DomainError("invalid_path", "Cannot create index"),
+    ],
+)
+def test_memory_index_is_empty_when_creation_fails(memory, monkeypatch, error) -> None:
+    def fail(*args, **kwargs):
+        raise error
+
+    monkeypatch.setattr(memory._tree, "write", fail)
+    assert memory.index(100) == ""
+    assert not (memory._tree.root / "MEMORY.md").exists()
 
 
 def test_unreadable_memory_index_does_not_hide_the_tree(tmp_path: Path) -> None:

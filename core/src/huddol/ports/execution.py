@@ -27,7 +27,9 @@ class ExecutionEnvironment(Protocol):
     @property
     def write_directories(self) -> tuple[str, ...]: ...
 
-    def describe_environment(self) -> str: ...
+    def describe_environment(self, labeled: Sequence[tuple[str, str]] = ()) -> str: ...
+
+    def execution_path(self, path: str) -> str: ...
 
     def run(
         self,
@@ -39,7 +41,13 @@ class ExecutionEnvironment(Protocol):
     ) -> RunResult: ...
 
     def edit(
-        self, path: str, old_text: str, new_text: str, *, replace_all: bool = False
+        self,
+        path: str,
+        old_text: str,
+        new_text: str,
+        *,
+        replace_all: bool = False,
+        write_directories: Sequence[str] | None = None,
     ) -> EditResult: ...
 
 

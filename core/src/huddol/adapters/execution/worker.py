@@ -76,7 +76,7 @@ def main() -> int:
                 "invalid_params", "Execution parameters must be an object"
             )
         directories = request["directories"]
-        if operation == "run":
+        if operation in ("run", "edit"):
             override = params.pop("write_directories", None)
             if override is not None:
                 directories = override

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Iterator, Sequence
+from contextlib import contextmanager
 from dataclasses import asdict, dataclass
 from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Any
@@ -10,7 +11,7 @@ from huddol.core.discussion import Discussion, validate_body, validate_topic
 from huddol.core.errors import DomainError
 from huddol.core.member import validate_name
 from huddol.ports.agent import HistoryStore, SettingsStore, TodoStore
-from huddol.ports.execution import ExecutionControl
+from huddol.ports.execution import ExecutionControl, ExecutionEnvironment
 from huddol.ports.files import ConflictError, FileTree
 from huddol.ports.store import OrganizationStore
 from huddol.services.history import History
@@ -408,6 +409,33 @@ class AgentTools:
             if item.discussion_id in mine
         ]
 
+    def _write_directories(self, execution: ExecutionEnvironment) -> list[str]:
+        roots = (
+            self._deps.memory_tree_for(self._actor.member_id).root,
+            self._deps.library_tree.root,
+        )
+        for root in roots:
+            root.mkdir(parents=True, exist_ok=True)
+        return [*execution.write_directories, *(str(root) for root in roots)]
+
+    @contextmanager
+    def _library_updates(self) -> Iterator[None]:
+        library = self._library()
+        before = library.snapshot()
+        try:
+            yield
+        finally:
+            after = library.snapshot()
+            for path in library.changes(before, after):
+                if path not in after:
+                    self._changed("library.updated", {"path": path, "deleted": True})
+                    continue
+                try:
+                    digest: str | None = library.read(path).content_hash
+                except DomainError:
+                    digest = None
+                self._changed("library.updated", {"path": path, "hash": digest})
+
     def run(
         self,
         argv: Sequence[str],
@@ -421,9 +449,12 @@ class AgentTools:
             PurePosixPath(cwd).is_absolute() or PureWindowsPath(cwd).is_absolute()
         ):
             cwd = str(self._deps.agent_directory_for(self._actor.member_id) / cwd)
-        result = self._deps.execution.snapshot().run(
-            list(argv), cwd=cwd, timeout=timeout
-        )
+        execution = self._deps.execution.snapshot()
+        directories = self._write_directories(execution)
+        with self._library_updates():
+            result = execution.run(
+                list(argv), cwd=cwd, timeout=timeout, write_directories=directories
+            )
         self._record("run", f"{' '.join(argv)} exited {result.exit_code}")
         return {
             "exit_code": result.exit_code,
@@ -444,9 +475,16 @@ class AgentTools:
             PurePosixPath(path).is_absolute() or PureWindowsPath(path).is_absolute()
         ):
             path = str(self._deps.agent_directory_for(self._actor.member_id) / path)
-        result = self._deps.execution.snapshot().edit(
-            path, old_text, new_text, replace_all=replace_all
-        )
+        execution = self._deps.execution.snapshot()
+        directories = self._write_directories(execution)
+        with self._library_updates():
+            result = execution.edit(
+                path,
+                old_text,
+                new_text,
+                replace_all=replace_all,
+                write_directories=directories,
+            )
         self._record("edit", f"{result.path} ({result.replacements} replaced)")
         return {
             "path": result.path,
@@ -516,42 +554,6 @@ class AgentTools:
         content, digest = self._memory(agent_id).read(path)
         return {"path": path, "content": content, "hash": digest}
 
-    def write_memory(
-        self, path: str, content: str, expected_hash: str | None = None
-    ) -> dict[str, Any]:
-        self._check("memory.write", path)
-        entry = self._memory().write(path, content, expected_hash=expected_hash)
-        self._record("memory.write", entry.path)
-        return {"path": entry.path, "hash": entry.content_hash}
-
-    def edit_memory(
-        self, path: str, old_text: str, new_text: str, replace_all: bool = False
-    ) -> dict[str, Any]:
-        self._check("memory.edit", path)
-        entry, diff = self._memory().edit(
-            path, old_text, new_text, replace_all=replace_all
-        )
-        self._record("memory.edit", entry.path)
-        return {"path": entry.path, "hash": entry.content_hash, "diff": diff}
-
-    def mkdir_memory(self, path: str) -> dict[str, Any]:
-        self._check("memory.mkdir", path)
-        entry = self._memory().mkdir(path)
-        self._record("memory.mkdir", entry.path)
-        return {"path": entry.path, "hash": entry.content_hash}
-
-    def move_memory(self, source: str, destination: str) -> dict[str, Any]:
-        self._check("memory.move", source)
-        entry = self._memory().move(source, destination)
-        self._record("memory.move", f"{source} to {entry.path}")
-        return {"path": entry.path, "hash": entry.content_hash}
-
-    def delete_memory(self, path: str) -> dict[str, Any]:
-        self._check("memory.delete", path)
-        self._memory().delete(path)
-        self._record("memory.delete", path)
-        return {"path": path, "deleted": True}
-
     def _library(self) -> Library:
         return Library(self._deps.library_tree)
 
@@ -616,46 +618,6 @@ class AgentTools:
         return self._changed(
             "library.updated", {"path": entry.path, "hash": entry.content_hash}
         )
-
-    def run_library(
-        self, argv: Sequence[str], cwd: str | None = None, timeout: int | None = None
-    ) -> dict[str, Any]:
-        self._check("library.run")
-        library = self._library()
-        root = library.root
-        directory = (
-            root
-            if cwd is None or not cwd.replace("/", "").strip()
-            else (root / cwd).resolve()
-        )
-        if not directory.is_relative_to(root) or not directory.is_dir():
-            raise DomainError(
-                "invalid_cwd", "cwd must be a directory inside the Library"
-            )
-        before = library.snapshot()
-        try:
-            result = self._deps.execution.snapshot().run(
-                list(argv),
-                cwd=str(directory),
-                timeout=timeout,
-                write_directories=[str(root)],
-            )
-        finally:
-            after = library.snapshot()
-            for path in library.changes(before, after):
-                self._changed(
-                    "library.updated",
-                    {"path": path, "hash": after[path]}
-                    if path in after
-                    else {"path": path, "deleted": True},
-                )
-        self._record("library.run", f"{' '.join(argv)} exited {result.exit_code}")
-        return {
-            "exit_code": result.exit_code,
-            "stdout": result.stdout,
-            "stderr": result.stderr,
-            "truncated": result.truncated,
-        }
 
     def delete_library(self, path: str) -> dict[str, Any]:
         self._check("library.delete", path)

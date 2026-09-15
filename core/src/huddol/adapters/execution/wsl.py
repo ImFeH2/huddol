@@ -87,6 +87,7 @@ class WslConnection:
         self.skipped: tuple[tuple[str, str], ...] = ()
         self._tolerant = tolerant
         self._worker: list[str] | None = None
+        self._paths: dict[str, str] = {}
         self._lock = threading.Lock()
         self._processes: dict[subprocess.Popen[bytes], IO[bytes]] = {}
         self._sending: set[subprocess.Popen[bytes]] = set()
@@ -237,12 +238,31 @@ class WslConnection:
         self.skipped = candidate.skipped
         self._tolerant = candidate._tolerant
 
-    def describe_environment(self) -> str:
-        listing = "\n".join(f"- {item}" for item in self.write_directories) or "- none"
+    def describe_environment(self, labeled: Sequence[tuple[str, str]] = ()) -> str:
+        entries = [
+            f"- {self.execution_path(path)} ({label})" for path, label in labeled
+        ]
+        entries.extend(f"- {item}" for item in self.write_directories)
+        listing = "\n".join(entries) or "- none"
         return (
             f"Execution environment: WSL ({self.distribution})\n"
             f"Writable directories:\n{listing}"
         )
+
+    def execution_path(self, path: str) -> str:
+        with self._lock:
+            if path not in self._paths:
+                translated = (
+                    wsl_output(
+                        ["-d", self.distribution, "--exec", "wslpath", "-u", path]
+                    )
+                    .decode("utf-8")
+                    .strip()
+                )
+                if not translated.startswith("/"):
+                    raise DomainError("invalid_path", "Cannot resolve host path in WSL")
+                self._paths[path] = translated
+            return self._paths[path]
 
     def run(
         self,
@@ -258,19 +278,23 @@ class WslConnection:
         return RunResult(**self._request("run", params))
 
     def edit(
-        self, path: str, old_text: str, new_text: str, *, replace_all: bool = False
+        self,
+        path: str,
+        old_text: str,
+        new_text: str,
+        *,
+        replace_all: bool = False,
+        write_directories: Sequence[str] | None = None,
     ) -> EditResult:
-        return EditResult(
-            **self._request(
-                "edit",
-                {
-                    "path": path,
-                    "old_text": old_text,
-                    "new_text": new_text,
-                    "replace_all": replace_all,
-                },
-            )
-        )
+        params: dict[str, Any] = {
+            "path": path,
+            "old_text": old_text,
+            "new_text": new_text,
+            "replace_all": replace_all,
+        }
+        if write_directories is not None:
+            params["write_directories"] = list(write_directories)
+        return EditResult(**self._request("edit", params))
 
     def close(self) -> None:
         with self._lock:

@@ -198,13 +198,24 @@ class Scheduler:
                 self.parameters().memory_index_bytes
             ),
             Todos(self._deps.todos, agent_id).snapshot(),
-            self.environment_facts(),
+            self.environment_facts(agent_id),
             reset_notice(self.history.window(agent_id)),
         )
 
-    def environment_facts(self) -> str | None:
+    def environment_facts(self, agent_id: int) -> str | None:
         try:
-            return self._deps.execution.snapshot().describe_environment()
+            return self._deps.execution.snapshot().describe_environment(
+                (
+                    (
+                        str(self._deps.memory_tree_for(agent_id).root),
+                        "your Memory, private, Markdown",
+                    ),
+                    (
+                        str(self._deps.library_tree.root),
+                        "Library, shared with the whole organization",
+                    ),
+                )
+            )
         except DomainError:
             return None
 
@@ -248,7 +259,7 @@ class Scheduler:
             reminder=reminder,
             history_json=self.history.latest_messages(agent_id),
             resident="",
-            environment=self.environment_facts,
+            environment=lambda: self.environment_facts(agent_id),
             persist=lambda messages_json: self.history.save_progress(
                 agent_id, run.sequence, messages_json
             ),

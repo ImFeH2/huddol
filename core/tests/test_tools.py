@@ -79,15 +79,13 @@ def test_run_resolves_relative_cwd_under_the_agents_directory(world) -> None:
     assert result["stdout"].strip() == str(directory)
 
 
-def test_run_keeps_absolute_cwd_without_creating_an_agent_directory(
-    world, tmp_path: Path
-) -> None:
+def test_run_keeps_absolute_cwd(world, tmp_path: Path) -> None:
     result = tools_for(world, MAIN).run(
         [sys.executable, "-c", "import os; print(os.getcwd())"], cwd=str(tmp_path)
     )
     assert result["exit_code"] == 0
     assert result["stdout"].strip() == str(tmp_path)
-    assert not (tmp_path / "agents" / str(MAIN)).exists()
+    assert (tmp_path / "agents" / str(MAIN) / "memory").is_dir()
 
 
 @pytest.mark.parametrize(
@@ -99,11 +97,11 @@ def test_tools_forward_absolute_paths_in_both_platform_formats(
     tools = tools_for(world, MAIN)
     calls = []
 
-    def run(argv, *, cwd, timeout):
+    def run(argv, *, cwd, timeout, write_directories):
         calls.append((argv, cwd, timeout))
         return RunResult(0, "", "", False)
 
-    def edit(path, old_text, new_text, *, replace_all):
+    def edit(path, old_text, new_text, *, replace_all, write_directories):
         calls.append((path, old_text, new_text, replace_all))
         return EditResult(path, "", 1)
 
@@ -114,7 +112,7 @@ def test_tools_forward_absolute_paths_in_both_platform_formats(
     tools.run(["pwd"], cwd=path, timeout=7)
     tools.edit(path, "before", "after", replace_all=True)
     assert calls == [(["pwd"], path, 7), (path, "before", "after", True)]
-    assert not (tmp_path / "agents" / str(MAIN)).exists()
+    assert (tmp_path / "agents" / str(MAIN) / "memory").is_dir()
 
 
 def test_relative_edit_resolves_under_the_agents_directory_and_is_not_writable(
@@ -197,7 +195,7 @@ def test_edit_keeps_absolute_paths(world, tmp_path: Path) -> None:
     result = tools_for(world, MAIN).edit(str(target), "before", "after")
     assert result["path"] == str(target)
     assert target.read_text(encoding="utf-8") == "after"
-    assert not (tmp_path / "agents" / str(MAIN)).exists()
+    assert (tmp_path / "agents" / str(MAIN) / "memory").is_dir()
 
 
 @pytest.mark.parametrize("actor_id", [HUMAN, MAIN])
@@ -554,7 +552,7 @@ def test_deleting_an_agent_preserves_all_its_data(world) -> None:
     agent.read_discussion(rooms[0])
     agent.ack(rooms[0], [2])
     agent.add_todo("Keep work", "Keep details")
-    agent.write_memory("notes.md", "Keep notes")
+    world.memory_tree_for(MAIN).write("notes.md", "Keep notes")
     world.history.start_run(MAIN)
     window = world.history.reset_window(MAIN, "prepared")
     runs = world.history.runs(MAIN)
@@ -608,30 +606,27 @@ def test_read_and_search_return_stored_mentions_not_current_names(
 
 @pytest.mark.parametrize("path", ["", ".", "./", "/", " / ", "///", " \t\n", "/ \t/\n"])
 def test_tree_tools_accept_root_paths(world, path) -> None:
-    tools = tools_for(world, MAIN)
+    tools = tools_for(world, HUMAN)
     tools.write_library("a/b.md", "shared")
-    tools.write_memory("notes.md", "private")
+    world.memory_tree_for(MAIN).write("notes.md", "private")
     assert tools.list_library(path=path) == tools.list_library()
-    assert tools.list_memory(path=path) == tools.list_memory()
-    result = tools.run_library(
-        [sys.executable, "-c", "import os; print(os.getcwd())"], cwd=path
+    assert tools.list_memory(path=path, agent_id=MAIN) == tools.list_memory(
+        agent_id=MAIN
     )
-    assert result["exit_code"] == 0
-    assert result["stdout"].strip() == str(world.library_tree.root)
 
 
 def test_library_conflict_returns_the_current_content(world) -> None:
-    author = tools_for(world, MAIN)
+    author = tools_for(world, HUMAN)
     author.write_library("shared.md", "first")
     result = author.write_library("shared.md", "second", expected_hash="0" * 16)
     assert result["conflict"] is True
     assert result["current_content"] == "first"
 
 
-def test_agent_library_write_emits_one_update_and_conflicts_emit_none(world) -> None:
+def test_human_library_write_emits_one_update_and_conflicts_emit_none(world) -> None:
     emitted = []
     author = tools_for(
-        world, MAIN, on_change=lambda name, payload: emitted.append((name, payload))
+        world, HUMAN, on_change=lambda name, payload: emitted.append((name, payload))
     )
     written = author.write_library("shared.md", "first")
     assert emitted == [("library.updated", written)]
@@ -643,7 +638,7 @@ def test_agent_library_write_emits_one_update_and_conflicts_emit_none(world) -> 
 
 
 def test_memory_is_private_to_each_agent(world) -> None:
-    tools_for(world, MAIN).write_memory("notes.md", "mine")
+    world.memory_tree_for(MAIN).write("notes.md", "mine")
     assert [item["path"] for item in tools_for(world, OTHER).list_memory()] == [
         "MEMORY.md"
     ]
@@ -651,7 +646,7 @@ def test_memory_is_private_to_each_agent(world) -> None:
 
 
 def test_library_is_shared_across_members(world) -> None:
-    tools_for(world, MAIN).write_library("shared.md", "for everyone")
+    tools_for(world, HUMAN).write_library("shared.md", "for everyone")
     assert (
         tools_for(world, OTHER).read_library("shared.md")["content"] == "for everyone"
     )
@@ -722,14 +717,11 @@ def test_a_turn_records_what_it_produced(world) -> None:
     discussion = tools.create_discussion("Work", [OTHER])["id"]
     sent = tools.send_message(discussion, "Starting now")["id"]
     tools.run([sys.executable, "-c", "print('hi')"])
-    tools.write_library("notes.md", "content")
+    world.memory_tree_for(MAIN).write("notes.md", "content")
+    tools.edit("memory/notes.md", "content", "updated")
 
     recorded = world.history.effects(MAIN, sequences=[1])
-    assert [item.tool for item in recorded] == [
-        "send",
-        "run",
-        "library.write",
-    ]
+    assert [item.tool for item in recorded] == ["send", "run", "edit"]
     assert str(sent) in recorded[0].summary
 
 
@@ -756,8 +748,10 @@ def test_an_acknowledging_turn_is_not_counted_as_productive(world) -> None:
     assert not is_productive([item.tool for item in recorded])
 
 
-@pytest.mark.skipif(sys.platform == "win32", reason="POSIX shell")
-def test_library_run_records_effects_and_emits_each_changed_file(world) -> None:
+@pytest.mark.parametrize("exit_code", [0, 3])
+def test_run_records_effects_and_emits_each_changed_library_file(
+    world, exit_code
+) -> None:
     emitted = []
     tools = tools_for(
         world,
@@ -765,70 +759,104 @@ def test_library_run_records_effects_and_emits_each_changed_file(world) -> None:
         turn=TurnBinding(MAIN, 1),
         on_change=lambda name, payload: emitted.append((name, payload)),
     )
-    tools.write_library("changed.txt", "before")
-    tools.write_library("removed.txt", "gone")
-    tools.write_library("unchanged.txt", "same")
-    emitted.clear()
-    result = tools.run_library(
-        ["sh", "-c", "echo new > added.txt; echo after > changed.txt; rm removed.txt"]
+    for name, content in (
+        ("changed.txt", "before"),
+        ("removed.txt", "gone"),
+        ("unchanged.txt", "same"),
+    ):
+        world.library_tree.write(name, content)
+    result = tools.run(
+        [
+            sys.executable,
+            "-c",
+            (
+                "from pathlib import Path; import sys; "
+                "Path('added.txt').write_text('new'); "
+                "Path('changed.txt').write_text('after'); "
+                "Path('removed.txt').unlink(); "
+                "Path('binary').write_bytes(bytes([255])); "
+                f"sys.exit({exit_code})"
+            ),
+        ],
+        cwd=str(world.library_tree.root),
     )
-    assert result == {"exit_code": 0, "stdout": "", "stderr": "", "truncated": False}
+    assert result == {
+        "exit_code": exit_code,
+        "stdout": "",
+        "stderr": "",
+        "truncated": False,
+    }
     assert emitted == [
         (
             "library.updated",
             {"path": "added.txt", "hash": tools.read_library("added.txt")["hash"]},
         ),
+        ("library.updated", {"path": "binary", "hash": None}),
         (
             "library.updated",
             {"path": "changed.txt", "hash": tools.read_library("changed.txt")["hash"]},
         ),
         ("library.updated", {"path": "removed.txt", "deleted": True}),
     ]
-    effect = world.history.effects(MAIN, sequences=[1])[-1]
-    assert effect.tool == "library.run"
-    assert "sh -c echo new" in effect.summary and "exited 0" in effect.summary
+    (effect,) = world.history.effects(MAIN, sequences=[1])
+    assert effect.tool == "run" and f"exited {exit_code}" in effect.summary
     assert world.execution.snapshot().write_directories == ()
 
 
-def test_library_run_forwards_only_the_library_root_for_each_cwd(
-    world, monkeypatch
+@pytest.mark.parametrize("member_id", [MAIN, OTHER])
+def test_run_and_edit_add_existing_implicit_roots_to_current_configuration(
+    world, tmp_path, monkeypatch, member_id
 ) -> None:
-    tools = tools_for(world, MAIN)
-    root = world.library_tree.root
-    tools.mkdir_library("nested")
-    calls = []
+    tools = tools_for(world, member_id)
+    memory = tmp_path / "agents" / str(member_id) / "memory"
+    library = world.library_tree.root
+    library.rmdir()
+    assert not memory.exists() and not library.exists()
+    configured = tmp_path / "configured"
+    configured.mkdir()
     environment = world.execution.snapshot()
+    calls = []
 
     def run(argv, **params):
-        calls.append((argv, params))
-        return RunResult(3, "output", "error", True)
+        assert memory.is_dir() and library.is_dir()
+        calls.append(("run", argv, params))
+        return RunResult(0, "", "", False)
+
+    def edit(path, old_text, new_text, **params):
+        assert memory.is_dir() and library.is_dir()
+        calls.append(("edit", path, params))
+        return EditResult(path, "", 1)
 
     monkeypatch.setattr(environment, "run", run)
+    monkeypatch.setattr(environment, "edit", edit)
     monkeypatch.setattr(world.execution, "snapshot", lambda: environment)
-    for cwd, directory in (
-        (None, root),
-        ("nested", root / "nested"),
-        (str(root / "nested"), root / "nested"),
-    ):
-        assert tools.run_library(["command"], cwd=cwd, timeout=7) == {
-            "exit_code": 3,
-            "stdout": "output",
-            "stderr": "error",
-            "truncated": True,
-        }
-        assert calls[-1] == (
-            ["command"],
-            {"cwd": str(directory), "timeout": 7, "write_directories": [str(root)]},
-        )
-    for cwd in (str(root.parent), "..", "missing"):
-        with pytest.raises(DomainError) as error:
-            tools.run_library(["command"], cwd=cwd)
-        assert error.value.code == "invalid_cwd"
-    assert len(calls) == 3
+    for roots in ([str(configured)], []):
+        world.execution.configure({"write_directories": roots}, lambda values: None)
+        tools.run(["command"], timeout=7)
+        tools.edit("memory/MEMORY.md", "old", "new", replace_all=True)
+        expected = [*roots, str(memory), str(library)]
+        assert calls[-2:] == [
+            (
+                "run",
+                ["command"],
+                {
+                    "cwd": str(memory.parent),
+                    "timeout": 7,
+                    "write_directories": expected,
+                },
+            ),
+            (
+                "edit",
+                str(memory / "MEMORY.md"),
+                {"replace_all": True, "write_directories": expected},
+            ),
+        ]
+        assert environment.write_directories == tuple(roots)
 
 
-def test_library_run_emits_partial_changes_on_execution_error(
-    world, monkeypatch
+@pytest.mark.parametrize("operation", ["run", "edit"])
+def test_execution_emits_partial_library_changes_on_error(
+    world, monkeypatch, operation
 ) -> None:
     emitted = []
     tools = tools_for(
@@ -836,28 +864,101 @@ def test_library_run_emits_partial_changes_on_execution_error(
     )
     environment = world.execution.snapshot()
 
-    def run(*args, **params):
+    def fail(*args, **params):
         world.library_tree.write("partial.txt", "partial")
         raise DomainError("timeout", "Command timed out")
 
-    monkeypatch.setattr(environment, "run", run)
+    monkeypatch.setattr(environment, operation, fail)
     monkeypatch.setattr(world.execution, "snapshot", lambda: environment)
     with pytest.raises(DomainError, match="timed out"):
-        tools.run_library(["command"])
+        if operation == "run":
+            tools.run(["command"])
+        else:
+            tools.edit(str(world.library_tree.root / "partial.txt"), "old", "new")
     assert emitted == [
         (
             "library.updated",
             {"path": "partial.txt", "hash": tools.read_library("partial.txt")["hash"]},
-        )
+        ),
     ]
 
 
-def test_library_mutations_emit_path_deltas_and_record_effects(world) -> None:
+def test_edit_emits_library_changes_but_memory_run_and_edit_do_not(world) -> None:
+    emitted = []
+    tools = tools_for(
+        world, MAIN, on_change=lambda name, payload: emitted.append((name, payload))
+    )
+    world.library_tree.write("note.txt", "before")
+    tools.edit(str(world.library_tree.root / "note.txt"), "before", "after")
+    assert emitted == [
+        (
+            "library.updated",
+            {"path": "note.txt", "hash": tools.read_library("note.txt")["hash"]},
+        )
+    ]
+    emitted.clear()
+    result = tools.run(
+        [
+            sys.executable,
+            "-c",
+            "from pathlib import Path; Path('memory/note.md').write_text('private')",
+        ]
+    )
+    assert result["exit_code"] == 0
+    tools.edit("memory/note.md", "private", "updated")
+    assert tools.read_memory("note.md")["content"] == "updated"
+    assert emitted == []
+
+
+@pytest.mark.skipif(
+    not sys.platform.startswith("linux"), reason="Linux filesystem sandbox"
+)
+def test_agent_run_writes_only_configured_and_implicit_roots(world, tmp_path) -> None:
+    configured = tmp_path / "configured"
+    configured.mkdir()
+    other_memory = world.memory_tree_for(OTHER).root
+    world.execution.close()
+    world.execution = ExecutionManager(
+        settings={"directories": {"native": [str(configured)]}}
+    )
+    library = world.library_tree.root
+    result = tools_for(world, MAIN).run(
+        [
+            sys.executable,
+            "-c",
+            (
+                "from pathlib import Path; import sys; "
+                "[Path(path).write_text('allowed') for path in sys.argv[1:]]"
+            ),
+            "memory/note.md",
+            str(library / "shared.txt"),
+            str(configured / "work.txt"),
+        ]
+    )
+    assert result["exit_code"] == 0, result["stderr"]
+    for root in (world.memory_tree_for(MAIN).root, library, configured):
+        assert any(path.read_text() == "allowed" for path in root.iterdir())
+    for path in (
+        world.agent_directory_for(MAIN) / "outside.txt",
+        other_memory / "private.md",
+    ):
+        denied = tools_for(world, MAIN).run(
+            [
+                sys.executable,
+                "-c",
+                "from pathlib import Path; import sys; Path(sys.argv[1]).write_text('denied')",
+                str(path),
+            ]
+        )
+        assert denied["exit_code"] != 0 and not path.exists()
+    assert world.execution.snapshot().write_directories == (str(configured),)
+
+
+def test_human_library_mutations_emit_path_deltas(world) -> None:
     emitted = []
     tools = tools_for(
         world,
-        MAIN,
-        turn=TurnBinding(MAIN, 1),
+        HUMAN,
         on_change=lambda name, payload: emitted.append((name, payload)),
     )
     assert tools.mkdir_library("notes") == {"path": "notes", "hash": None}
@@ -874,21 +975,13 @@ def test_library_mutations_emit_path_deltas_and_record_effects(world) -> None:
         ("library.updated", {"path": "renamed", "hash": None}),
         ("library.updated", {"path": "renamed", "deleted": True}),
     ]
-    assert [effect.tool for effect in world.history.effects(MAIN, sequences=[1])] == [
-        "library.mkdir",
-        "library.write",
-        "library.edit",
-        "library.move",
-        "library.delete",
-    ]
+    assert world.history.effects(MAIN) == ()
 
 
 def test_humans_can_read_other_agents_memory_but_agents_cannot(world) -> None:
     tools = tools_for(world, MAIN)
-    tools.mkdir_memory("topics")
-    tools.write_memory("topics/note.md", "private")
-    tools.edit_memory("topics/note.md", "private", "updated")
-    tools.move_memory("topics", "notes")
+    tree = world.memory_tree_for(MAIN)
+    tree.write("notes/note.md", "updated")
     human = tools_for(world, HUMAN)
     assert [entry["path"] for entry in human.list_memory(agent_id=MAIN)] == [
         "MEMORY.md",
@@ -908,7 +1001,7 @@ def test_humans_can_read_other_agents_memory_but_agents_cannot(world) -> None:
             error.value.code == "not_allowed"
             and str(error.value) == "Memory is private"
         )
-    tools.delete_memory("notes")
+    tree.delete("notes")
     assert [entry["path"] for entry in human.list_memory(agent_id=MAIN)] == [
         "MEMORY.md"
     ]
@@ -919,10 +1012,8 @@ def test_humans_can_read_other_agents_memory_but_agents_cannot(world) -> None:
     [
         ("edit_library", ("doc.txt", "old", "new"), "library.edit"),
         ("mkdir_library", ("folder",), "library.mkdir"),
-        ("run_library", (["echo"],), "library.run"),
-        ("edit_memory", ("doc.md", "old", "new"), "memory.edit"),
-        ("mkdir_memory", ("folder",), "memory.mkdir"),
-        ("move_memory", ("old.md", "new.md"), "memory.move"),
+        ("run", (["echo"],), "run"),
+        ("edit", ("memory/doc.md", "old", "new"), "edit"),
     ],
 )
 def test_tree_capabilities_are_checked_before_changes(

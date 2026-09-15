@@ -82,12 +82,17 @@ class LocalExecution:
                 access.close()
             self._windows.clear()
 
-    def describe_environment(self) -> str:
-        listing = "\n".join(f"- {item}" for item in self.write_directories) or "- none"
+    def describe_environment(self, labeled: Sequence[tuple[str, str]] = ()) -> str:
+        entries = [f"- {path} ({label})" for path, label in labeled]
+        entries.extend(f"- {item}" for item in self.write_directories)
+        listing = "\n".join(entries) or "- none"
         return (
             f"Execution environment: native ({sys.platform})\n"
             f"Writable directories:\n{listing}"
         )
+
+    def execution_path(self, path: str) -> str:
+        return path
 
     def _wrap(
         self, argv: Sequence[str], cwd: Path, roots: tuple[Path, ...]
@@ -197,12 +202,22 @@ class LocalExecution:
         )
 
     def edit(
-        self, path: str, old_text: str, new_text: str, *, replace_all: bool = False
+        self,
+        path: str,
+        old_text: str,
+        new_text: str,
+        *,
+        replace_all: bool = False,
+        write_directories: Sequence[str] | None = None,
     ) -> EditResult:
         return edit_file(
             path,
             old_text,
             new_text,
-            directories=list(self.write_directories),
+            directories=list(
+                self.write_directories
+                if write_directories is None
+                else write_directories
+            ),
             replace_all=replace_all,
         )

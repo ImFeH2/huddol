@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 
 from huddol.adapters.execution.manager import ExecutionManager
+from huddol.adapters.execution.wsl import WslConnection
 from huddol.adapters.files.tree import DirectoryTree
 from huddol.adapters.sqlite.agent import SqliteAgentStore
 from huddol.adapters.sqlite.store import SqliteStore
@@ -652,18 +653,12 @@ def test_resident_is_persisted_and_stays_unchanged_until_a_reset(
     )
     scheduler = Scheduler(world, runner)
     tools = scheduler.tools_for(MAIN)
-    memory = tools.write_memory(
-        "MEMORY.md",
-        "MEMORY_STATE_OLD",
-        expected_hash=tools.read_memory("MEMORY.md")["hash"],
-    )
+    world.memory_tree_for(MAIN).write("MEMORY.md", "MEMORY_STATE_OLD")
     old_todo = tools.add_todo("TASK_STATE_OLD")
 
     for turn, state in enumerate(("OLD", "NEW"), start=1):
         if state == "NEW":
-            tools.write_memory(
-                "MEMORY.md", "MEMORY_STATE_NEW", expected_hash=memory["hash"]
-            )
+            tools.edit("memory/MEMORY.md", "MEMORY_STATE_OLD", "MEMORY_STATE_NEW")
             tools.complete_todo(old_todo["id"])
             tools.add_todo("TASK_STATE_NEW")
         reminder = build_reminder(world.store, world.history, MAIN, "Main")
@@ -784,7 +779,10 @@ def test_history_is_preserved_or_reset_without_rewriting_old_prompts(
         assert len(key) == 32
         assert saved[: len(prior)] == prior
         assert saved[-2].metadata == {
-            "huddol": {"block": "durable", "environment": scheduler.environment_facts()}
+            "huddol": {
+                "block": "durable",
+                "environment": scheduler.environment_facts(MAIN),
+            }
         }
     assert saved[1 if reset else len(prior)].parts[0].content == reminder.render()
     assert saved[-1].parts[0].content == "New response"
@@ -806,8 +804,68 @@ def test_resident_carries_memory_todo_details_and_environment(
         "Your MEMORY.md:\n- prior knowledge\n\n"
         "Todos:\n- [ ] 1. unfinished work\n  detail\n\n"
         f"Execution environment: native ({sys.platform})\n"
-        f"Writable directories:\n- {tmp_path}"
+        "Writable directories:\n"
+        f"- {world.memory_tree_for(MAIN).root} (your Memory, private, Markdown)\n"
+        f"- {world.library_tree.root} (Library, shared with the whole organization)\n"
+        f"- {tmp_path}"
     )
+
+
+def test_resident_paths_are_translated_by_the_execution_environment(
+    world, monkeypatch
+) -> None:
+    memory = world.memory_tree_for(MAIN).root
+    library = world.library_tree.root
+    paths = {
+        str(memory): "/mnt/c/data/agents/2/memory",
+        str(library): "/mnt/c/data/library",
+    }
+    translated = []
+
+    def translate(argv):
+        translated.append(argv[-1])
+        return (paths[argv[-1]] + "\n").encode()
+
+    monkeypatch.setattr("huddol.adapters.execution.wsl.wsl_output", translate)
+    connection = WslConnection("test", ["/mnt/c/work"])
+    monkeypatch.setattr(world.execution, "snapshot", lambda: connection)
+    try:
+        context = Scheduler(world, RecordingRunner()).resident_block(MAIN)
+    finally:
+        connection.close()
+    assert context.endswith(
+        "Execution environment: WSL (test)\nWritable directories:\n"
+        "- /mnt/c/data/agents/2/memory (your Memory, private, Markdown)\n"
+        "- /mnt/c/data/library (Library, shared with the whole organization)\n"
+        "- /mnt/c/work"
+    )
+    assert translated == [str(memory), str(library)]
+
+
+@pytest.mark.parametrize("error_kind", ["os", "domain"])
+def test_resident_renders_when_memory_index_creation_fails(
+    world, monkeypatch, error_kind
+) -> None:
+    from huddol.core.errors import DomainError
+
+    tree = world.memory_tree_for(MAIN)
+
+    def fail(*args, **kwargs):
+        if error_kind == "os":
+            raise OSError("Read-only filesystem")
+        raise DomainError("invalid_path", "Cannot create index")
+
+    monkeypatch.setattr(tree, "write", fail)
+    monkeypatch.setattr(world, "memory_tree_for", lambda agent_id: tree)
+    mention(world)
+    runner = RecordingRunner()
+    record = Scheduler(world, runner).run_turn(MAIN)
+    assert record.status == "completed"
+    assert runner.requests[0].resident.startswith(
+        "Your MEMORY.md is empty.\n\nTodos: none"
+    )
+    assert "(your Memory, private, Markdown)" in runner.requests[0].resident
+    assert not (tree.root / "MEMORY.md").exists()
 
 
 @pytest.mark.parametrize("environment", [None, "environment facts"])
