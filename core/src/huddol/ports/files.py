@@ -11,7 +11,6 @@ class TreeEntry:
     kind: Literal["file", "directory"]
     size: int
     modified_at: str
-    content_hash: str | None
 
 
 class ConflictError(Exception):

@@ -45,14 +45,12 @@ const entries: LibraryEntry[] = [
   {
     path: "notes",
     kind: "directory",
-    hash: null,
     size: 0,
     modified_at: "2026-01-01T00:00:00Z",
   },
   {
     path: "notes/MEMORY.md",
     kind: "file",
-    hash: "hash",
     size: 5,
     modified_at: "2026-01-01T00:00:00Z",
   },
@@ -148,11 +146,11 @@ describe("Memory tree", () => {
     expect(html).not.toContain("Actions");
   });
 
-  it("opens readable files in read-only mode and suppresses all actions", () => {
+  it("opens files without hashes in read-only mode and suppresses all actions", () => {
     const html = renderToStaticMarkup(
       <TooltipProvider>
         <TreeView
-          entries={entries}
+          entries={[...entries, { ...entries[1], path: "notes/.image.png" }]}
           expanded={new Set(["notes"])}
           onToggle={() => {}}
           onOpen={() => {}}
@@ -163,7 +161,9 @@ describe("Memory tree", () => {
         />
       </TooltipProvider>,
     );
-    expect(html).toContain("MEMORY.md");
+    const buttons = html.match(/<button\b[^>]*>[\s\S]*?<\/button>/g) ?? [];
+    expect(buttons.join("")).toContain(">MEMORY.md<");
+    expect(buttons.join("")).toContain(">.image.png<");
     expect(html).toContain('aria-expanded="true"');
     expect(html).not.toContain("Delete");
     expect(html).not.toContain("Actions");

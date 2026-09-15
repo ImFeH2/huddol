@@ -71,7 +71,7 @@ def server(tmp_path: Path):
         ),
         library_tree=DirectoryTree(tmp_path / "library"),
         memory_tree_for=lambda member_id: DirectoryTree(
-            tmp_path / "agents" / str(member_id) / "memory", markdown_only=True
+            tmp_path / "agents" / str(member_id) / "memory"
         ),
     )
     output = Capture()
@@ -722,7 +722,13 @@ def test_library_directory_operations_and_memory_read_protocol(server) -> None:
         ("renamed", "directory"),
         ("renamed/note.txt", "file"),
     ]
-    assert entries[1]["hash"] == edited["hash"]
+    assert all("hash" not in entry for entry in entries)
+    assert (
+        call(dispatcher, output, "library.read", path="renamed/note.txt")["result"][
+            "hash"
+        ]
+        == edited["hash"]
+    )
     assert call(dispatcher, output, "library.delete", path="renamed")["result"] == {
         "path": "renamed",
         "deleted": True,
@@ -730,6 +736,7 @@ def test_library_directory_operations_and_memory_read_protocol(server) -> None:
     assert call(dispatcher, output, "library.list")["result"] == []
     deps.memory_tree_for(agent_id).write("topics/note.md", "private")
     memory = call(dispatcher, output, "memory.list", agent_id=agent_id)["result"]
+    assert all("hash" not in entry for entry in memory)
     assert [(entry["path"], entry["kind"]) for entry in memory] == [
         ("MEMORY.md", "file"),
         ("topics", "directory"),

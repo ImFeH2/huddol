@@ -41,7 +41,7 @@ def world(tmp_path: Path):
         agent_directory_for=agent_directory_for,
         library_tree=DirectoryTree(tmp_path / "library"),
         memory_tree_for=lambda member_id: DirectoryTree(
-            tmp_path / "agents" / str(member_id) / "memory", markdown_only=True
+            tmp_path / "agents" / str(member_id) / "memory"
         ),
     )
     yield deps
@@ -976,6 +976,25 @@ def test_human_library_mutations_emit_path_deltas(world) -> None:
         ("library.updated", {"path": "renamed", "deleted": True}),
     ]
     assert world.history.effects(MAIN) == ()
+
+
+@pytest.mark.parametrize("content", [b"text", b"\xff"], ids=["text", "binary"])
+def test_human_file_moves_preserve_update_hashes(world, content) -> None:
+    emitted = []
+    tools = tools_for(
+        world,
+        HUMAN,
+        on_change=lambda name, payload: emitted.append((name, payload)),
+    )
+    (world.library_tree.root / ".source").write_bytes(content)
+    moved = tools.move_library(".source", ".destination")
+    digest = tools.read_library(".destination")["hash"] if content == b"text" else None
+    assert moved == {"path": ".destination", "hash": digest}
+    assert emitted == [
+        ("library.updated", {"path": ".source", "deleted": True}),
+        ("library.updated", moved),
+    ]
+    assert "hash" not in tools.list_library()[0]
 
 
 def test_humans_can_read_other_agents_memory_but_agents_cannot(world) -> None:

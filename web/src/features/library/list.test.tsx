@@ -13,35 +13,30 @@ const entries: LibraryEntry[] = [
     path: "runbooks",
     kind: "directory",
     size: 0,
-    hash: null,
     modified_at: "2026-01-01T00:00:00Z",
   },
   {
     path: "runbooks/deep",
     kind: "directory",
     size: 0,
-    hash: null,
     modified_at: "2026-01-01T00:00:00Z",
   },
   {
     path: "runbooks/deep/notes.md",
     kind: "file",
     size: 1200,
-    hash: "hash",
     modified_at: "2026-01-01T00:00:00Z",
   },
   {
     path: "runbooks/image.png",
     kind: "file",
     size: 2048,
-    hash: null,
     modified_at: "2026-01-01T00:00:00Z",
   },
   {
     path: "empty",
     kind: "directory",
     size: 0,
-    hash: null,
     modified_at: "2026-01-01T00:00:00Z",
   },
 ];
@@ -87,11 +82,11 @@ describe("Library tree", () => {
     expect(render(["runbooks", "runbooks/deep"])).toContain("notes.md");
   });
 
-  it("does not link unreadable files but keeps their actions and size", () => {
+  it("links all files without content hashes and keeps their actions and size", () => {
     const html = render([], "image");
-    expect(html).toContain("Unreadable");
+    expect(html).not.toContain("Unreadable");
     const buttons = html.match(/<button\b[^>]*>[\s\S]*?<\/button>/g) ?? [];
-    expect(buttons.join("")).not.toContain(">image.png<");
+    expect(buttons.join("")).toContain(">image.png<");
     expect(html).toContain('aria-label="Actions for runbooks/image.png"');
     expect(html).toContain("2.0 kB");
   });

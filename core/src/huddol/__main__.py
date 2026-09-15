@@ -183,7 +183,7 @@ def main(argv: list[str] | None = None) -> int:
         agent_directory_for=agent_directory_for,
         library_tree=DirectoryTree(directory / "library"),
         memory_tree_for=lambda member_id: DirectoryTree(
-            directory / "agents" / str(member_id) / "memory", markdown_only=True
+            directory / "agents" / str(member_id) / "memory"
         ),
     )
 

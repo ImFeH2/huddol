@@ -65,7 +65,7 @@ def world(tmp_path: Path):
         ),
         library_tree=DirectoryTree(tmp_path / "library"),
         memory_tree_for=lambda member_id: DirectoryTree(
-            tmp_path / "agents" / str(member_id) / "memory", markdown_only=True
+            tmp_path / "agents" / str(member_id) / "memory"
         ),
     )
     yield deps
@@ -793,7 +793,7 @@ def test_resident_carries_memory_todo_details_and_environment(
     world, tmp_path: Path
 ) -> None:
     mention(world)
-    DirectoryTree(world.memory_tree_for(MAIN).root, markdown_only=True).write(
+    DirectoryTree(world.memory_tree_for(MAIN).root).write(
         "MEMORY.md", "- prior knowledge"
     )
     world.todos.add_todo(MAIN, "unfinished work", "detail")

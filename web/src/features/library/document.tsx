@@ -59,7 +59,9 @@ export function DocumentUnavailable({
   return (
     <EmptyState
       title={
-        code === "not_readable" ? "Cannot open this file" : "Document not found"
+        code === "not_readable"
+          ? "Cannot read this file as UTF-8 text"
+          : "Document not found"
       }
     />
   );

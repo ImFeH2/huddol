@@ -1,5 +1,6 @@
+import { useState } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { RouterProvider } from "@/app/router";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import {
@@ -7,6 +8,13 @@ import {
   DocumentUnavailable,
   documentCrumbs,
 } from "@/features/library/document";
+
+vi.mock("react", async (importOriginal) => {
+  const react = await importOriginal<typeof import("react")>();
+  return { ...react, useState: vi.fn(react.useState) };
+});
+
+afterEach(() => vi.clearAllMocks());
 
 function render(path: string) {
   return renderToStaticMarkup(
@@ -50,11 +58,42 @@ describe("document hierarchy", () => {
 });
 
 describe("document read failures", () => {
+  it.each(["not_found", "not_readable"] as const)(
+    "keeps the return path and removes the editor after %s",
+    (code) => {
+      function FailedDocument() {
+        vi.mocked(useState)
+          .mockReturnValueOnce([null, vi.fn()])
+          .mockReturnValueOnce(["", vi.fn()])
+          .mockReturnValueOnce([code, vi.fn()]);
+        return <DocumentPage path="assets/image.png" />;
+      }
+      const html = renderToStaticMarkup(
+        <TooltipProvider>
+          <RouterProvider>
+            <FailedDocument />
+          </RouterProvider>
+        </TooltipProvider>,
+      );
+      expect(html).toContain('aria-label="Breadcrumb"');
+      expect(html).toContain(">Library</button>");
+      expect(html).toContain(">assets</button>");
+      expect(html).toContain('<span aria-current="page">image.png</span>');
+      expect(html).toContain(
+        code === "not_readable"
+          ? "Cannot read this file as UTF-8 text"
+          : "Document not found",
+      );
+      expect(html).not.toContain("textarea");
+      expect(html).not.toContain(">Save</button>");
+    },
+  );
+
   it("shows only the not_readable title", () => {
     const html = renderToStaticMarkup(
       <DocumentUnavailable code="not_readable" />,
     );
-    expect(html).toContain("<h3>Cannot open this file</h3>");
+    expect(html).toContain("<h3>Cannot read this file as UTF-8 text</h3>");
     expect(html).not.toContain("<p");
     expect(html).not.toContain("textarea");
   });

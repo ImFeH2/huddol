@@ -430,11 +430,9 @@ class AgentTools:
                 if path not in after:
                     self._changed("library.updated", {"path": path, "deleted": True})
                     continue
-                try:
-                    digest: str | None = library.read(path).content_hash
-                except DomainError:
-                    digest = None
-                self._changed("library.updated", {"path": path, "hash": digest})
+                self._changed(
+                    "library.updated", {"path": path, "hash": self._library_hash(path)}
+                )
 
     def run(
         self,
@@ -544,7 +542,6 @@ class AgentTools:
                 "kind": item.kind,
                 "size": item.size,
                 "modified_at": item.modified_at,
-                "hash": item.content_hash,
             }
             for item in self._memory(agent_id).list(path)
         ]
@@ -557,6 +554,12 @@ class AgentTools:
     def _library(self) -> Library:
         return Library(self._deps.library_tree)
 
+    def _library_hash(self, path: str) -> str | None:
+        try:
+            return self._library().read(path).content_hash
+        except DomainError:
+            return None
+
     def list_library(self, path: str | None = None) -> list[dict[str, Any]]:
         self._check("library.list")
         return [
@@ -565,7 +568,6 @@ class AgentTools:
                 "kind": item.kind,
                 "size": item.size,
                 "modified_at": item.modified_at,
-                "hash": item.content_hash,
             }
             for item in self._library().list(path)
         ]
@@ -595,7 +597,8 @@ class AgentTools:
             }
         self._record("library.write", entry.path)
         return self._changed(
-            "library.updated", {"path": entry.path, "hash": entry.content_hash}
+            "library.updated",
+            {"path": entry.path, "hash": self._library_hash(entry.path)},
         )
 
     def edit_library(
@@ -607,7 +610,8 @@ class AgentTools:
         )
         self._record("library.edit", entry.path)
         updated = self._changed(
-            "library.updated", {"path": entry.path, "hash": entry.content_hash}
+            "library.updated",
+            {"path": entry.path, "hash": self._library_hash(entry.path)},
         )
         return {**updated, "diff": diff}
 
@@ -615,9 +619,7 @@ class AgentTools:
         self._check("library.mkdir", path)
         entry = self._library().mkdir(path)
         self._record("library.mkdir", entry.path)
-        return self._changed(
-            "library.updated", {"path": entry.path, "hash": entry.content_hash}
-        )
+        return self._changed("library.updated", {"path": entry.path, "hash": None})
 
     def delete_library(self, path: str) -> dict[str, Any]:
         self._check("library.delete", path)
@@ -631,7 +633,8 @@ class AgentTools:
         self._record("library.move", f"{source} to {entry.path}")
         self._changed("library.updated", {"path": source, "deleted": True})
         return self._changed(
-            "library.updated", {"path": entry.path, "hash": entry.content_hash}
+            "library.updated",
+            {"path": entry.path, "hash": self._library_hash(entry.path)},
         )
 
     def _history(self) -> History:

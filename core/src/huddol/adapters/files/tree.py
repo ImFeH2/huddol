@@ -11,26 +11,22 @@ from huddol.adapters.execution.editing import edit_file
 from huddol.core.errors import DomainError
 from huddol.ports.files import ConflictError, TreeEntry
 
-MAX_FILE_BYTES = 1_000_000
-ALLOWED_SUFFIX = ".md"
-
 
 def content_hash(content: str) -> str:
     return hashlib.sha256(content.encode("utf-8")).hexdigest()[:16]
 
 
 class DirectoryTree:
-    def __init__(self, root: Path | str, *, markdown_only: bool = False) -> None:
+    def __init__(self, root: Path | str) -> None:
         self._root = Path(root).resolve()
         self._root.mkdir(parents=True, exist_ok=True)
-        self._markdown_only = markdown_only
 
     @property
     def root(self) -> Path:
         return self._root
 
     def _resolve(
-        self, path: str, *, file: bool = False, allow_root: bool = False
+        self, path: str, *, allow_root: bool = False, follow_symlinks: bool = True
     ) -> Path:
         if not isinstance(path, str) or "\0" in path:
             raise DomainError("invalid_path", "Path must be a string without NUL")
@@ -43,54 +39,37 @@ class DirectoryTree:
         path = path.removeprefix("./")
         parts = path.replace("\\", "/").split("/")
         pure = PurePosixPath(path.replace("\\", "/"))
-        if (
-            PureWindowsPath(path).drive
-            or pure.is_absolute()
-            or any(part.startswith(".") for part in parts)
-        ):
-            raise DomainError("invalid_path", "Path must be relative and not hidden")
-        target = (self._root / pure).resolve()
+        if PureWindowsPath(path).drive or pure.is_absolute() or ".." in parts:
+            raise DomainError("invalid_path", "Path must be relative without '..'")
+        entry = self._root / pure
+        target = entry.resolve()
         if target == self._root or self._root not in target.parents:
             raise DomainError("invalid_path", "Path must stay inside the tree")
-        if any(part.startswith(".") for part in target.relative_to(self._root).parts):
-            raise DomainError("invalid_path", "Hidden paths are not allowed")
-        if (
-            self._markdown_only
-            and (file or target.is_file())
-            and (pure.suffix != ALLOWED_SUFFIX or target.suffix != ALLOWED_SUFFIX)
-        ):
-            raise DomainError("invalid_path", "Only Markdown files are allowed")
-        return target
+        return target if follow_symlinks else entry.parent.resolve() / entry.name
 
     def _relative(self, target: Path) -> str:
         return "" if target == self._root else target.relative_to(self._root).as_posix()
 
     def _content(self, target: Path) -> str:
         try:
-            with target.open("rb") as stream:
-                data = stream.read(MAX_FILE_BYTES + 1)
-            if len(data) > MAX_FILE_BYTES:
-                raise DomainError("not_readable", "File is too large")
-            return data.decode("utf-8")
+            return target.read_bytes().decode("utf-8")
         except (OSError, UnicodeDecodeError) as error:
             raise DomainError("not_readable", "File cannot be read as UTF-8") from error
 
     def _entry(self, target: Path) -> TreeEntry:
-        stat = target.stat()
+        try:
+            stat = target.stat()
+        except OSError:
+            if not target.is_symlink():
+                raise
+            stat = target.lstat()
         directory = target.is_dir()
-        digest = None
-        if not directory:
-            try:
-                digest = content_hash(self._content(target))
-            except DomainError:
-                pass
         modified = datetime.fromtimestamp(stat.st_mtime, UTC)
         return TreeEntry(
             path=self._relative(target),
             kind="directory" if directory else "file",
             size=0 if directory else stat.st_size,
             modified_at=modified.isoformat(timespec="seconds").replace("+00:00", "Z"),
-            content_hash=digest,
         )
 
     def list(self, path: str | None = None) -> tuple[TreeEntry, ...]:
@@ -98,22 +77,9 @@ class DirectoryTree:
         if not base.is_dir():
             return ()
         found = []
-        for directory, directories, files in base.walk():
-            directories[:] = sorted(
-                name
-                for name in directories
-                if not name.startswith(".") and not (directory / name).is_symlink()
-            )
+        for directory, directories, files in base.walk(follow_symlinks=False):
             for name in [*directories, *files]:
-                item = directory / name
-                if name.startswith(".") or item.is_symlink():
-                    continue
-                if (
-                    item.is_file()
-                    and (not self._markdown_only or item.suffix == ALLOWED_SUFFIX)
-                    or item.is_dir()
-                ):
-                    found.append(self._entry(item))
+                found.append(self._entry(directory / name))
         return tuple(sorted(found, key=lambda entry: entry.path.split("/")))
 
     def read(self, path: str) -> tuple[str, str]:
@@ -128,9 +94,7 @@ class DirectoryTree:
     ) -> TreeEntry:
         if not isinstance(content, str):
             raise DomainError("invalid_content", "Content must be a string")
-        if len(content.encode("utf-8")) > MAX_FILE_BYTES:
-            raise DomainError("invalid_content", "Content is too large")
-        target = self._resolve(path, file=True)
+        target = self._resolve(path)
         if target.is_dir():
             raise DomainError("invalid_path", "Path is a directory")
         if target.exists():
@@ -157,12 +121,8 @@ class DirectoryTree:
     def edit(
         self, path: str, old_text: str, new_text: str, *, replace_all: bool = False
     ) -> tuple[TreeEntry, str]:
-        original, _ = self.read(path)
-        if isinstance(old_text, str) and old_text and isinstance(new_text, str):
-            updated = original.replace(old_text, new_text, -1 if replace_all else 1)
-            if len(updated.encode("utf-8")) > MAX_FILE_BYTES:
-                raise DomainError("invalid_content", "Content is too large")
-        target = self._resolve(path, file=True)
+        self.read(path)
+        target = self._resolve(path)
         result = edit_file(
             str(target),
             old_text,
@@ -180,19 +140,19 @@ class DirectoryTree:
         return self._entry(target)
 
     def delete(self, path: str) -> None:
-        target = self._resolve(path)
-        if not target.exists():
+        target = self._resolve(path, follow_symlinks=False)
+        if not target.exists() and not target.is_symlink():
             raise DomainError("not_found", f"{path} does not exist")
-        if target.is_dir():
+        if target.is_dir() and not target.is_symlink():
             shutil.rmtree(target)
         else:
             target.unlink()
 
     def move(self, source: str, destination: str) -> TreeEntry:
-        origin = self._resolve(source)
-        if not origin.exists():
+        origin = self._resolve(source, follow_symlinks=False)
+        if not origin.exists() and not origin.is_symlink():
             raise DomainError("not_found", f"{source} does not exist")
-        target = self._resolve(destination, file=origin.is_file())
+        target = self._resolve(destination)
         if origin.is_dir() and (target == origin or origin in target.parents):
             raise DomainError("invalid_path", "Cannot move a directory into itself")
         if (

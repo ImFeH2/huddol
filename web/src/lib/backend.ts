@@ -98,7 +98,6 @@ export type LibraryEntry = {
   path: string;
   kind: "file" | "directory";
   size: number;
-  hash: string | null;
   modified_at: string;
 };
 

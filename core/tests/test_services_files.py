@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from huddol.adapters.files.tree import DirectoryTree
+from huddol.adapters.files.tree import DirectoryTree, content_hash
 from huddol.core.errors import DomainError
 from huddol.services.library import Library
 from huddol.services.memory import Memory
@@ -17,24 +17,46 @@ def library(tmp_path: Path) -> Library:
 
 @pytest.fixture
 def memory(tmp_path: Path) -> Memory:
-    return Memory(
-        DirectoryTree(tmp_path / "agents" / "13" / "memory", markdown_only=True)
-    )
+    return Memory(DirectoryTree(tmp_path / "agents" / "13" / "memory"))
 
 
 def test_library_round_trips_a_document(library: Library) -> None:
     entry = library.write("guides/onboarding.md", "welcome")
     document = library.read("guides/onboarding.md")
     assert document.content == "welcome"
-    assert document.content_hash == entry.content_hash
+    assert document.path == entry.path
+    assert document.content_hash == content_hash("welcome")
 
 
 def test_library_concurrent_edit_is_rejected_then_recoverable(library: Library) -> None:
-    first = library.write("shared.md", "v1")
+    library.write("shared.md", "v1")
+    first = library.read("shared.md")
     library.write("shared.md", "v2", expected_hash=first.content_hash)
     latest = library.read("shared.md")
     assert latest.content == "v2"
     assert library.write("shared.md", "v3", expected_hash=latest.content_hash)
+
+
+def test_memory_lists_non_markdown_and_hidden_files_without_changing_index(
+    memory,
+) -> None:
+    _, digest = memory.read("MEMORY.md")
+    memory.write("MEMORY.md", "remember", expected_hash=digest)
+    memory.write(".config/settings.json", "{}")
+    memory.write("notes.txt", "details")
+    (memory._tree.root / "image.png").write_bytes(b"\x89PNG\xff")
+    assert [entry.path for entry in memory.list()] == [
+        ".config",
+        ".config/settings.json",
+        "MEMORY.md",
+        "image.png",
+        "notes.txt",
+    ]
+    assert memory.read("notes.txt")[0] == "details"
+    with pytest.raises(DomainError) as error:
+        memory.read("image.png")
+    assert error.value.code == "not_readable"
+    assert memory.index(16_384) == "remember"
 
 
 def test_memory_index_is_empty_without_files(memory: Memory) -> None:
@@ -109,7 +131,8 @@ def test_memory_directory_operations_and_edit(memory: Memory) -> None:
     memory.mkdir("topics")
     memory.write("topics/note.md", "before")
     entry, diff = memory.edit("topics/note.md", "before", "after")
-    assert entry.content_hash == memory.read(entry.path)[1] and "+after" in diff
+    assert memory.read(entry.path) == ("after", content_hash("after"))
+    assert "+after" in diff
     memory.move("topics", "renamed")
     assert [item.path for item in memory.list("renamed")] == ["renamed/note.md"]
     memory.delete("renamed")
@@ -183,11 +206,11 @@ def test_memory_index_is_empty_when_creation_fails(memory, monkeypatch, error) -
 
 
 def test_unreadable_memory_index_does_not_hide_the_tree(tmp_path: Path) -> None:
-    tree = DirectoryTree(tmp_path / "memory", markdown_only=True)
+    tree = DirectoryTree(tmp_path / "memory")
     (tree.root / "MEMORY.md").write_bytes(b"\xff")
     memory = Memory(tree)
     (entry,) = memory.list()
-    assert entry.path == "MEMORY.md" and entry.content_hash is None
+    assert entry.path == "MEMORY.md" and entry.size == 1
     memory.write("other.md", "readable")
     assert memory.read("other.md")[0] == "readable"
     with pytest.raises(DomainError) as error:

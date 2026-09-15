@@ -5,12 +5,10 @@ import type { LibraryEntry } from "@/lib/backend";
 function entry(
   path: string,
   kind: LibraryEntry["kind"] = "file",
-  hash: string | null = "hash",
 ): LibraryEntry {
   return {
     path,
     kind,
-    hash: kind === "directory" ? null : hash,
     size: 12,
     modified_at: "2026-01-01T00:00:00Z",
   };
@@ -60,20 +58,15 @@ describe("buildTree", () => {
   });
 
   it("preserves empty folders and unreadable files", () => {
-    const tree = buildTree([
-      entry("empty", "directory"),
-      entry("binary.dat", "file", null),
-    ]);
+    const tree = buildTree([entry("empty", "directory"), entry("binary.dat")]);
     expect(tree[0]).toMatchObject({
       kind: "directory",
       children: [],
       fileCount: 0,
-      hash: null,
     });
     expect(tree[1]).toMatchObject({
       kind: "file",
       path: "binary.dat",
-      hash: null,
       fileCount: 1,
     });
     expect(buildTree([])).toEqual([]);

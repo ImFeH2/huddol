@@ -109,30 +109,21 @@ export function TreeView({
                       <FileText size={15} />
                     )}
                   </span>
-                  {folder || node.hash !== null ? (
-                    <RowLink
-                      primary={
-                        <span className="min-w-0 whitespace-normal wrap-anywhere">
-                          {documentName(node.path)}
-                        </span>
-                      }
-                      expanded={folder ? open : undefined}
-                      onSelect={() =>
-                        folder ? onToggle(node.path) : onOpen(node.path)
-                      }
-                    />
-                  ) : (
-                    <span className="min-w-0 whitespace-normal wrap-anywhere">
-                      {documentName(node.path)}
-                    </span>
-                  )}
+                  <RowLink
+                    primary={
+                      <span className="min-w-0 whitespace-normal wrap-anywhere">
+                        {documentName(node.path)}
+                      </span>
+                    }
+                    expanded={folder ? open : undefined}
+                    onSelect={() =>
+                      folder ? onToggle(node.path) : onOpen(node.path)
+                    }
+                  />
                   {folder ? (
                     <CountPill>
                       {node.fileCount.toLocaleString("en-US")}
                     </CountPill>
-                  ) : null}
-                  {!folder && node.hash === null ? (
-                    <Chip>Unreadable</Chip>
                   ) : null}
                 </div>
               </td>
