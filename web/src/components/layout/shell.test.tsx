@@ -9,10 +9,12 @@ import {
   RowLink,
   Shell,
   Sidebar,
+  SidebarBrand,
   Table,
 } from "@/components/layout/shell";
 import { Badge, Chip, IconButton } from "@/components/ui/index";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import brandIcon from "../../../../assets/icon.svg";
 
 describe("Shell", () => {
   it("places the sidebar beside the page without a notice slot", () => {
@@ -25,6 +27,20 @@ describe("Shell", () => {
     expect(html).toContain("<main>Draft editor</main>");
     expect(html).not.toContain("banner");
     expect(html).not.toContain('role="status"');
+  });
+});
+
+describe("SidebarBrand", () => {
+  it("shows the official icon and brand name without a summary or interaction", () => {
+    const html = renderToStaticMarkup(<SidebarBrand />);
+    const icon = renderToStaticMarkup(<img src={brandIcon} alt="" />);
+    expect(html.match(/<img\b[^>]*src="([^"]*)"/)?.[1]).toBe(
+      icon.match(/<img\b[^>]*src="([^"]*)"/)?.[1],
+    );
+    expect(html).toMatch(/<img\b[^>]*alt=""/);
+    expect(html).toMatch(/<span\b[^>]*>Huddol<\/span>/);
+    expect(html).not.toMatch(/Members?|running/);
+    expect(html).not.toMatch(/<(?:button|a)\b|tabindex=|aria-label=/);
   });
 });
 

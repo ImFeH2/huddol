@@ -1,6 +1,7 @@
 import { clsx } from "clsx";
 import { ArrowLeft } from "lucide-react";
 import { Children, type ReactNode, useRef } from "react";
+import brandIcon from "../../../../assets/icon.svg";
 
 const crumbClasses =
   "inline-flex items-center gap-1 self-start min-h-6 py-0 pr-2 pl-1 border-0 rounded-xs bg-transparent text-fg-muted text-xs font-medium cursor-pointer transition-[background-color,color] duration-(--duration-fast) ease-linear hover:bg-gray-800 hover:text-fg";
@@ -49,27 +50,11 @@ export function Sidebar({
   );
 }
 
-export function SidebarOrg({
-  name,
-  detail,
-  mark,
-}: {
-  name: string;
-  detail: ReactNode;
-  mark: ReactNode;
-}) {
+export function SidebarBrand() {
   return (
     <div className="flex items-center gap-3 pt-4 px-4 pb-3 min-w-0">
-      <span
-        className="flex items-center justify-center size-7 flex-none rounded-sm bg-blue-500 text-gray-0"
-        aria-hidden="true"
-      >
-        {mark}
-      </span>
-      <span className="flex flex-col min-w-0">
-        <span className="text-sm font-semibold truncate">{name}</span>
-        <span className="text-xs text-fg-muted truncate">{detail}</span>
-      </span>
+      <img src={brandIcon} alt="" className="size-7 flex-none" />
+      <span className="text-sm font-semibold truncate">Huddol</span>
     </div>
   );
 }

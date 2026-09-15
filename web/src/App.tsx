@@ -25,10 +25,9 @@ import {
   PageTransition,
   Shell,
   Sidebar,
-  SidebarOrg,
+  SidebarBrand,
 } from "@/components/layout/shell";
 import {
-  Avatar,
   Badge,
   IconButton,
   Spinner,
@@ -51,7 +50,6 @@ import {
   type DiscussionSummary,
   type Member,
 } from "@/lib/backend";
-import { plural } from "@/lib/format";
 import "@/styles/App.css";
 
 type Loaded = {
@@ -129,11 +127,7 @@ function Chrome({ loaded }: { loaded: Loaded }) {
             </Nav>
           }
         >
-          <SidebarOrg
-            name="Huddol"
-            detail={`${plural(loaded.members.length, "Member")} · ${running.size} running`}
-            mark={<Avatar name="Huddol" />}
-          />
+          <SidebarBrand />
           <Nav label="Sections">
             <NavItem
               icon={<MessagesSquare size={16} />}
