@@ -141,7 +141,7 @@ function AgentPage({
           label: "Members",
           onSelect: () => navigate({ name: "members" }),
         }}
-        leading={<Avatar name={member.name} size="lg" />}
+        leading={<Avatar memberId={member.id} size="lg" />}
         actions={
           <>
             <Button

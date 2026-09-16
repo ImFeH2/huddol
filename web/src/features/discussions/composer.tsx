@@ -141,7 +141,7 @@ export function Composer({
                     accept(member);
                   }}
                 >
-                  <Avatar name={member.name} size="sm" />
+                  <Avatar memberId={member.id} size="sm" />
                   <span
                     className={clsx(
                       "min-w-0 flex-1 truncate",

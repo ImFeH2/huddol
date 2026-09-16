@@ -223,7 +223,7 @@ export function MemberRow({
     <tr>
       <td>
         <div className="flex min-w-0 items-center gap-3">
-          <Avatar name={member.name} />
+          <Avatar memberId={member.id} />
           {agent ? (
             <RowLink primary={member.name} onSelect={onOpen} />
           ) : (

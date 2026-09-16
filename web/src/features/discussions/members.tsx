@@ -45,7 +45,7 @@ export function MemberPicker({
                   )
                 }
               />
-              <Avatar name={member.name} size="sm" />
+              <Avatar memberId={member.id} size="sm" />
               <span className="min-w-0 flex-1 truncate font-medium">
                 {member.name}
               </span>

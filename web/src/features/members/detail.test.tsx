@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { OrganizationProvider } from "@/app/organization";
 import { RouterProvider } from "@/app/router";
 import { ConfirmDialog } from "@/components/ui/dialog";
+import { Avatar } from "@/components/ui/index";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { TreeView } from "@/features/library/tree-view";
 import {
@@ -70,7 +71,7 @@ describe("Agent deletion", () => {
     const remove = vi
       .spyOn(backend, "deleteAgent")
       .mockResolvedValue({ id: 2 });
-    renderToStaticMarkup(
+    const html = renderToStaticMarkup(
       <TooltipProvider>
         <RouterProvider>
           <OrganizationProvider
@@ -87,6 +88,9 @@ describe("Agent deletion", () => {
           </OrganizationProvider>
         </RouterProvider>
       </TooltipProvider>,
+    );
+    expect(html).toContain(
+      renderToStaticMarkup(<Avatar memberId={2} size="lg" />),
     );
     const confirmation = vi.mocked(ConfirmDialog).mock.calls[0][0];
     expect(confirmation.title).toBe("Delete Helper?");

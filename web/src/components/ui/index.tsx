@@ -384,60 +384,76 @@ const HUES = [
   "var(--color-purple-300)",
 ];
 
-export function hueFor(name: string): string {
-  let total = 0;
-  for (let index = 0; index < name.length; index += 1) {
-    total = (total * 31 + name.charCodeAt(index)) >>> 0;
+export function identiconFor(memberId: number) {
+  let hash = 2166136261;
+  for (const character of String(memberId)) {
+    hash = Math.imul(hash ^ character.charCodeAt(0), 16777619);
   }
-  return HUES[total % HUES.length];
-}
+  hash = Math.imul(hash ^ (hash >>> 16), 0x85ebca6b);
+  hash = Math.imul(hash ^ (hash >>> 13), 0xc2b2ae35);
+  hash = (hash ^ (hash >>> 16)) >>> 0;
 
-export function initialsFor(name: string): string {
-  const words = name.trim().split(/\s+/).filter(Boolean);
-  if (words.length === 0) return "?";
-  if (words.length === 1) return words[0].slice(0, 2).toUpperCase();
-  return (words[0][0] + words[words.length - 1][0]).toUpperCase();
+  const cells: { x: number; y: number }[] = [];
+  for (let row = 0; row < 5; row += 1) {
+    for (let column = 0; column < 3; column += 1) {
+      if ((hash >>> (row * 3 + column)) & 1) {
+        cells.push({ x: column + 1, y: row + 1 });
+        if (column < 2) cells.push({ x: 5 - column, y: row + 1 });
+      }
+    }
+  }
+  return { cells, color: HUES[(hash >>> 15) % HUES.length] };
 }
 
 type AvatarSize = "xs" | "sm" | "md" | "lg";
 
 export function Avatar({
-  name,
+  memberId,
   size = "md",
 }: {
-  name: string;
+  memberId: number;
   size?: AvatarSize;
 }) {
+  const { cells, color } = identiconFor(memberId);
   return (
     <span
-      className={clsx(avatarClasses, avatarSizes[size], "text-gray-1100")}
-      style={{ background: hueFor(name) }}
+      className={clsx(avatarClasses, avatarSizes[size], "bg-surface")}
       aria-hidden="true"
     >
-      {initialsFor(name)}
+      <svg
+        viewBox="0 0 7 7"
+        className="size-full"
+        fill={color}
+        aria-hidden="true"
+        focusable="false"
+      >
+        {cells.map(({ x, y }) => (
+          <rect key={`${x},${y}`} x={x} y={y} width={1} height={1} />
+        ))}
+      </svg>
     </span>
   );
 }
 
 export function AvatarStack({
-  names,
+  members,
   max = 5,
   size = "sm",
 }: {
-  names: string[];
+  members: { id: number; name: string }[];
   max?: number;
   size?: AvatarSize;
 }) {
-  const shown = names.length > max ? names.slice(0, max) : names;
-  const hidden = names.length - shown.length;
+  const shown = members.length > max ? members.slice(0, max) : members;
+  const hidden = members.length - shown.length;
   return (
     <span
       className="inline-flex items-center [&>span]:shadow-[0_0_0_2px_var(--color-surface)] [&>span+span]:-ml-[6px]"
       role="img"
-      aria-label={names.join(", ")}
+      aria-label={members.map((member) => member.name).join(", ")}
     >
-      {shown.map((name) => (
-        <Avatar key={name} name={name} size={size} />
+      {shown.map((member) => (
+        <Avatar key={member.id} memberId={member.id} size={size} />
       ))}
       {hidden > 0 ? (
         <span

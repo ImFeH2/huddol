@@ -3,6 +3,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { type Organization, OrganizationProvider } from "@/app/organization";
 import { RouterProvider } from "@/app/router";
+import { Avatar, AvatarStack } from "@/components/ui/index";
 import { OverflowMenu } from "@/components/ui/menu";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { MessageRow, ThreadPage } from "@/features/discussions/thread";
@@ -56,6 +57,40 @@ function render(
     </TooltipProvider>,
   );
 }
+
+describe("message avatar", () => {
+  it("uses the historical sender ID even when absent from current members", () => {
+    function historical(senderName: string) {
+      return renderToStaticMarkup(
+        <TooltipProvider>
+          <OrganizationProvider value={{ ...organization, members: [] }}>
+            <MessageRow
+              message={{
+                id: 10,
+                sender_id: 42,
+                sender_name: senderName,
+                body: "Historical message",
+                mentions: [],
+                created_at: "2026-01-01T00:00:00Z",
+              }}
+              compact={false}
+              fresh={false}
+              pending={false}
+              acknowledged={false}
+              busy={false}
+              onAck={() => {}}
+              onRevoke={() => {}}
+            />
+          </OrganizationProvider>
+        </TooltipProvider>,
+      );
+    }
+    const avatar = renderToStaticMarkup(<Avatar memberId={42} />);
+    expect(historical("Deleted agent")).toContain(avatar);
+    expect(historical("Renamed agent")).toContain(avatar);
+    expect(historical("Renamed agent")).toContain("Renamed agent");
+  });
+});
 
 describe("message acknowledgement", () => {
   it("offers confirmation for a pending mention", () => {
@@ -137,7 +172,10 @@ describe("thread page", () => {
       const detail: DiscussionDetail = {
         id: 1,
         topic: "Release",
-        members: [],
+        members: [
+          { id: 2, name: "Helper" },
+          { id: 1, name: "You" },
+        ],
         total_messages: 0,
         archived,
         read_through: 0,
@@ -159,6 +197,9 @@ describe("thread page", () => {
         </TooltipProvider>,
       );
       expect(html).toMatch(/<h1\b[^>]*>Release<\/h1>/);
+      expect(html).toContain(
+        renderToStaticMarkup(<AvatarStack members={detail.members} />),
+      );
       const { actions } = vi.mocked(OverflowMenu).mock.calls[0][0];
       expect(actions.map((action) => action.label)).toEqual([
         "Members",

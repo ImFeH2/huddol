@@ -1,5 +1,6 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
+import { Avatar } from "@/components/ui/index";
 import { MemberPicker } from "@/features/discussions/members";
 
 function render(disabled = false) {
@@ -17,6 +18,15 @@ function render(disabled = false) {
 }
 
 describe("discussion member picker", () => {
+  it("uses the shared pattern for each member ID", () => {
+    const html = render();
+    for (const id of [1, 2]) {
+      expect(html).toContain(
+        renderToStaticMarkup(<Avatar memberId={id} size="sm" />),
+      );
+    }
+  });
+
   it("renders labelled members with their current selection", () => {
     const html = render();
     expect(html).toContain("You");

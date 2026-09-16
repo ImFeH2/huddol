@@ -202,7 +202,7 @@ export function ThreadPage({ id }: { id: number }) {
                   aria-label="Members"
                   onClick={() => setEditingMembers(true)}
                 >
-                  <AvatarStack names={names} />
+                  <AvatarStack members={detail.members} />
                 </Button>
               </Tooltip>
               {awaiting.size > 0 ? (
@@ -340,7 +340,7 @@ export function MessageRow({
       )}
     >
       <div className="w-[26px] flex-none">
-        {compact ? null : <Avatar name={message.sender_name} />}
+        {compact ? null : <Avatar memberId={message.sender_id} />}
       </div>
       <div
         className={clsx(

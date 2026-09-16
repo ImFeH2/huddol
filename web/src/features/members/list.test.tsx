@@ -1,5 +1,6 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
+import { Avatar } from "@/components/ui/index";
 import { MemberRow, memberActions } from "@/features/members/list";
 import { agentStateLabel } from "@/features/members/state";
 import type { Member } from "@/lib/backend";
@@ -65,6 +66,15 @@ describe("member actions", () => {
 });
 
 describe("member row", () => {
+  it("uses the same ID pattern for either member type and after renaming", () => {
+    const avatar = renderToStaticMarkup(<Avatar memberId={human.id} />);
+    expect(render(human)).toContain(avatar);
+    expect(render({ ...human, name: "Renamed", type: "agent" })).toContain(
+      avatar,
+    );
+    expect(render({ ...human, id: 2 })).not.toContain(avatar);
+  });
+
   it("links an agent to its page by name alone", () => {
     const html = render(agent("idle"));
     const buttons = html.match(/<button\b[^>]*>[\s\S]*?<\/button>/g) ?? [];
