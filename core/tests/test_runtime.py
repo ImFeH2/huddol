@@ -986,7 +986,8 @@ def test_second_model_call_failure_keeps_saved_response_and_completed_tool_retur
     assert isinstance(saved[-1].parts[0], ToolReturnPart)
     assert saved[-1].parts[0].tool_call_id == "read"
     assert saved[-1].parts[0].content == (
-        "This call was not executed because the Turn ended first."
+        "The Turn ended without a confirmed result for this call. "
+        "It may have executed; check the outcome before retrying."
     )
     assert isinstance(captured[-1], ModelRequest)
     assert len(captured[-1].parts) == 1

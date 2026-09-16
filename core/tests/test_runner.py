@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 import json
 import re
 import threading
@@ -9,12 +10,19 @@ from itertools import pairwise
 from typing import Any
 
 import pytest
-from pydantic_ai import ModelMessagesTypeAdapter, models
+from pydantic_ai import ModelMessagesTypeAdapter, ModelRetry, Tool, models
 from pydantic_ai.capabilities import Hooks
-from pydantic_ai.exceptions import ModelHTTPError
+from pydantic_ai.exceptions import (
+    ApprovalRequired,
+    CallDeferred,
+    ModelHTTPError,
+    SkipToolExecution,
+    ToolFailed,
+)
 from pydantic_ai.messages import (
     ModelRequest,
     ModelResponse,
+    RetryPromptPart,
     TextPart,
     ToolCallPart,
     ToolReturnPart,
@@ -128,7 +136,7 @@ def assert_settlement(message, calls) -> None:
         (
             call.tool_name,
             call.tool_call_id,
-            "This call was not executed because the Turn ended first.",
+            "The Turn ended without a confirmed result for this call. It may have executed; check the outcome before retrying.",
         )
         for call in calls
     ]
@@ -335,7 +343,7 @@ def test_each_response_persists_the_complete_history_without_ephemeral(
     assert first[-3].parts[0].content == original.prompt
     assert second == ModelMessagesTypeAdapter.validate_json(outcome.messages_json)
     assert second[: len(first) - 1] == first[:-1]
-    assert "This call was not executed" not in persisted[1]
+    assert "without a confirmed result" not in persisted[1]
     assert second[-1] == responses[1]
     assert second[-2].metadata == {
         "huddol": {"block": "durable", "environment": "environment B"}
@@ -1118,3 +1126,424 @@ def test_model_file_tools_forward_arguments_without_tree_tools(
     ).run(request(), Tools())
     assert outcome.error is None
     assert calls == [expected]
+
+
+@pytest.mark.parametrize("kind", ["sync", "async", "awaitable"])
+def test_search_failures_continue_past_retry_budget(
+    settings, monkeypatch, caplog, kind
+):
+    from huddol.adapters.model import runner as module
+
+    executions = []
+    received = []
+    secret = "fake-secret-do-not-disclose"
+
+    def fail(query: str) -> str:
+        executions.append(query)
+        raise RuntimeError(secret)
+
+    async def async_fail(query: str) -> str:
+        await asyncio.sleep(0)
+        return fail(query)
+
+    def awaitable_fail(query: str):
+        return async_fail(query)
+
+    function = {"sync": fail, "async": async_fail, "awaitable": awaitable_fail}[kind]
+    monkeypatch.setattr(module, "duckduckgo_search_tool", lambda **kw: Tool(function))
+
+    class Tools:
+        def list_todos(self):
+            return ["alternate tool worked"]
+
+    def respond(messages, info):
+        received.append(messages)
+        schema = next(t for t in info.function_tools if t.name == "web_search")
+        assert schema.parameters_json_schema["required"] == ["query"]
+        assert schema.parameters_json_schema["properties"]["query"]["type"] == "string"
+        if len(received) <= 4:
+            if len(received) > 1:
+                part = messages[-1].parts[0]
+                assert isinstance(part, ToolReturnPart)
+                assert part.outcome == "failed"
+                assert "tool_execution_failed: RuntimeError" in part.content
+                assert secret not in part.content
+            return ModelResponse(
+                parts=[
+                    ToolCallPart(
+                        "web_search",
+                        {"query": "safe"},
+                        tool_call_id=f"search-{len(received)}",
+                    )
+                ]
+            )
+        if len(received) == 5:
+            return ModelResponse(
+                parts=[
+                    ToolCallPart("todo", {"action": "list"}, tool_call_id="alternate")
+                ]
+            )
+        assert messages[-1].parts[0].content == ["alternate tool worked"]
+        return ModelResponse(parts=[TextPart("Recovered")])
+
+    runner = PydanticModelRunner(settings, build_model=lambda _: FunctionModel(respond))
+    outcome = runner.run(request(), Tools())
+    assert outcome.error is None
+    assert len(received) == 6
+    assert executions == ["safe"] * 4
+    assert secret not in outcome.messages_json + caplog.text
+    assert "test_runner.py:" in caplog.text
+    assert "type=RuntimeError" in caplog.text
+    assert "agent=2 turn=1 tool=web_search call=search-4" in caplog.text
+    assert module._tool_call.get(None) is None
+
+
+@pytest.mark.parametrize(
+    "code",
+    ["timeout", "execution_timeout", "execution_unavailable", "execution_protocol"],
+)
+def test_execution_domain_failures_do_not_replay_writes(settings, code):
+    writes = []
+    received = []
+
+    class Tools:
+        def send_message(self, discussion_id, body):
+            writes.append(body)
+            raise DomainError(code, "private execution diagnostic")
+
+        def list_todos(self):
+            return []
+
+    def respond(messages, info):
+        received.append(messages)
+        if len(received) <= 4:
+            return ModelResponse(
+                parts=[
+                    ToolCallPart(
+                        "discussion",
+                        {
+                            "action": "send",
+                            "discussion_id": 1,
+                            "body": str(len(received)),
+                        },
+                        tool_call_id=f"write-{len(received)}",
+                    )
+                ]
+            )
+        returns = [
+            p
+            for m in messages
+            if isinstance(m, ModelRequest)
+            for p in m.parts
+            if isinstance(p, ToolReturnPart)
+        ]
+        assert len(returns) == 4
+        assert all(p.outcome == "failed" and code in p.content for p in returns)
+        assert all("Side effects may have occurred" in p.content for p in returns)
+        return ModelResponse(parts=[TextPart("Stopped writing")])
+
+    outcome = PydanticModelRunner(
+        settings, build_model=lambda _: FunctionModel(respond)
+    ).run(request(), Tools())
+    assert outcome.error is None
+    assert writes == ["1", "2", "3", "4"]
+    assert "private execution diagnostic" not in outcome.messages_json
+
+
+@pytest.mark.parametrize("parallel", [False, True])
+def test_failed_and_successful_batch_calls_pair_and_keep_context(
+    settings, monkeypatch, caplog, parallel
+):
+    from huddol.adapters.model import runner as module
+
+    entered = []
+    received = []
+
+    async def search(query: str):
+        entered.append(query)
+        await asyncio.sleep(0.01)
+        assert module._tool_call.get()[2].tool_call_id == query
+        if query == "bad":
+            raise OSError("private")
+        return query
+
+    monkeypatch.setattr(module, "duckduckgo_search_tool", lambda **kw: Tool(search))
+
+    class Tools:
+        def read_history(self, sequence):
+            call_id = "bad" if sequence == 1 else "good"
+            entered.append(call_id)
+            assert module._tool_call.get()[2].tool_call_id == call_id
+            if sequence == 1:
+                raise OSError("private")
+            return call_id
+
+    def respond(messages, info):
+        received.append(messages)
+        if len(received) == 1:
+            return ModelResponse(
+                parts=[
+                    ToolCallPart(
+                        "web_search" if parallel else "history",
+                        {"query": name}
+                        if parallel
+                        else {"action": "read", "sequence": i},
+                        tool_call_id=name,
+                    )
+                    for i, name in [(1, "bad"), (2, "good")]
+                ]
+            )
+        parts = messages[-1].parts
+        assert len(parts) == 2
+        paired = {p.tool_call_id: p for p in parts}
+        assert paired["bad"].outcome == "failed"
+        assert paired["good"].content == "good"
+        assert paired["good"].outcome == "success"
+        return ModelResponse(parts=[TextPart("Both accounted for")])
+
+    outcome = PydanticModelRunner(
+        settings, build_model=lambda _: FunctionModel(respond)
+    ).run(request(), Tools())
+    assert outcome.error is None
+    assert sorted(entered) == ["bad", "good"]
+    assert "call=bad" in caplog.text
+    assert "call=good" not in caplog.text
+    assert module._tool_call.get(None) is None
+
+
+@pytest.mark.parametrize("asynchronous", [False, True])
+@pytest.mark.parametrize(
+    "error",
+    [
+        ModelRetry("fix input"),
+        ToolFailed("known failure"),
+        SkipToolExecution("skipped"),
+        CallDeferred(),
+        ApprovalRequired(),
+        asyncio.CancelledError(),
+        KeyboardInterrupt(),
+        SystemExit(),
+    ],
+)
+def test_tool_boundary_preserves_control_flow(error, asynchronous):
+    from huddol.adapters.model.runner import _tool_boundary
+
+    def sync_function(value: int) -> int:
+        raise error
+
+    async def async_function(value: int) -> int:
+        raise error
+
+    function = async_function if asynchronous else sync_function
+    wrapped = _tool_boundary(function)
+    assert inspect.signature(wrapped) == inspect.signature(function)
+    assert inspect.iscoroutinefunction(wrapped) == asynchronous
+    with pytest.raises(type(error)) as raised:
+        if asynchronous:
+            asyncio.run(wrapped(1))
+        else:
+            wrapped(1)
+    assert raised.value is error
+
+
+def test_tool_validation_still_returns_correctable_feedback(settings):
+    received = []
+    executions = []
+
+    class Tools:
+        def run(self, argv, cwd, timeout):
+            executions.append(argv)
+            return {"exit_code": 0}
+
+    def respond(messages, info):
+        received.append(messages)
+        if len(received) == 1:
+            return ModelResponse(
+                parts=[
+                    ToolCallPart("run", {"argv": "not a list"}, tool_call_id="invalid")
+                ]
+            )
+        if len(received) == 2:
+            assert isinstance(messages[-1].parts[0], RetryPromptPart)
+            return ModelResponse(
+                parts=[ToolCallPart("run", {"argv": ["true"]}, tool_call_id="valid")]
+            )
+        assert messages[-1].parts[0].content == {"exit_code": 0}
+        return ModelResponse(parts=[TextPart("Fixed")])
+
+    outcome = PydanticModelRunner(
+        settings, build_model=lambda _: FunctionModel(respond)
+    ).run(request(), Tools())
+    assert outcome.error is None
+    assert executions == [["true"]]
+
+
+@pytest.mark.parametrize("stage", ["dispatch", "serialize", "model"])
+def test_non_tool_faults_are_not_tool_failures(settings, monkeypatch, stage):
+    from pydantic_ai.toolsets.function import FunctionToolset
+
+    from huddol.adapters.model import runner as module
+
+    executions = []
+
+    class Unserializable:
+        pass
+
+    class Tools:
+        def list_todos(self):
+            executions.append(1)
+            return Unserializable()
+
+    async def broken_dispatch(*args, **kwargs):
+        raise RuntimeError("SDK dispatch fault")
+
+    if stage == "dispatch":
+        monkeypatch.setattr(FunctionToolset, "call_tool", broken_dispatch)
+
+    def respond(messages, info):
+        if stage == "model":
+            raise RuntimeError("model fault")
+        if executions:
+            ModelMessagesTypeAdapter.dump_json(messages)
+            return ModelResponse(parts=[TextPart("Done")])
+        return ModelResponse(
+            parts=[ToolCallPart("todo", {"action": "list"}, tool_call_id="call")]
+        )
+
+    runner = PydanticModelRunner(settings, build_model=lambda _: FunctionModel(respond))
+    if stage == "serialize":
+        from pydantic_core import PydanticSerializationError
+
+        with pytest.raises(PydanticSerializationError):
+            runner.run(request(), Tools())
+    else:
+        outcome = runner.run(request(), Tools())
+        assert outcome.error is not None
+        assert "tool_execution_failed" not in outcome.messages_json
+    assert module._tool_call.get(None) is None
+
+
+@pytest.mark.parametrize(
+    "name,args,method",
+    [
+        ("organization", {"action": "list_members"}, "list_members"),
+        ("discussion", {"action": "list"}, "list_discussions"),
+        ("run", {"argv": ["true"]}, "run"),
+        ("edit", {"path": "/fake", "old_text": "old", "new_text": "new"}, "edit"),
+        ("todo", {"action": "list"}, "list_todos"),
+        ("history", {"action": "read", "sequence": 1}, "read_history"),
+    ],
+)
+def test_all_builtin_registrations_share_execution_boundary(
+    settings, name, args, method
+):
+    calls = []
+
+    def fail(*args, **kwargs):
+        calls.append(1)
+        raise OSError("unavailable")
+
+    tools = type("Tools", (), {method: fail})()
+
+    def respond(messages, info):
+        if not calls:
+            return ModelResponse(
+                parts=[ToolCallPart(name, args, tool_call_id="builtin")]
+            )
+        part = messages[-1].parts[0]
+        assert isinstance(part, ToolReturnPart)
+        assert part.outcome == "failed"
+        return ModelResponse(parts=[TextPart("Continue")])
+
+    outcome = PydanticModelRunner(
+        settings, build_model=lambda _: FunctionModel(respond)
+    ).run(request(), tools)
+    assert outcome.error is None
+    assert calls == [1]
+
+
+def test_real_search_registration_handles_client_error(settings, monkeypatch):
+    from pydantic_ai.common_tools.duckduckgo import DDGS
+
+    calls = []
+
+    def fail(self, *args, **kwargs):
+        calls.append(1)
+        raise OSError("fake search outage")
+
+    monkeypatch.setattr(DDGS, "text", fail)
+
+    def respond(messages, info):
+        if not calls:
+            return ModelResponse(
+                parts=[
+                    ToolCallPart("web_search", {"query": "test"}, tool_call_id="search")
+                ]
+            )
+        assert messages[-1].parts[0].outcome == "failed"
+        return ModelResponse(parts=[TextPart("No search available")])
+
+    outcome = PydanticModelRunner(
+        settings, build_model=lambda _: FunctionModel(respond)
+    ).run(request(), None)
+    assert outcome.error is None
+    assert calls == [1]
+
+
+def test_tool_context_does_not_leak_between_concurrent_turns(settings, caplog):
+    from concurrent.futures import ThreadPoolExecutor
+
+    from huddol.adapters.model import runner as module
+
+    barrier = threading.Barrier(2)
+    seen = []
+
+    class Tools:
+        def list_todos(self):
+            agent_id, sequence, call = module._tool_call.get()
+            barrier.wait(timeout=5)
+            assert module._tool_call.get() == (agent_id, sequence, call)
+            seen.append((agent_id, sequence))
+            raise RuntimeError("fake concurrent failure")
+
+    def respond(messages, info):
+        if any(
+            isinstance(p, ToolReturnPart)
+            for m in messages
+            if isinstance(m, ModelRequest)
+            for p in m.parts
+        ):
+            return ModelResponse(parts=[TextPart("Done")])
+        return ModelResponse(
+            parts=[ToolCallPart("todo", {"action": "list"}, tool_call_id="same-id")]
+        )
+
+    runner = PydanticModelRunner(settings, build_model=lambda _: FunctionModel(respond))
+
+    def turn(i):
+        outcome = runner.run(replace(request(), agent_id=i, sequence=i + 10), Tools())
+        assert module._tool_call.get(None) is None
+        return outcome
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        outcomes = list(pool.map(turn, [2, 3]))
+    assert all(o.error is None for o in outcomes)
+    assert sorted(seen) == [(2, 12), (3, 13)]
+    assert "agent=2 turn=12" in caplog.text
+    assert "agent=3 turn=13" in caplog.text
+
+
+def test_runner_does_not_convert_tool_cancellation_to_failure(settings):
+    from huddol.adapters.model import runner as module
+
+    class Tools:
+        def list_todos(self):
+            raise asyncio.CancelledError()
+
+    def respond(messages, info):
+        return ModelResponse(parts=[ToolCallPart("todo", {"action": "list"})])
+
+    runner = PydanticModelRunner(settings, build_model=lambda _: FunctionModel(respond))
+    with pytest.raises(asyncio.CancelledError):
+        runner.run(request(), Tools())
+    assert module._tool_call.get(None) is None
