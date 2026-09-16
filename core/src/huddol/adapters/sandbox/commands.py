@@ -43,8 +43,6 @@ def linux_command(
         "/",
         "--dev",
         "/dev",
-        # A fresh procfs: the read-only bind of / would leave /proc read-only,
-        # and a bubblewrap started inside the sandbox must write its uid map.
         "--proc",
         "/proc",
         "--unshare-user",
@@ -55,8 +53,6 @@ def linux_command(
     working = cwd.as_posix() if isinstance(cwd, PurePath) else str(cwd)
     command.extend(("--chdir", working, "--cap-drop", "ALL"))
     if root:
-        # Since Linux 5.12 a nested user namespace may map uid 0 only when its
-        # creator held CAP_SETFCAP; a root caller keeps just that one.
         command.extend(("--cap-add", "CAP_SETFCAP"))
     command.extend(("--", *argv))
     return command
