@@ -295,14 +295,127 @@ class AgentTools:
             "mentions": [asdict(mention) for mention in item.mentions],
         }
 
-    def send_message(self, discussion_id: int, body: str) -> dict[str, Any]:
+    def _human_discussion(self, capability: str, discussion_id: int) -> None:
+        self._check(capability, discussion_id)
+        if self._actor.is_agent:
+            raise DomainError(
+                "not_permitted", "This operation is for the Human interface"
+            )
+        if type(discussion_id) is not int or discussion_id < 1:
+            raise DomainError(
+                "invalid_discussion", "discussion_id must be a positive integer"
+            )
+
+    @staticmethod
+    def _message_id(value: int) -> None:
+        if type(value) is not int or value < 1:
+            raise DomainError(
+                "invalid_message", "message_id must be a positive integer"
+            )
+
+    def discussion_page(
+        self,
+        discussion_id: int,
+        *,
+        limit: int = 50,
+        entry: bool = False,
+        before: int | None = None,
+        after: int | None = None,
+        metadata: bool = False,
+    ) -> dict[str, Any]:
+        self._human_discussion("discussion.page", discussion_id)
+        if type(limit) is not int or not 1 <= limit <= 100:
+            raise DomainError(
+                "invalid_pagination", "limit must be an integer from 1 to 100"
+            )
+        if type(entry) is not bool or type(metadata) is not bool:
+            raise DomainError(
+                "invalid_pagination", "entry and metadata must be boolean"
+            )
+        for bound in (before, after):
+            if bound is not None and (type(bound) is not int or bound < 0):
+                raise DomainError(
+                    "invalid_pagination", "bounds must be nonnegative integers"
+                )
+        if entry and (before is not None or after is not None):
+            raise DomainError(
+                "invalid_pagination", "entry cannot be combined with bounds"
+            )
+        if before is not None and after is not None and before <= after:
+            raise DomainError("invalid_pagination", "before must exceed after")
+        page = self._deps.store.discussion_page(
+            discussion_id,
+            self._actor.member_id,
+            limit=limit,
+            entry=entry,
+            before=before,
+            after=after,
+        )
+        result: dict[str, Any] = {
+            "id": discussion_id,
+            "messages": [self._message(item) for item in page.messages],
+            "read_through": page.read_through,
+            "latest_id": page.latest_id,
+            "has_before": page.has_before,
+            "has_after": page.has_after,
+            "previous_sender_id": page.previous_sender_id,
+            "awaiting_ack": list(page.awaiting_ack),
+            "acknowledged": list(page.acknowledged),
+            "pending_count": page.pending_count,
+        }
+        if entry:
+            result["first_unread_id"] = page.first_unread_id
+        if metadata or entry:
+            result["metadata"] = {
+                "topic": page.discussion.topic,
+                "archived": page.discussion.archived,
+                "members": [{"id": key, "name": name} for key, name in page.members],
+            }
+        return result
+
+    def mark_read(self, discussion_id: int, message_id: int) -> dict[str, Any]:
+        self._human_discussion("discussion.mark_read", discussion_id)
+        self._message_id(message_id)
+        watermark = self._deps.store.mark_read(
+            discussion_id, self._actor.member_id, message_id
+        )
+        return {
+            "discussion_id": discussion_id,
+            "member_id": self._actor.member_id,
+            "read_through": watermark,
+        }
+
+    def ack_pending(
+        self, discussion_id: int, through_message_id: int
+    ) -> dict[str, Any]:
+        self._human_discussion("discussion.ack_pending", discussion_id)
+        self._message_id(through_message_id)
+        result = self._deps.store.ack_pending(
+            discussion_id, self._actor.member_id, through_message_id
+        )
+        self._changed(
+            "mention.acked", {"discussion_id": discussion_id, "acked": result.acked}
+        )
+        return asdict(result)
+
+    def send_message(
+        self, discussion_id: int, body: str, *, mark_read: bool = True
+    ) -> dict[str, Any]:
         self._check("discussion.send", discussion_id)
         self._require_membership(discussion_id)
+        if type(mark_read) is not bool or (self._actor.is_agent and not mark_read):
+            raise DomainError(
+                "not_permitted",
+                "Only the Human interface can send without marking read",
+            )
         validated = validate_body(body)
         message, mentions = self._deps.store.append_message(
             discussion_id, self._actor.member_id, validated
         )
-        self._deps.store.set_watermark(discussion_id, self._actor.member_id, message.id)
+        if mark_read:
+            self._deps.store.set_watermark(
+                discussion_id, self._actor.member_id, message.id
+            )
         self._record(
             "send",
             f"Discussion {discussion_id}: message {message.id}"

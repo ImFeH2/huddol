@@ -1,3 +1,4 @@
+import { Virtualizer } from "@tanstack/react-virtual";
 import { useState } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -6,12 +7,7 @@ import { RouterProvider } from "@/app/router";
 import { Avatar, AvatarStack } from "@/components/ui/index";
 import { OverflowMenu } from "@/components/ui/menu";
 import { TooltipProvider } from "@/components/ui/tooltip";
-import {
-  atDiscussionBottom,
-  MessageRow,
-  scrollDiscussionToBottom,
-  ThreadPage,
-} from "@/features/discussions/thread";
+import { MessageRow, ThreadPage } from "@/features/discussions/thread";
 import type { DiscussionDetail, MessageMention } from "@/lib/backend";
 
 vi.mock("react", async (importOriginal) => {
@@ -222,30 +218,50 @@ describe("thread page", () => {
   });
 });
 
-describe("composer resize scroll anchoring", () => {
-  it("uses the true scroll end including the trailing 24px padding", () => {
-    const area = { scrollHeight: 915, clientHeight: 600, scrollTop: 291.5 };
-    expect(
-      atDiscussionBottom(area.scrollHeight, area.clientHeight, area.scrollTop),
-    ).toBe(false);
-    scrollDiscussionToBottom(area);
-    expect(area.scrollTop).toBe(315);
-    expect(
-      atDiscussionBottom(area.scrollHeight, area.clientHeight, area.scrollTop),
-    ).toBe(true);
-    area.scrollHeight = 983;
-    scrollDiscussionToBottom(area);
-    expect(area.scrollTop).toBe(383);
+describe("virtualized composer scroll anchoring", () => {
+  function measured(height: number, viewport: number, top: number) {
+    const area = {
+      scrollHeight: height,
+      clientHeight: viewport,
+      scrollTop: top,
+    } as HTMLDivElement;
+    const scrollToFn = vi.fn();
+    const virtual = new Virtualizer<HTMLDivElement, HTMLLIElement>({
+      count: 2,
+      getScrollElement: () => area,
+      estimateSize: () => 100,
+      observeElementRect: () => {},
+      observeElementOffset: () => {},
+      scrollToFn,
+      paddingStart: 16,
+      paddingEnd: 116 + 16 + 24,
+      scrollEndThreshold: 1,
+    });
+    virtual.scrollElement = area;
+    virtual.scrollRect = { width: 800, height: viewport };
+    virtual.scrollOffset = top;
+    virtual.getTotalSize();
+    return { virtual, area, scrollToFn };
+  }
+
+  it("targets the actual scroll end rather than the last row or a marker", () => {
+    const { virtual, area, scrollToFn } = measured(915, 600, 291.5);
+    expect(virtual.isAtEnd()).toBe(false);
+    virtual.scrollToEnd();
+    expect(scrollToFn.mock.calls[0][0]).toBe(315);
+    Object.defineProperty(area, "scrollHeight", { value: 983 });
+    virtual.scrollToEnd();
+    expect(scrollToFn.mock.calls[1][0]).toBe(383);
   });
 
-  it("keeps short content at zero", () => {
-    const area = { scrollHeight: 500, clientHeight: 600, scrollTop: 0 };
-    scrollDiscussionToBottom(area);
-    expect(area.scrollTop).toBe(0);
+  it("includes the composer bottom offset and 24px gap once in virtual height", () => {
+    const { virtual } = measured(800, 600, 200);
+    expect(virtual.getTotalSize()).toBe(16 + 200 + 116 + 16 + 24);
   });
-  it("preserves bottom attachment with subpixel rounding", () => {
-    expect(atDiscussionBottom(915, 623, 291.5)).toBe(true);
-    expect(atDiscussionBottom(915, 623, 250)).toBe(false);
-    expect(atDiscussionBottom(500, 623, 0)).toBe(true);
+
+  it("recognizes subpixel bottom attachment without claiming historical positions", () => {
+    expect(measured(915, 623, 291.5).virtual.isAtEnd()).toBe(true);
+    expect(measured(915, 623, 250).virtual.isAtEnd()).toBe(false);
+    expect(measured(500, 623, 0).virtual.isAtEnd()).toBe(true);
   });
 });

@@ -1050,3 +1050,132 @@ def test_tree_capabilities_are_checked_before_changes(
     assert error.value.code == "not_permitted"
     assert calls == [capability]
     assert world.library_tree.list() == ()
+
+
+@pytest.mark.parametrize("params", [{"entry": True}, {"after": 0}, {"before": 5}, {}])
+def test_ui_pages_do_not_read_or_ack(world, params) -> None:
+    human = tools_for(world, HUMAN)
+    agent = tools_for(world, MAIN)
+    room = human.create_discussion("page", [MAIN])["id"]
+    for _ in range(8):
+        agent.send_message(room, "@You page")
+    page = human.discussion_page(room, limit=2, **params)
+    assert len(page["messages"]) == 2
+    assert len(page["awaiting_ack"]) == 2
+    assert page["pending_count"] == 8
+    assert page["latest_id"] == 8
+    assert page["read_through"] == world.store.watermark(room, HUMAN) == 0
+    assert "total_messages" not in page
+    assert len(world.store.pending(HUMAN)) == 8
+    if params.get("entry"):
+        assert page["first_unread_id"] == 1
+        assert page["previous_sender_id"] is None
+        assert not page["has_before"]
+    else:
+        assert "metadata" not in page
+    assert human.mark_read(room, 3)["read_through"] == 3
+    assert human.mark_read(room, 1)["read_through"] == 3
+
+
+def test_ui_entry_skips_own_unread_messages_and_send_does_not_advance(world) -> None:
+    human = tools_for(world, HUMAN)
+    agent = tools_for(world, MAIN)
+    room = human.create_discussion("page", [MAIN])["id"]
+    human.send_message(room, "own", mark_read=False)
+    assert human.discussion_page(room, entry=True)["first_unread_id"] is None
+    agent.send_message(room, "@You new")
+    human.send_message(room, "own newer", mark_read=False)
+    page = human.discussion_page(room, entry=True, limit=1)
+    assert page["first_unread_id"] == 2
+    assert [m["id"] for m in page["messages"]] == [2]
+    assert page["previous_sender_id"] == HUMAN
+    assert page["has_before"] and page["has_after"]
+    assert world.store.watermark(room, HUMAN) == 0
+    with pytest.raises(DomainError, match="before acknowledging"):
+        human.ack(room, [2])
+    assert human.mark_read(room, 2)["read_through"] == 2
+    assert human.ack(room, [2])["acked"] == 1
+    human.send_message(room, "old default")
+    assert world.store.watermark(room, HUMAN) == 4
+
+
+def test_ui_bulk_handles_transaction_pending_up_to_chosen_boundary(world) -> None:
+    human = tools_for(world, HUMAN)
+    agent = tools_for(world, MAIN)
+    room = human.create_discussion("bulk", [MAIN])["id"]
+    for _ in range(4):
+        agent.send_message(room, "@You pending")
+    human.mark_read(room, 1)
+    human.ack(room, [1])
+    human.revoke_ack(room, [1])
+    result = human.ack_pending(room, 3)
+    assert result == {"acked": 3, "read_through": 3, "pending_count": 1}
+    assert human.ack_pending(room, 3) == {
+        "acked": 0,
+        "read_through": 3,
+        "pending_count": 1,
+    }
+    page = human.discussion_page(room, after=0, limit=2)
+    assert page["acknowledged"] == [1, 2]
+    assert page["awaiting_ack"] == []
+    human.archive_discussion(room)
+    assert human.ack_pending(room, 4) == {
+        "acked": 0,
+        "read_through": 3,
+        "pending_count": 0,
+    }
+    human.archive_discussion(room, False)
+    assert human.discussion_page(room)["pending_count"] == 1
+
+
+@pytest.mark.parametrize(
+    "params",
+    [
+        {"limit": 101},
+        {"limit": 0},
+        {"limit": True},
+        {"entry": True, "after": 0},
+        {"after": -1},
+        {"before": "2"},
+        {"before": 2, "after": 3},
+        {"metadata": 1},
+    ],
+)
+def test_ui_page_rejects_invalid_bounds_without_reading(world, params) -> None:
+    human = tools_for(world, HUMAN)
+    room = human.create_discussion("bad bounds", [MAIN])["id"]
+    with pytest.raises(DomainError):
+        human.discussion_page(room, **params)
+    assert world.store.watermark(room, HUMAN) == 0
+
+
+def test_ui_operations_require_human_membership_and_valid_message(world) -> None:
+    human = tools_for(world, HUMAN)
+    agent = tools_for(world, MAIN)
+    room = agent.create_discussion("private", [OTHER])["id"]
+    agent.send_message(room, "body")
+    for action in (
+        lambda: human.discussion_page(room),
+        lambda: human.mark_read(room, 1),
+        lambda: human.ack_pending(room, 1),
+    ):
+        with pytest.raises(DomainError) as error:
+            action()
+        assert error.value.code == "not_a_member"
+    for action in (
+        lambda: agent.discussion_page(room),
+        lambda: agent.mark_read(room, 1),
+        lambda: agent.ack_pending(room, 1),
+        lambda: agent.send_message(room, "body", mark_read=False),
+    ):
+        with pytest.raises(DomainError) as error:
+            action()
+        assert error.value.code == "not_permitted"
+    agent.add_members(room, [HUMAN])
+    for message in (True, -1, 0, 3):
+        with pytest.raises(DomainError):
+            human.mark_read(room, message)
+        with pytest.raises(DomainError):
+            human.ack_pending(room, message)
+    assert world.store.watermark(room, HUMAN) == 0
+    assert human.discussion_page(room)["messages"][0]["id"] == 1

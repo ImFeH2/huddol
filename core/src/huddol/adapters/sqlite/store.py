@@ -13,6 +13,7 @@ from huddol.core.discussion import Discussion, Message, MessageMention
 from huddol.core.errors import DomainError
 from huddol.core.member import AgentState, Member, MemberType, name_key
 from huddol.core.mention import Mention, build_mentions
+from huddol.ports.store import DiscussionPage, PendingAcknowledgement
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS members (
@@ -479,6 +480,179 @@ class SqliteStore:
             params.append(limit)
         messages = self._messages(sql, params)
         return tuple(reversed(messages)) if latest else messages
+
+    def _member_discussion(self, discussion_id: int, member_id: int) -> Discussion:
+        discussion = self.get_discussion(discussion_id)
+        if discussion is None:
+            raise DomainError("not_found", f"Discussion {discussion_id} does not exist")
+        if member_id not in discussion.member_ids:
+            raise DomainError("not_a_member", "You do not belong to this Discussion")
+        return discussion
+
+    def _pending_summary(
+        self, discussion_id: int, member_id: int, through: int
+    ) -> tuple[int, int]:
+        row = self._db.execute(
+            "SELECT COUNT(*) AS n, COALESCE(MAX(m.message_id), 0) AS last"
+            " FROM mentions m JOIN discussions d ON d.id = m.discussion_id"
+            " WHERE m.discussion_id = ? AND m.member_id = ?"
+            " AND m.message_id <= ? AND d.archived = 0"
+            " AND NOT EXISTS (SELECT 1 FROM acks a WHERE"
+            " a.discussion_id = m.discussion_id AND a.message_id = m.message_id"
+            " AND a.member_id = m.member_id)",
+            (discussion_id, member_id, through),
+        )[0]
+        return int(row["n"]), int(row["last"])
+
+    def discussion_page(
+        self,
+        discussion_id: int,
+        member_id: int,
+        *,
+        limit: int,
+        entry: bool = False,
+        before: int | None = None,
+        after: int | None = None,
+    ) -> DiscussionPage:
+        with self._db as db:
+            db.execute("BEGIN")
+            discussion = self._member_discussion(discussion_id, member_id)
+            read_through = self.watermark(discussion_id, member_id)
+            latest_id = int(
+                db.execute(
+                    "SELECT COALESCE(MAX(id), 0) AS id FROM messages WHERE discussion_id = ?",
+                    (discussion_id,),
+                )[0]["id"]
+            )
+            unread = first(
+                db.execute(
+                    "SELECT id FROM messages WHERE discussion_id = ? AND id > ?"
+                    " AND sender_id <> ? ORDER BY id LIMIT 1",
+                    (discussion_id, read_through, member_id),
+                )
+            )
+            first_unread_id = int(unread["id"]) if unread else None
+            if entry and first_unread_id is not None:
+                after = first_unread_id - 1
+            selected = self.messages(
+                discussion_id,
+                before=before,
+                after=after,
+                limit=limit,
+                latest=after is None,
+            )
+            previous = first(
+                db.execute(
+                    "SELECT sender_id FROM messages WHERE discussion_id = ?"
+                    " AND id < ? ORDER BY id DESC LIMIT 1",
+                    (discussion_id, selected[0].id if selected else 0),
+                )
+            )
+            has_after = bool(selected and selected[-1].id < latest_id)
+            awaiting: list[int] = []
+            acknowledged: list[int] = []
+            if selected:
+                for row in db.execute(
+                    "SELECT m.id, a.message_id AS acked, n.message_id AS mentioned"
+                    " FROM messages m LEFT JOIN acks a ON a.discussion_id = m.discussion_id"
+                    " AND a.message_id = m.id AND a.member_id = ?"
+                    " LEFT JOIN mentions n ON n.discussion_id = m.discussion_id"
+                    " AND n.message_id = m.id AND n.member_id = ?"
+                    " WHERE m.discussion_id = ? AND m.id BETWEEN ? AND ?",
+                    (
+                        member_id,
+                        member_id,
+                        discussion_id,
+                        selected[0].id,
+                        selected[-1].id,
+                    ),
+                ):
+                    if row["acked"] is not None:
+                        acknowledged.append(int(row["id"]))
+                    elif row["mentioned"] is not None and not discussion.archived:
+                        awaiting.append(int(row["id"]))
+            pending_count, _ = self._pending_summary(
+                discussion_id, member_id, latest_id
+            )
+            members = tuple(
+                (int(row["id"]), str(row["name"]))
+                for row in db.execute(
+                    "SELECT m.id, m.name FROM members m JOIN discussion_members dm"
+                    " ON dm.member_id = m.id WHERE dm.discussion_id = ? ORDER BY m.id",
+                    (discussion_id,),
+                )
+            )
+            return DiscussionPage(
+                selected,
+                read_through,
+                first_unread_id,
+                latest_id,
+                previous is not None,
+                has_after,
+                int(previous["sender_id"]) if previous else None,
+                tuple(awaiting),
+                tuple(acknowledged),
+                pending_count,
+                discussion,
+                members,
+            )
+
+    def _require_message(self, discussion_id: int, message_id: int) -> None:
+        if not self._db.execute(
+            "SELECT 1 FROM messages WHERE discussion_id = ? AND id = ?",
+            (discussion_id, message_id),
+        ):
+            raise DomainError("not_found", "Message is not in this Discussion")
+
+    def mark_read(self, discussion_id: int, member_id: int, message_id: int) -> int:
+        with self._db as db:
+            db.execute("BEGIN IMMEDIATE")
+            self._member_discussion(discussion_id, member_id)
+            self._require_message(discussion_id, message_id)
+            self._advance_read(discussion_id, member_id, message_id)
+            return self.watermark(discussion_id, member_id)
+
+    def _advance_read(
+        self, discussion_id: int, member_id: int, message_id: int
+    ) -> None:
+        self._db.execute(
+            "INSERT INTO watermarks (discussion_id, member_id, message_id) VALUES (?, ?, ?)"
+            " ON CONFLICT (discussion_id, member_id) DO UPDATE SET"
+            " message_id = MAX(message_id, excluded.message_id)",
+            (discussion_id, member_id, message_id),
+        )
+
+    def ack_pending(
+        self, discussion_id: int, member_id: int, through_message_id: int
+    ) -> PendingAcknowledgement:
+        with self._db as db:
+            db.execute("BEGIN IMMEDIATE")
+            self._member_discussion(discussion_id, member_id)
+            self._require_message(discussion_id, through_message_id)
+            count, last = self._pending_summary(
+                discussion_id, member_id, through_message_id
+            )
+            if count:
+                db.execute(
+                    "INSERT INTO acks (discussion_id, message_id, member_id, created_at)"
+                    " SELECT m.discussion_id, m.message_id, m.member_id, ? FROM mentions m"
+                    " WHERE m.discussion_id = ? AND m.member_id = ? AND m.message_id <= ?"
+                    " AND NOT EXISTS (SELECT 1 FROM acks a WHERE"
+                    " a.discussion_id = m.discussion_id AND a.message_id = m.message_id"
+                    " AND a.member_id = m.member_id)",
+                    (now(), discussion_id, member_id, through_message_id),
+                )
+                self._advance_read(discussion_id, member_id, last)
+            latest = int(
+                db.execute(
+                    "SELECT COALESCE(MAX(id), 0) AS id FROM messages WHERE discussion_id = ?",
+                    (discussion_id,),
+                )[0]["id"]
+            )
+            remaining, _ = self._pending_summary(discussion_id, member_id, latest)
+            return PendingAcknowledgement(
+                count, self.watermark(discussion_id, member_id), remaining
+            )
 
     def message_count(self, discussion_id: int) -> int:
         row = first(

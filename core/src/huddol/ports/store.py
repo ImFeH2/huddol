@@ -1,11 +1,35 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from typing import Protocol
 
 from huddol.core.discussion import Discussion, Message
 from huddol.core.member import AgentState, Member, MemberType
 from huddol.core.mention import Mention
+
+
+@dataclass(frozen=True)
+class DiscussionPage:
+    messages: tuple[Message, ...]
+    read_through: int
+    first_unread_id: int | None
+    latest_id: int
+    has_before: bool
+    has_after: bool
+    previous_sender_id: int | None
+    awaiting_ack: tuple[int, ...]
+    acknowledged: tuple[int, ...]
+    pending_count: int
+    discussion: Discussion
+    members: tuple[tuple[int, str], ...]
+
+
+@dataclass(frozen=True)
+class PendingAcknowledgement:
+    acked: int
+    read_through: int
+    pending_count: int
 
 
 class OrganizationStore(Protocol):
@@ -60,6 +84,23 @@ class OrganizationStore(Protocol):
         limit: int | None = None,
         latest: bool = False,
     ) -> tuple[Message, ...]: ...
+
+    def discussion_page(
+        self,
+        discussion_id: int,
+        member_id: int,
+        *,
+        limit: int,
+        entry: bool = False,
+        before: int | None = None,
+        after: int | None = None,
+    ) -> DiscussionPage: ...
+
+    def mark_read(self, discussion_id: int, member_id: int, message_id: int) -> int: ...
+
+    def ack_pending(
+        self, discussion_id: int, member_id: int, through_message_id: int
+    ) -> PendingAcknowledgement: ...
 
     def message_count(self, discussion_id: int) -> int: ...
 

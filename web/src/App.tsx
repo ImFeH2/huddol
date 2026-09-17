@@ -243,6 +243,7 @@ export default function App() {
         event.type.startsWith("member.") ||
         event.type.startsWith("turn.") ||
         event.type === "message.created" ||
+        event.type === "discussion.read_updated" ||
         event.type === "mention.acked" ||
         event.type === "mention.revoked" ||
         event.type === "discussion.created" ||

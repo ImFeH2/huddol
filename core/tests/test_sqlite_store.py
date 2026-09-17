@@ -390,3 +390,77 @@ def test_old_mentions_table_gains_length_without_reparsing(tmp_path: Path) -> No
             )
         finally:
             store.close()
+
+
+def test_ui_bulk_rolls_back_ack_and_watermark_together(store, monkeypatch) -> None:
+    human = store.create_member("human", "You")
+    agent = store.create_member("agent", "Helper")
+    room = store.create_discussion("atomic", [human.id, agent.id])
+    store.append_message(room.id, agent.id, "@You pending")
+
+    def fail(*args):
+        raise RuntimeError("write failed")
+
+    monkeypatch.setattr(store, "_advance_read", fail)
+    with pytest.raises(RuntimeError, match="write failed"):
+        store.ack_pending(room.id, human.id, 1)
+    assert store.acknowledged(room.id, human.id) == ()
+    assert store.watermark(room.id, human.id) == 0
+    assert len(store.pending(human.id)) == 1
+
+
+def test_ui_pages_only_materialize_the_requested_bodies(store, monkeypatch) -> None:
+    human = store.create_member("human", "You")
+    agent = store.create_member("agent", "Helper")
+    room = store.create_discussion("long", [human.id, agent.id])
+    for index in range(1000):
+        store.append_message(room.id, agent.id, f"@You message {index}")
+    original = store._messages
+    counts = []
+
+    def measured(sql, params):
+        messages = original(sql, params)
+        counts.append(len(messages))
+        return messages
+
+    monkeypatch.setattr(store, "_messages", measured)
+    page = store.discussion_page(room.id, human.id, entry=True, limit=50)
+    assert len(page.messages) == 50
+    assert len(page.awaiting_ack) == 50
+    assert page.pending_count == 1000
+    assert counts == [50]
+    counts.clear()
+    result = store.ack_pending(room.id, human.id, 900)
+    assert result.acked == 900
+    assert result.pending_count == 100
+    assert counts == []
+    page = store.discussion_page(room.id, human.id, entry=True, limit=50)
+    assert page.first_unread_id == 901
+    assert [m.id for m in page.messages] == list(range(901, 951))
+
+
+def test_ui_page_read_snapshot_is_one_database_transaction(store, monkeypatch) -> None:
+    human = store.create_member("human", "You")
+    agent = store.create_member("agent", "Helper")
+    room = store.create_discussion("snapshot", [human.id, agent.id])
+    store.append_message(room.id, agent.id, "first")
+    other = sqlite3.connect(store._path)
+    original = store.messages
+
+    def append_then_read(*args, **kwargs):
+        with other:
+            other.execute(
+                "INSERT INTO messages VALUES (?, 2, ?, 'Helper', 'second', 'now')",
+                (room.id, agent.id),
+            )
+        return original(*args, **kwargs)
+
+    try:
+        monkeypatch.setattr(store, "messages", append_then_read)
+        page = store.discussion_page(room.id, human.id, entry=True, limit=50)
+        assert page.latest_id == 1
+        assert [m.id for m in page.messages] == [1]
+        monkeypatch.setattr(store, "messages", original)
+        assert store.discussion_page(room.id, human.id, limit=50).latest_id == 2
+    finally:
+        other.close()

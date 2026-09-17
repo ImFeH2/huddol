@@ -1530,3 +1530,59 @@ def test_the_packaging_smoke_sequence_holds(tmp_path: Path) -> None:
             )
         assert pong["result"]["pong"] == "huddol-smoke"
         assert kernel.shutdown() == 0, kernel.stderr
+
+
+def test_ui_pagination_read_and_bulk_contract_survive_real_websocket(
+    tmp_path: Path,
+) -> None:
+
+    data = tmp_path / "ui-pages"
+    with Kernel(data) as kernel, kernel.connect() as connection:
+        client = Client(connection)
+        sequence = 0
+
+        def request(method: str, **params: Any) -> dict[str, Any]:
+            nonlocal sequence
+            sequence += 1
+            response = client.call({"id": sequence, "method": method, "params": params})
+            assert "error" not in response, response
+            return response["result"]
+
+        agent = request("organization.create_agent", name="Helper")["id"]
+        room = request("discussion.create", topic="window", member_ids=[agent])["id"]
+        request("discussion.send", discussion_id=room, body="own", mark_read=False)
+        page = request("discussion.page", discussion_id=room, entry=True, limit=1)
+        assert page["read_through"] == 0
+        assert page["first_unread_id"] is None
+        assert page["messages"][0]["id"] == 1
+        state = request("discussion.mark_read", discussion_id=room, message_id=1)
+        assert state["read_through"] == 1
+        assert any(
+            frame["type"] == "discussion.read_updated" for frame in client.frames
+        )
+        assert request(
+            "discussion.ack_pending", discussion_id=room, through_message_id=1
+        ) == {"acked": 0, "read_through": 1, "pending_count": 0}
+        client.send(
+            {
+                "id": 99,
+                "method": "discussion.page",
+                "params": {"discussion_id": room, "limit": 101},
+            }
+        )
+        assert (
+            client.wait_for(lambda frame: frame.get("id") == 99)["error"]["code"]
+            == "invalid_pagination"
+        )
+    assert kernel.returncode == 0
+    with Kernel(data) as restarted, restarted.connect() as connection:
+        client = Client(connection)
+        result = client.call(
+            {
+                "id": 1,
+                "method": "discussion.page",
+                "params": {"discussion_id": room, "entry": True},
+            }
+        )["result"]
+        assert result["read_through"] == 1
+        assert result["messages"][0]["body"] == "own"

@@ -41,6 +41,33 @@ export type DiscussionDetail = {
   messages: Message[];
 };
 
+export type DiscussionPage = {
+  id: number;
+  messages: Message[];
+  read_through: number;
+  latest_id: number;
+  first_unread_id?: number | null;
+  has_before: boolean;
+  has_after: boolean;
+  previous_sender_id: number | null;
+  awaiting_ack: number[];
+  acknowledged: number[];
+  pending_count: number;
+  metadata?: {
+    topic: string;
+    archived: boolean;
+    members: { id: number; name: string }[];
+  };
+};
+
+export type PageRequest = {
+  entry?: boolean;
+  before?: number;
+  after?: number;
+  limit?: number;
+  metadata?: boolean;
+};
+
 export type Todo = {
   id: number;
   title: string;
@@ -497,6 +524,36 @@ export class Backend {
     return this.call<DiscussionDetail>("discussion.read", {
       discussion_id,
       message_id,
+    });
+  }
+
+  discussionPage(discussion_id: number, page: PageRequest) {
+    return this.call<DiscussionPage>("discussion.page", {
+      discussion_id,
+      ...page,
+    });
+  }
+
+  markRead(discussion_id: number, message_id: number) {
+    return this.call<{ read_through: number }>("discussion.mark_read", {
+      discussion_id,
+      message_id,
+    });
+  }
+
+  ackPending(discussion_id: number, through_message_id: number) {
+    return this.call<{
+      acked: number;
+      read_through: number;
+      pending_count: number;
+    }>("discussion.ack_pending", { discussion_id, through_message_id });
+  }
+
+  sendVisible(discussion_id: number, body: string) {
+    return this.call<{ id: number }>("discussion.send", {
+      discussion_id,
+      body,
+      mark_read: false,
     });
   }
 

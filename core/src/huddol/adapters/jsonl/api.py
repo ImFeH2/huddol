@@ -118,9 +118,42 @@ class Api:
                 after=params.get("after"),
             )
 
+        def discussion_page(params: dict[str, Any]) -> Any:
+            return self._human().discussion_page(
+                params["discussion_id"],
+                limit=params.get("limit", 50),
+                entry=params.get("entry", False),
+                before=params.get("before"),
+                after=params.get("after"),
+                metadata=params.get("metadata", False),
+            )
+
+        def discussion_mark_read(params: dict[str, Any]) -> Any:
+            result = self._human().mark_read(
+                params["discussion_id"], params["message_id"]
+            )
+            self._dispatcher.emit("discussion.read_updated", result)
+            return result
+
+        def discussion_ack_pending(params: dict[str, Any]) -> Any:
+            result = self._human().ack_pending(
+                params["discussion_id"], params["through_message_id"]
+            )
+            self._dispatcher.emit(
+                "discussion.read_updated",
+                {
+                    "discussion_id": params["discussion_id"],
+                    "member_id": HUMAN_ID,
+                    "read_through": result["read_through"],
+                },
+            )
+            return result
+
         def discussion_send(params: dict[str, Any]) -> Any:
             return self._human().send_message(
-                int(params["discussion_id"]), str(params.get("body", ""))
+                int(params["discussion_id"]),
+                str(params.get("body", "")),
+                mark_read=params.get("mark_read", True),
             )
 
         def discussion_ack(params: dict[str, Any]) -> Any:
@@ -329,6 +362,9 @@ class Api:
         register("discussion.create", discussion_create)
         register("discussion.list", discussion_list)
         register("discussion.read", discussion_read)
+        register("discussion.page", discussion_page)
+        register("discussion.mark_read", discussion_mark_read)
+        register("discussion.ack_pending", discussion_ack_pending)
         register("discussion.send", discussion_send)
         register("discussion.ack", discussion_ack)
         register("discussion.revoke_ack", discussion_revoke_ack)
