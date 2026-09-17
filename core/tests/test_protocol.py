@@ -351,6 +351,7 @@ def test_agent_settings_fill_defaults_merge_and_emit_events(server) -> None:
         "exchange_nudge_after": 3,
         "max_concurrent_turns": 2,
         "idle_streak_after": 5,
+        "no_tool_turns_before_pause": 2,
         "memory_index_bytes": 256,
         "token_limit": 1000,
     }

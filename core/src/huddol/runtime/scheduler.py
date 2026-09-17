@@ -146,6 +146,8 @@ class Scheduler:
         for member in self.store.list_members():
             if not member.is_agent or member.state != "idle":
                 continue
+            if self.history.pause_reason(member.id) is not None:
+                continue
             if self.over_token_limit(member.id):
                 continue
             if self.preparation_due(member.id):
@@ -210,6 +212,8 @@ class Scheduler:
         member = self.store.get_member(agent_id)
         if member is None or not member.is_agent or member.state != "idle":
             return None
+        if self.history.pause_reason(agent_id) is not None:
+            return None
         if self.over_token_limit(agent_id):
             return None
         if self.preparation_due(agent_id):
@@ -265,6 +269,7 @@ class Scheduler:
         status = "completed"
         error: str | None = None
         context_exceeded = False
+        pause_reason: str | None = None
         try:
             request = replace(request, resident=self.resident_block(agent_id))
             outcome = self._runner.run(
@@ -287,6 +292,7 @@ class Scheduler:
                 error=error,
             )
         except Exception as failure:
+            pause_reason = "runtime_error"
             status = "failed"
             error = f"{type(failure).__name__}: {failure}"
             logger.exception("turn failed for agent %s", agent_id)
@@ -298,6 +304,16 @@ class Scheduler:
                 error=error,
             )
         finally:
+            if (
+                status == "completed"
+                and self.history.no_tool_streak(agent_id)
+                >= self.parameters().no_tool_turns_before_pause
+            ):
+                pause_reason = "no_tool_calls"
+            if pause_reason is not None:
+                self.history.pause_for_safety(agent_id, pause_reason)
+                self.store.set_agent_state(agent_id, "paused")
+                self.emit("organization.changed", {"id": agent_id, "state": "paused"})
             reason = None
             if reminder is None:
                 reason = "prepared"

@@ -242,6 +242,8 @@ class Api:
                 "usage": self._scheduler.history.usage_total(agent_id),
                 "token_limit": self._scheduler.token_limit(),
                 "over_token_limit": self._scheduler.over_token_limit(agent_id),
+                "pause_reason": self._scheduler.history.pause_reason(agent_id),
+                "no_tool_streak": self._scheduler.history.no_tool_streak(agent_id),
                 "idle_streak": streak,
                 "idle": streak >= self._scheduler.parameters().idle_streak_after,
                 "runs": [

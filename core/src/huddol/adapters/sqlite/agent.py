@@ -11,6 +11,11 @@ from huddol.core.todo import Todo, TodoStatus
 from huddol.ports.agent import AgentRun, TurnEffect, WindowState
 
 SCHEMA = """
+CREATE TABLE IF NOT EXISTS agent_safety (
+    agent_id INTEGER PRIMARY KEY,
+    resumed_after INTEGER NOT NULL DEFAULT 0,
+    pause_reason TEXT
+);
 CREATE TABLE IF NOT EXISTS agent_windows (
     agent_id INTEGER PRIMARY KEY,
     number INTEGER NOT NULL,
@@ -165,8 +170,10 @@ class SqliteAgentStore:
         row = first(
             self._db.execute(
                 "SELECT reminded_json FROM agent_runs WHERE agent_id = ?"
+                " AND sequence > COALESCE((SELECT resumed_after FROM agent_safety"
+                " WHERE agent_id = ?), 0)"
                 " AND reminded_json != '[]' ORDER BY sequence DESC LIMIT 1",
-                (agent_id,),
+                (agent_id, agent_id),
             )
         )
         return (
@@ -174,6 +181,51 @@ class SqliteAgentStore:
             if row is not None
             else frozenset()
         )
+
+    def no_tool_streak(self, agent_id: int) -> int:
+        rows = self._db.execute(
+            "SELECT status, usage_json FROM agent_runs WHERE agent_id = ?"
+            " AND sequence > COALESCE((SELECT resumed_after FROM agent_safety"
+            " WHERE agent_id = ?), 0) ORDER BY sequence DESC",
+            (agent_id, agent_id),
+        )
+        streak = 0
+        for row in rows:
+            calls = json.loads(row["usage_json"] or "{}").get("tool_calls")
+            if type(calls) is int and calls > 0:
+                break
+            if row["status"] != "completed":
+                continue
+            if type(calls) is not int or calls != 0:
+                break
+            streak += 1
+        return streak
+
+    def pause_reason(self, agent_id: int) -> str | None:
+        row = first(
+            self._db.execute(
+                "SELECT pause_reason FROM agent_safety WHERE agent_id = ?", (agent_id,)
+            )
+        )
+        return row["pause_reason"] if row is not None else None
+
+    def pause_for_safety(self, agent_id: int, reason: str) -> None:
+        with self._db:
+            self._db.execute(
+                "INSERT INTO agent_safety (agent_id, pause_reason) VALUES (?, ?)"
+                " ON CONFLICT (agent_id) DO UPDATE SET pause_reason = excluded.pause_reason",
+                (agent_id, reason),
+            )
+
+    def reset_safety(self, agent_id: int) -> None:
+        with self._db:
+            self._db.execute(
+                "INSERT INTO agent_safety (agent_id, resumed_after) VALUES"
+                " (?, (SELECT COALESCE(MAX(sequence), 0) FROM agent_runs WHERE agent_id = ?))"
+                " ON CONFLICT (agent_id) DO UPDATE SET"
+                " resumed_after = excluded.resumed_after, pause_reason = NULL",
+                (agent_id, agent_id),
+            )
 
     def start_run(
         self,

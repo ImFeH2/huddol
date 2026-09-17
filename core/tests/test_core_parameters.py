@@ -17,6 +17,7 @@ def test_parameters_fill_defaults_and_ignore_unknown_keys(values) -> None:
         "exchange_nudge_after": 6,
         "max_concurrent_turns": 4,
         "idle_streak_after": 3,
+        "no_tool_turns_before_pause": 3,
         "memory_index_bytes": 16_384,
         "token_limit": 0,
     }

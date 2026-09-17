@@ -119,6 +119,39 @@ def test_reminder_snapshot_survives_upgrade_restart_and_window_reset(tmp_path) -
         base.close()
 
 
+def test_safety_pause_and_resume_boundary_survive_reopening(tmp_path) -> None:
+    path = tmp_path / "huddol.sqlite3"
+    base = SqliteStore(path)
+    store = SqliteAgentStore(base._db)
+    run = store.start_run(AGENT, reminded=[(1, 1)])
+    store.finish_run(
+        AGENT,
+        run.sequence,
+        status="completed",
+        messages_json="[]",
+        usage_json='{"tool_calls":0}',
+    )
+    store.pause_for_safety(AGENT, "no_tool_calls")
+    base.close()
+    base = SqliteStore(path)
+    store = SqliteAgentStore(base._db)
+    assert store.pause_reason(AGENT) == "no_tool_calls"
+    assert store.no_tool_streak(AGENT) == 1
+    store.reset_window(AGENT, "prepared")
+    assert store.pause_reason(AGENT) == "no_tool_calls"
+    store.reset_safety(AGENT)
+    base.close()
+    base = SqliteStore(path)
+    try:
+        store = SqliteAgentStore(base._db)
+        assert store.pause_reason(AGENT) is None
+        assert store.no_tool_streak(AGENT) == 0
+        assert store.last_reminder(AGENT) == frozenset()
+        assert len(store.runs(AGENT)) == 1
+    finally:
+        base.close()
+
+
 def test_windows_default_and_reset_without_any_runs(agent_store) -> None:
     assert agent_store.window(AGENT) == WindowState(1, 1, None, None)
     assert agent_store.latest_messages(AGENT) == "[]"

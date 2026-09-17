@@ -114,6 +114,23 @@ class AgentTools:
 
     def resume_agent(self, agent_id: int) -> dict[str, Any]:
         self._check("organization.resume_agent", agent_id)
+        member = self._deps.store.get_member(agent_id)
+        if member is None or not member.is_agent:
+            raise DomainError("not_found", f"Agent {agent_id} does not exist")
+        if (
+            self._deps.history.pause_reason(agent_id) is not None
+            and self._actor.is_agent
+        ):
+            raise DomainError(
+                "not_permitted", "Only a Human can resume a safety-paused Agent"
+            )
+        runs = self._deps.history.runs(agent_id, limit=1)
+        if runs and runs[0].status == "running":
+            raise DomainError(
+                "agent_running", "Wait for the active Turn to finish before resuming"
+            )
+        if member.state == "paused":
+            self._deps.history.reset_safety(agent_id)
         self._deps.store.set_agent_state(agent_id, "idle")
         return {"id": agent_id, "state": "idle"}
 

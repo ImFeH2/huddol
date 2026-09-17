@@ -731,14 +731,16 @@ class PydanticModelRunner:
                     messages = ModelMessagesTypeAdapter.dump_json(
                         _settle_tool_calls(captured)
                     ).decode("utf-8")
-                input_tokens = _last_input_tokens(captured[history_length:])
+                new_messages = captured[history_length:]
+                input_tokens = _last_input_tokens(new_messages)
                 error = f"{type(failure).__name__}: {failure}"
                 context_exceeded = is_context_exceeded(failure)
             else:
                 messages = ModelMessagesTypeAdapter.dump_json(
                     result.all_messages()
                 ).decode("utf-8")
-                input_tokens = _last_input_tokens(result.new_messages())
+                new_messages = result.new_messages()
+                input_tokens = _last_input_tokens(new_messages)
 
         usage = json.dumps(
             {
@@ -746,7 +748,12 @@ class PydanticModelRunner:
                 "output_tokens": counted.output_tokens,
                 "cache_read_tokens": counted.cache_read_tokens,
                 "requests": counted.requests,
-                "tool_calls": counted.tool_calls,
+                "tool_calls": sum(
+                    isinstance(part, ToolCallPart)
+                    for message in new_messages
+                    if isinstance(message, ModelResponse)
+                    for part in message.parts
+                ),
                 "last_input_tokens": input_tokens,
             }
         )

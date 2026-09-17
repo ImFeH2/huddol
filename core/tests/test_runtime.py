@@ -423,10 +423,18 @@ def test_preparation_runs_without_pending_and_resets_after_any_outcome(
             "turn.started",
             {"agent_id": MAIN, "sequence": 2, "items": 0, "kind": "preparation"},
         ),
+        *(
+            [("organization.changed", {"id": MAIN, "state": "paused"})]
+            if preparation_status == "exception"
+            else []
+        ),
         ("window.reset", {"agent_id": MAIN, "number": 2, "reason": "prepared"}),
         ("turn.finished", {"agent_id": MAIN, "sequence": 2, "status": record.status}),
     ]
     world.store.append_message(room, HUMAN, "@Main next task")
+    if preparation_status == "exception":
+        assert scheduler.run_turn(MAIN) is None
+        scheduler.tools_for(HUMAN).resume_agent(MAIN)
     assert scheduler.run_turn(MAIN).status == first_status
     following = runner.requests[-1]
     assert following.agent_id == MAIN and following.agent_name == "Main"
@@ -955,7 +963,7 @@ def test_memory_index_truncation_follows_the_current_parameter(world) -> None:
             assert "😀" not in resident
 
 
-def test_resident_loading_failure_preserves_history_and_returns_to_idle(
+def test_resident_loading_failure_preserves_history_and_hard_pauses(
     world, monkeypatch
 ) -> None:
     mention(world)
@@ -972,7 +980,8 @@ def test_resident_loading_failure_preserves_history_and_returns_to_idle(
     assert record is not None and record.status == "failed"
     assert "memory is unreadable" in record.error
     assert world.history.latest_messages(MAIN) == previous
-    assert world.store.get_member(MAIN).state == "idle"
+    assert world.store.get_member(MAIN).state == "paused"
+    assert world.history.pause_reason(MAIN) == "runtime_error"
 
 
 def test_second_model_call_failure_keeps_saved_response_and_completed_tool_return(
@@ -1075,7 +1084,7 @@ def test_a_failing_turn_is_recorded_and_the_agent_recovers(world) -> None:
     mention(world)
 
     def explode(request, tools):
-        raise RuntimeError("model exploded")
+        return TurnOutcome(messages_json="[]", error="RuntimeError: model exploded")
 
     scheduler = Scheduler(world, RecordingRunner(explode))
     record = scheduler.run_turn(MAIN)
@@ -1348,7 +1357,7 @@ def test_concurrency_follows_the_current_parameter(world, fail) -> None:
         entered[request.agent_id].set()
         assert release[request.agent_id].wait(timeout=5)
         if fail:
-            raise RuntimeError("model failed")
+            return TurnOutcome(messages_json="[]", error="RuntimeError: model failed")
         return TurnOutcome(messages_json="[]")
 
     room = world.store.create_discussion("parallel", [HUMAN, MAIN, HELPER])

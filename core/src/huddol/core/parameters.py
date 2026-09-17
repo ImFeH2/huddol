@@ -10,6 +10,7 @@ class AgentParameters:
     exchange_nudge_after: int = 6
     max_concurrent_turns: int = 4
     idle_streak_after: int = 3
+    no_tool_turns_before_pause: int = 3
     memory_index_bytes: int = 16_384
     token_limit: int = 0
 
