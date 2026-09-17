@@ -161,6 +161,20 @@ class SqliteAgentStore:
                 found.add(message_id)
         return frozenset(found)
 
+    def last_reminder(self, agent_id: int) -> frozenset[tuple[int, int]]:
+        row = first(
+            self._db.execute(
+                "SELECT reminded_json FROM agent_runs WHERE agent_id = ?"
+                " AND reminded_json != '[]' ORDER BY sequence DESC LIMIT 1",
+                (agent_id,),
+            )
+        )
+        return (
+            frozenset((int(d), int(m)) for d, m in json.loads(row["reminded_json"]))
+            if row is not None
+            else frozenset()
+        )
+
     def start_run(
         self,
         agent_id: int,
@@ -180,8 +194,14 @@ class SqliteAgentStore:
         with self._db:
             self._db.execute(
                 "INSERT INTO agent_runs (agent_id, sequence, run_id, status, started_at,"
-                " messages_json) VALUES (?, ?, ?, 'running', ?, '[]')",
-                (agent_id, sequence, identifier, started),
+                " messages_json, reminded_json) VALUES (?, ?, ?, 'running', ?, '[]', ?)",
+                (
+                    agent_id,
+                    sequence,
+                    identifier,
+                    started,
+                    json.dumps(sorted(set(reminded))),
+                ),
             )
             self._db.executemany(
                 "INSERT OR IGNORE INTO reminded (agent_id, discussion_id, message_id,"

@@ -50,7 +50,6 @@ class Scheduler:
         self._runner = runner
         self._authorizer = authorizer or Authorizer()
         self._threads: dict[int, threading.Thread] = {}
-        self._failed: dict[int, frozenset[tuple[int, int]]] = {}
         self._lock = threading.Lock()
         self._stop = threading.Event()
         self._wake = threading.Event()
@@ -142,18 +141,6 @@ class Scheduler:
             for item in self.store.pending(agent_id)
         )
 
-    def _record_outcome(self, agent_id: int, status: str) -> None:
-        keys = self.pending_keys(agent_id) if status == "failed" else None
-        with self._lock:
-            if keys is None:
-                self._failed.pop(agent_id, None)
-            else:
-                self._failed[agent_id] = keys
-
-    def _failed_on(self, agent_id: int, keys: frozenset[tuple[int, int]]) -> bool:
-        with self._lock:
-            return self._failed.get(agent_id) == keys
-
     def runnable_agents(self) -> tuple[int, ...]:
         found: list[int] = []
         for member in self.store.list_members():
@@ -165,7 +152,7 @@ class Scheduler:
                 found.append(member.id)
                 continue
             keys = self.pending_keys(member.id)
-            if keys and not self._failed_on(member.id, keys):
+            if keys and keys != self.history.last_reminder(member.id):
                 found.append(member.id)
         return tuple(found)
 
@@ -229,6 +216,11 @@ class Scheduler:
             return self._execute(agent_id, member.name, None, PREPARATION_PROMPT)
         reminder = build_reminder(self.store, self.history, agent_id, member.name)
         if reminder is None:
+            return None
+        keys = frozenset(
+            (item.discussion_id, item.message_id) for item in reminder.items
+        )
+        if keys == self.history.last_reminder(agent_id):
             return None
         return self._execute(agent_id, member.name, reminder, reminder.render())
 
@@ -306,7 +298,6 @@ class Scheduler:
                 error=error,
             )
         finally:
-            self._record_outcome(agent_id, status)
             reason = None
             if reminder is None:
                 reason = "prepared"
@@ -317,8 +308,6 @@ class Scheduler:
                 reason = "overflow"
             if reason is not None:
                 window = self.history.reset_window(agent_id, reason)
-                with self._lock:
-                    self._failed.pop(agent_id, None)
                 self.emit(
                     "window.reset",
                     {"agent_id": agent_id, "number": window.number, "reason": reason},

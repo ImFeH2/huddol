@@ -347,6 +347,8 @@ def test_lowering_the_window_budget_schedules_preparation(world, monkeypatch) ->
     saved = ModelMessagesTypeAdapter.validate_json(runs[0].messages_json)
     assert saved[-2].parts[0].content == PREPARATION_PROMPT
     assert world.history.latest_messages(MAIN) == "[]"
+    assert scheduler.run_turn(MAIN) is None
+    mention(world)
     assert scheduler.run_turn(MAIN).status == "completed"
     saved = ModelMessagesTypeAdapter.validate_json(world.history.latest_messages(MAIN))
     assert len(saved) == 3
@@ -409,7 +411,6 @@ def test_preparation_runs_without_pending_and_resets_after_any_outcome(
     assert world.history.latest_messages(MAIN) == "[]"
     assert not scheduler.preparation_due(MAIN)
     assert not restarted.preparation_due(MAIN)
-    assert scheduler._failed == {}
     assert scheduler.runnable_agents() == ()
     assert events == [
         (
@@ -436,7 +437,7 @@ def test_preparation_runs_without_pending_and_resets_after_any_outcome(
 
 
 @pytest.mark.parametrize("fresh", [False, True])
-def test_overflow_resets_only_after_an_earlier_run_and_retries_once(
+def test_overflow_resets_only_after_an_earlier_run_and_waits_for_changed_mentions(
     world, fresh
 ) -> None:
     mention(world)
@@ -453,19 +454,22 @@ def test_overflow_resets_only_after_an_earlier_run_and_retries_once(
         messages_json=prior, error="too long", context_exceeded=True
     )
     previous = world.history.window(MAIN)
+    mention(world)
     scheduler._wake.clear()
     assert scheduler.run_turn(MAIN).status == "failed"
     state = world.history.window(MAIN)
     assert state.number == previous.number + 1
     assert state.reason == "overflow" and state.since_sequence == 3
     assert world.history.latest_messages(MAIN) == "[]"
-    assert scheduler._failed == {}
+    assert scheduler.run_turn(MAIN) is None
+    assert scheduler.tick() == ()
     assert scheduler._wake.is_set()
     assert (
         "window.reset",
         {"agent_id": MAIN, "number": state.number, "reason": "overflow"},
     ) in events
     try:
+        mention(world)
         assert scheduler.tick() == (MAIN,)
         scheduler._threads[MAIN].join(timeout=5)
         assert not scheduler._threads[MAIN].is_alive()
@@ -474,7 +478,7 @@ def test_overflow_resets_only_after_an_earlier_run_and_retries_once(
         assert following.reminder is not None
         assert following.resident.endswith(reset_notice(state))
         assert world.history.window(MAIN) == state
-        assert scheduler._failed[MAIN] == scheduler.pending_keys(MAIN)
+        assert world.history.last_reminder(MAIN) == scheduler.pending_keys(MAIN)
         assert scheduler.tick() == ()
     finally:
         scheduler.stop()
@@ -500,7 +504,7 @@ def test_first_turn_overflow_is_an_ordinary_failure(world, fresh) -> None:
     )
     assert scheduler.run_turn(MAIN).status == "failed"
     assert world.history.window(MAIN) == state
-    assert scheduler._failed[MAIN] == scheduler.pending_keys(MAIN)
+    assert world.history.last_reminder(MAIN) == scheduler.pending_keys(MAIN)
     assert scheduler.tick() == ()
     assert world.history.latest_messages(MAIN) == '[{"text":"partial"}]'
     assert "window.reset" not in events
@@ -596,6 +600,53 @@ def test_no_reminder_without_pending_mentions(world) -> None:
     assert build_reminder(world.store, world.history, MAIN, "Main") is None
 
 
+@pytest.mark.parametrize("fail", [False, True])
+def test_unchanged_mentions_wait_across_restart_and_resume(world, fail) -> None:
+    mention(world)
+    runner = RecordingRunner(
+        lambda request, tools: TurnOutcome(
+            messages_json="[]", error="failure" if fail else None
+        )
+    )
+    scheduler = Scheduler(world, runner)
+    assert scheduler.run_turn(MAIN) is not None
+    world.store.set_agent_state(MAIN, "paused")
+    assert scheduler.run_turn(MAIN) is None
+    world.store.set_agent_state(MAIN, "idle")
+    restarted = Scheduler(world, runner)
+    for current in (scheduler, restarted):
+        assert current.runnable_agents() == ()
+        assert current.run_turn(MAIN) is None
+    assert len(runner.requests) == 1
+
+
+@pytest.mark.parametrize("change", ["partial_ack", "all_ack", "new_mention"])
+@pytest.mark.parametrize("fail", [False, True])
+def test_next_turn_compares_mentions_with_the_start_of_the_previous_turn(
+    world, change, fail
+) -> None:
+    room = mention(world)
+    world.store.append_message(room, HUMAN, "@Main another task")
+
+    def respond(request, tools):
+        if request.sequence == 1:
+            tools.read_discussion(room)
+            if change == "partial_ack":
+                tools.ack(room, [1])
+            elif change == "all_ack":
+                tools.ack(room, [1, 2])
+            else:
+                world.store.append_message(room, HUMAN, "@Main arrived during the turn")
+        return TurnOutcome(messages_json="[]", error="failure" if fail else None)
+
+    scheduler = Scheduler(world, RecordingRunner(respond))
+    assert scheduler.run_turn(MAIN) is not None
+    restarted = Scheduler(world, RecordingRunner())
+    assert restarted.runnable_agents() == (() if change == "all_ack" else (MAIN,))
+    assert (restarted.run_turn(MAIN) is not None) == (change != "all_ack")
+    assert restarted.run_turn(MAIN) is None
+
+
 def test_turn_records_history_and_returns_to_idle(world) -> None:
     mention(world)
     runner = RecordingRunner()
@@ -661,6 +712,7 @@ def test_resident_is_persisted_and_stays_unchanged_until_a_reset(
             tools.edit("memory/MEMORY.md", "MEMORY_STATE_OLD", "MEMORY_STATE_NEW")
             tools.complete_todo(old_todo["id"])
             tools.add_todo("TASK_STATE_NEW")
+            world.store.append_message(room, HUMAN, "@Main continue")
         reminder = build_reminder(world.store, world.history, MAIN, "Main")
         assert reminder is not None
         start = len(received)
@@ -708,6 +760,8 @@ def test_resident_is_persisted_and_stays_unchanged_until_a_reset(
             assert "Keep the model response" in saved
 
     world.history.reset_window(MAIN, "prepared")
+    assert scheduler.run_turn(MAIN) is None
+    world.store.append_message(room, HUMAN, "@Main continue after reset")
     record = scheduler.run_turn(MAIN)
     assert record is not None and record.status == ("failed" if fail else "completed")
     saved = world.history.latest_messages(MAIN)
@@ -886,11 +940,11 @@ def test_render_resident_orders_only_the_requested_blocks(
 
 
 def test_memory_index_truncation_follows_the_current_parameter(world) -> None:
-    mention(world)
     world.memory_tree_for(MAIN).write("MEMORY.md", "abc😀def")
     runner = RecordingRunner()
     scheduler = Scheduler(world, runner)
     for limit, prefix, truncated in [(5, "abc", True), (10, "abc😀def", False)]:
+        mention(world)
         world.settings.set_settings("agent", {"memory_index_bytes": limit})
         assert scheduler.run_turn(MAIN).status == "completed"
         resident = runner.requests[-1].resident
@@ -913,6 +967,7 @@ def test_resident_loading_failure_preserves_history_and_returns_to_idle(
         raise OSError("memory is unreadable")
 
     monkeypatch.setattr(scheduler, "resident_block", fail)
+    mention(world)
     record = scheduler.run_turn(MAIN)
     assert record is not None and record.status == "failed"
     assert "memory is unreadable" in record.error
@@ -998,14 +1053,18 @@ def test_second_model_call_failure_keeps_saved_response_and_completed_tool_retur
     assert world.history.latest_messages(MAIN) == run.messages_json
 
 
-def test_scheduler_resumes_interrupted_progress(world) -> None:
-    mention(world)
-    run = world.history.start_run(MAIN)
+def test_scheduler_resumes_interrupted_progress_on_changed_mentions(world) -> None:
+    room = mention(world)
+    run = world.history.start_run(MAIN, reminded=[(room, 1)])
     partial = '[{"text":"partial"}]'
     world.history.save_progress(MAIN, run.sequence, partial)
     assert world.history.mark_interrupted() == 1
     runner = RecordingRunner()
-    record = Scheduler(world, runner).run_turn(MAIN)
+    scheduler = Scheduler(world, runner)
+    assert scheduler.runnable_agents() == ()
+    assert scheduler.run_turn(MAIN) is None
+    world.store.append_message(room, HUMAN, "@Main continue")
+    record = scheduler.run_turn(MAIN)
     assert record is not None and record.status == "completed"
     assert runner.requests[0].history_json == partial
     assert runner.requests[0].sequence == run.sequence + 1
@@ -1057,8 +1116,7 @@ def test_a_failed_turn_is_not_restarted_on_the_same_pending(world) -> None:
         assert scheduler.runnable_agents() == (MAIN,)
         record = scheduler.run_turn(MAIN)
         assert record is not None and record.status == "completed"
-        assert scheduler._failed == {}
-        assert scheduler.runnable_agents() == (MAIN,)
+        assert scheduler.runnable_agents() == ()
     finally:
         scheduler.stop()
 

@@ -87,6 +87,38 @@ def test_runs_append_and_report_the_latest_history(
     assert agent_store.latest_messages(AGENT) == '[{"kind":"request"}]'
 
 
+def test_reminder_snapshot_survives_upgrade_restart_and_window_reset(tmp_path) -> None:
+    path = tmp_path / "huddol.sqlite3"
+    base = SqliteStore(path)
+    store = SqliteAgentStore(base._db)
+    legacy = store.start_run(AGENT)
+    store.finish_run(AGENT, legacy.sequence, status="completed", messages_json="[]")
+    base._db.execute("ALTER TABLE agent_runs DROP COLUMN reminded_json")
+    base._db.commit()
+    base.close()
+
+    base = SqliteStore(path)
+    store = SqliteAgentStore(base._db)
+    assert store.runs(AGENT)[0].sequence == legacy.sequence
+    assert store.last_reminder(AGENT) == frozenset()
+    store.start_run(AGENT, reminded=[(2, 1), (1, 1), (2, 1)])
+    base.close()
+
+    base = SqliteStore(path)
+    try:
+        store = SqliteAgentStore(base._db)
+        assert store.mark_interrupted() == 1
+        assert store.last_reminder(AGENT) == frozenset({(1, 1), (2, 1)})
+        assert store.last_reminder(AGENT + 1) == frozenset()
+        store.start_run(AGENT)
+        store.reset_window(AGENT, "prepared")
+        assert store.last_reminder(AGENT) == frozenset({(1, 1), (2, 1)})
+        store.start_run(AGENT, reminded=[(2, 1)])
+        assert store.last_reminder(AGENT) == frozenset({(2, 1)})
+    finally:
+        base.close()
+
+
 def test_windows_default_and_reset_without_any_runs(agent_store) -> None:
     assert agent_store.window(AGENT) == WindowState(1, 1, None, None)
     assert agent_store.latest_messages(AGENT) == "[]"

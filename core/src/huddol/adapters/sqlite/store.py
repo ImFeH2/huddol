@@ -79,6 +79,7 @@ CREATE TABLE IF NOT EXISTS agent_runs (
     started_at TEXT NOT NULL,
     completed_at TEXT,
     messages_json TEXT NOT NULL DEFAULT '[]',
+    reminded_json TEXT NOT NULL DEFAULT '[]',
     usage_json TEXT,
     error TEXT,
     PRIMARY KEY (agent_id, sequence)
@@ -163,6 +164,12 @@ class SqliteStore:
         }:
             self._db.execute(
                 "ALTER TABLE mentions ADD COLUMN length INTEGER NOT NULL DEFAULT 0"
+            )
+        if "reminded_json" not in {
+            row["name"] for row in self._db.execute("PRAGMA table_info(agent_runs)")
+        }:
+            self._db.execute(
+                "ALTER TABLE agent_runs ADD COLUMN reminded_json TEXT NOT NULL DEFAULT '[]'"
             )
         self._db.commit()
 
