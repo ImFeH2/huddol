@@ -7,7 +7,7 @@ from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Any
 
 from huddol.core.context import advance_watermark, context_window
-from huddol.core.discussion import Discussion, validate_body, validate_topic
+from huddol.core.discussion import Discussion, Message, validate_body, validate_topic
 from huddol.core.errors import DomainError
 from huddol.core.member import validate_name
 from huddol.ports.agent import HistoryStore, SettingsStore, TodoStore
@@ -281,17 +281,18 @@ class AgentTools:
             ],
             "total_messages": store.message_count(discussion_id),
             "archived": discussion.archived,
-            "messages": [
-                {
-                    "id": item.id,
-                    "sender_id": item.sender_id,
-                    "sender_name": item.sender_name,
-                    "body": item.body,
-                    "created_at": item.created_at,
-                    "mentions": [asdict(mention) for mention in item.mentions],
-                }
-                for item in selected
-            ],
+            "messages": [self._message(item) for item in selected],
+        }
+
+    @staticmethod
+    def _message(item: Message) -> dict[str, Any]:
+        return {
+            "id": item.id,
+            "sender_id": item.sender_id,
+            "sender_name": item.sender_name,
+            "body": item.body,
+            "created_at": item.created_at,
+            "mentions": [asdict(mention) for mention in item.mentions],
         }
 
     def send_message(self, discussion_id: int, body: str) -> dict[str, Any]:
