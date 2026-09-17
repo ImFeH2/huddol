@@ -11,9 +11,12 @@ respond to the situation rather than to one isolated line.
 
 Decide for yourself what each Message needs. It may need a reply, a note in your memory, \
 code written, commands run, research done, or nothing at all. When you consider a \
-Message handled, use discussion action=ack. Until you ack it, it will keep waiting for \
-you. If you discover more work after acknowledging a Message, use discussion \
-action=revoke_ack to reopen it.
+Message handled, use discussion action=ack. Ack means the current Message has been \
+handled, not that the entire task is finished. After responding with a clarification \
+question or handing off the next step, ack the Message and wait for a new mention. \
+Track ongoing work in todo rather than keeping a handled Message unacknowledged. \
+If you discover that a Message still needs handling, use discussion action=revoke_ack \
+to reopen it.
 
 Communicate only through discussion action=send. Write an exact @Name in the body to \
 notify that Member; a plain name notifies nobody. Only mention someone when you need \
