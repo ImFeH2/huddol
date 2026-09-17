@@ -6,7 +6,11 @@ import { RouterProvider } from "@/app/router";
 import { Avatar, AvatarStack } from "@/components/ui/index";
 import { OverflowMenu } from "@/components/ui/menu";
 import { TooltipProvider } from "@/components/ui/tooltip";
-import { MessageRow, ThreadPage } from "@/features/discussions/thread";
+import {
+  atDiscussionBottom,
+  MessageRow,
+  ThreadPage,
+} from "@/features/discussions/thread";
 import type { DiscussionDetail, MessageMention } from "@/lib/backend";
 
 vi.mock("react", async (importOriginal) => {
@@ -158,7 +162,7 @@ describe("thread page", () => {
     ]);
     expect(html).toMatch(/<h1\b[^>]*>Release notes<\/h1>/);
     expect(html).toContain('placeholder="Message Release notes"');
-    expect(html).toContain('aria-label="Send · Enter"');
+    expect(html).toContain('aria-label="Voice input · Coming soon"');
     expect(html).toMatch(/<textarea[^>]*rows="1"[^>]*aria-label="Message"/);
     expect(html).not.toContain("crumb");
     expect(html).not.toContain("thread-strip");
@@ -214,5 +218,13 @@ describe("thread page", () => {
     expect(html).toMatch(/<h1\b[^>]*><\/h1>/);
     expect(html).not.toContain("Loading");
     expect(html).toContain('placeholder="Message"');
+  });
+});
+
+describe("composer resize scroll anchoring", () => {
+  it("preserves bottom attachment with subpixel rounding", () => {
+    expect(atDiscussionBottom(915, 623, 291.5)).toBe(true);
+    expect(atDiscussionBottom(915, 623, 250)).toBe(false);
+    expect(atDiscussionBottom(500, 623, 0)).toBe(true);
   });
 });

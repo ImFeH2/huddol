@@ -104,11 +104,13 @@ describe("composer layout", () => {
     expect(html).toContain('data-expanded="false"');
     expect(html).toContain('role="combobox"');
     expect(html).toContain('aria-label="Message"');
-    expect(html).toContain('aria-label="Send · Enter" disabled=""');
+    expect(html).toContain('aria-label="Voice input · Coming soon"');
     expect(html).toContain('aria-hidden="true"');
     expect(html).toContain('tabindex="-1"');
     expect(html).toContain("motion-reduce:transition-none");
     expect(html).not.toContain("Open prompt input");
     expect(html).not.toContain('type="file"');
+    expect(html).toContain("@[601px]:w-3/4");
+    expect(html).not.toContain("max-width");
   });
 });

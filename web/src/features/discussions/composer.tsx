@@ -1,5 +1,11 @@
 import { clsx } from "clsx";
-import { ArrowUp } from "lucide-react";
+import {
+  ArrowUp,
+  ChevronDown,
+  Mic,
+  Plus,
+  SlidersHorizontal,
+} from "lucide-react";
 import {
   Fragment,
   useId,
@@ -217,7 +223,7 @@ export function Composer({
   return (
     <div className="pointer-events-none absolute inset-x-4 bottom-4 flex justify-center">
       <div
-        className="invisible pointer-events-none absolute top-0 w-full max-w-[320px] border border-transparent"
+        className="invisible pointer-events-none absolute top-0 w-full @[601px]:w-3/4 border border-transparent"
         aria-hidden="true"
       >
         <Textarea
@@ -232,9 +238,11 @@ export function Composer({
       <div
         ref={card}
         data-expanded={layout.expanded}
-        className="pointer-events-auto relative w-full rounded-[24px] border border-line-interactive bg-surface-raised shadow-button focus-within:border-line-focus focus-within:ring-1 focus-within:ring-ring/20 transition-[max-width,height] motion-reduce:transition-none"
+        className={clsx(
+          "pointer-events-auto relative w-full rounded-[24px] border border-[#e5e5e5] bg-[#ffffff] text-[#171717] shadow-[0_1px_3px_rgb(0_0_0/0.1)] focus-within:border-[#a3a3a3] focus-within:ring-1 focus-within:ring-black/10 transition-[width,height] motion-reduce:transition-none",
+          layout.expanded ? "@[601px]:w-[90%]" : "@[601px]:w-3/4",
+        )}
         style={{
-          maxWidth: layout.expanded ? 480 : 320,
           height: layout.height,
           transitionDuration: layout.smooth ? "0.4s, 0.15s" : "0.4s, 0.4s",
           transitionTimingFunction: layout.smooth
@@ -355,14 +363,54 @@ export function Composer({
             }}
           />
         </div>
+        {layout.expanded ? (
+          <div className="absolute bottom-2 left-3 right-12 flex min-w-0 items-center gap-1 text-[#737373]">
+            <button
+              type="button"
+              disabled
+              aria-label="Model selection · Coming soon"
+              title="Model selection · Coming soon"
+              className="flex min-w-0 items-center gap-1 rounded-full px-2 py-1 text-xs disabled:cursor-not-allowed"
+            >
+              <span className="truncate">Model</span>
+              <ChevronDown size={12} aria-hidden="true" />
+            </button>
+            <button
+              type="button"
+              disabled
+              aria-label="Thinking effort · Coming soon"
+              title="Thinking effort · Coming soon"
+              className="flex min-w-0 items-center gap-1 rounded-full px-2 py-1 text-xs disabled:cursor-not-allowed"
+            >
+              <SlidersHorizontal size={14} aria-hidden="true" />
+              <span className="truncate">Effort</span>
+            </button>
+            <button
+              type="button"
+              disabled
+              aria-label="Attach files · Coming soon"
+              title="Attach files · Coming soon"
+              className="ml-auto flex size-7 flex-none items-center justify-center rounded-full disabled:cursor-not-allowed"
+            >
+              <Plus size={14} aria-hidden="true" />
+            </button>
+          </div>
+        ) : null}
         <button
           type="button"
-          className="absolute right-2 bottom-2 flex size-8 items-center justify-center rounded-full bg-blue-500 text-gray-0 cursor-pointer hover:enabled:bg-blue-300 disabled:bg-blue-700/45 disabled:text-gray-0/55 disabled:cursor-not-allowed focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-line-focus"
-          aria-label="Send · Enter"
+          className="absolute right-2 bottom-2 flex size-8 items-center justify-center rounded-full bg-[#171717] text-white cursor-pointer hover:enabled:bg-[#404040] disabled:opacity-40 disabled:cursor-not-allowed focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#737373]"
+          aria-label={
+            body.trim() ? "Send · Enter" : "Voice input · Coming soon"
+          }
+          title={body.trim() ? "Send · Enter" : "Voice input · Coming soon"}
           disabled={busy || !body.trim()}
           onClick={() => void submit()}
         >
-          <ArrowUp size={15} aria-hidden="true" />
+          {body.trim() ? (
+            <ArrowUp size={15} aria-hidden="true" />
+          ) : (
+            <Mic size={15} aria-hidden="true" />
+          )}
         </button>
       </div>
     </div>

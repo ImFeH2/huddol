@@ -4,6 +4,7 @@ import {
   Fragment,
   useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -32,6 +33,14 @@ import {
 } from "@/lib/backend";
 import { formatTime, relativeTime } from "@/lib/format";
 
+export function atDiscussionBottom(
+  height: number,
+  viewport: number,
+  top: number,
+) {
+  return height - viewport - top <= 1;
+}
+
 export function ThreadPage({ id }: { id: number }) {
   const { members, humanId, discussions, refresh } = useOrganization();
   const navigate = useNavigate();
@@ -43,6 +52,24 @@ export function ThreadPage({ id }: { id: number }) {
   const [editingMembers, setEditingMembers] = useState(false);
   const [fresh, setFresh] = useState<ReadonlySet<number>>(new Set());
   const [composerSize, setComposerSize] = useState(48);
+  const scrollArea = useRef<HTMLDivElement>(null);
+  const preserveBottom = useRef(false);
+  const resizeComposer = useCallback((height: number) => {
+    const element = scrollArea.current;
+    preserveBottom.current =
+      element !== null &&
+      atDiscussionBottom(
+        element.scrollHeight,
+        element.clientHeight,
+        element.scrollTop,
+      );
+    setComposerSize(height);
+  }, []);
+  useLayoutEffect(() => {
+    const element = scrollArea.current;
+    if (element && preserveBottom.current)
+      element.scrollTop = element.scrollHeight;
+  }, [composerSize]);
   const bottom = useRef<HTMLDivElement>(null);
   const seen = useRef(0);
   const first = useRef(true);
@@ -246,8 +273,11 @@ export function ThreadPage({ id }: { id: number }) {
       />
 
       <PageBody variant="flush">
-        <div className="relative flex min-h-0 flex-1 flex-col">
-          <div className="min-h-0 flex-1 overflow-y-auto border-t border-line px-8 pt-4 pb-6 max-[940px]:px-6">
+        <div className="@container relative flex min-h-0 flex-1 flex-col">
+          <div
+            ref={scrollArea}
+            className="min-h-0 flex-1 overflow-y-auto border-t border-line px-8 pt-4 pb-6 max-[940px]:px-6"
+          >
             {detail && detail.messages.length === 0 ? (
               <EmptyState title="No messages yet" />
             ) : null}
@@ -295,7 +325,7 @@ export function ThreadPage({ id }: { id: number }) {
             busy={busy}
             placeholder={topic ? `Message ${topic}` : "Message"}
             onSend={send}
-            onHeightChange={setComposerSize}
+            onHeightChange={resizeComposer}
           />
         </div>
       </PageBody>
