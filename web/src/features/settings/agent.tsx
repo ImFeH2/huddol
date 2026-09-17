@@ -16,6 +16,7 @@ const FIELDS = [
   { key: "memory_index_bytes", label: "MEMORY.md in context (bytes)" },
   { key: "exchange_nudge_after", label: "Nudge after (messages)" },
   { key: "idle_streak_after", label: "Idle after (Turns)" },
+  { key: "no_tool_turns_before_pause", label: "Pause after tool-free Turns" },
   { key: "max_concurrent_turns", label: "Concurrent Turns" },
   { key: "token_limit", label: "Tokens per Agent" },
 ];

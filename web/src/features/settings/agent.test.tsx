@@ -7,6 +7,7 @@ const drafts = {
   memory_index_bytes: "16384",
   exchange_nudge_after: "6",
   idle_streak_after: "3",
+  no_tool_turns_before_pause: "3",
   max_concurrent_turns: "4",
   token_limit: "0",
 };
@@ -18,12 +19,13 @@ function renderForm(values = drafts) {
 }
 
 describe("Agent settings", () => {
-  it("sends all six values as integers", () => {
+  it("sends all values as integers", () => {
     expect(agentUpdate(drafts)).toEqual({
       context_window_tokens: 200000,
       memory_index_bytes: 16384,
       exchange_nudge_after: 6,
       idle_streak_after: 3,
+      no_tool_turns_before_pause: 3,
       max_concurrent_turns: 4,
       token_limit: 0,
     });
@@ -65,15 +67,16 @@ describe("Agent settings", () => {
       "MEMORY.md in context (bytes)",
       "Nudge after (messages)",
       "Idle after (Turns)",
+      "Pause after tool-free Turns",
       "Concurrent Turns",
       "Tokens per Agent",
     ])
       expect(html).toContain(label);
     for (const value of Object.values(drafts))
       expect(html).toContain(`value="${value}"`);
-    expect(html.match(/type="number"/g)).toHaveLength(6);
-    expect(html.match(/inputMode="numeric"/g)).toHaveLength(6);
-    expect(html.match(/min="1"/g)).toHaveLength(5);
+    expect(html.match(/type="number"/g)).toHaveLength(7);
+    expect(html.match(/inputMode="numeric"/g)).toHaveLength(7);
+    expect(html.match(/min="1"/g)).toHaveLength(6);
     expect(html.match(/min="0"/g)).toHaveLength(1);
     expect(html.match(/type="submit"/g)).toHaveLength(1);
     expect(html).toContain("0 means no ceiling.");
@@ -96,7 +99,7 @@ describe("Agent settings", () => {
     expect(html).toMatch(
       /<fieldset[^>]*aria-label="Agent settings"[^>]*disabled=""/,
     );
-    expect(html.match(/value=""/g)).toHaveLength(6);
+    expect(html.match(/value=""/g)).toHaveLength(7);
     expect(html).not.toContain('value="0"');
   });
 });

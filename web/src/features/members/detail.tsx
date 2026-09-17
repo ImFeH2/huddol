@@ -278,6 +278,13 @@ export function AgentDetailStatus({ detail }: { detail: AgentDetail }) {
           Token ceiling
         </Chip>
       ) : null}
+      {detail.pause_reason ? (
+        <Chip tone="danger">
+          {detail.pause_reason === "no_tool_calls"
+            ? `Paused: ${plural(detail.no_tool_streak, "tool-free Turn")}`
+            : "Paused: runtime error"}
+        </Chip>
+      ) : null}
       {detail.idle ? (
         <Chip tone="warning">{plural(detail.idle_streak, "idle Turn")}</Chip>
       ) : null}

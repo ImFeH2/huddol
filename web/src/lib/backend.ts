@@ -78,6 +78,8 @@ export type AgentDetail = {
   over_token_limit: boolean;
   idle: boolean;
   idle_streak: number;
+  no_tool_streak: number;
+  pause_reason: "no_tool_calls" | "runtime_error" | null;
   window: {
     number: number;
     since_sequence: number;

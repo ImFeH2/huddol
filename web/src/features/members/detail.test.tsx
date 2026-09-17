@@ -40,6 +40,8 @@ const detail: AgentDetail = {
   over_token_limit: false,
   idle: false,
   idle_streak: 0,
+  no_tool_streak: 0,
+  pause_reason: null,
   window: { number: 1, since_sequence: 0, reset_at: null, reason: null },
 };
 const entries: LibraryEntry[] = [
@@ -105,6 +107,15 @@ describe("Agent deletion", () => {
 });
 
 describe("Agent detail status", () => {
+  it("shows the safety pause reason only while stopped", () => {
+    expect(
+      status({ ...detail, pause_reason: "no_tool_calls", no_tool_streak: 3 }),
+    ).toContain("Paused: 3 tool-free Turns");
+    expect(status({ ...detail, pause_reason: "runtime_error" })).toContain(
+      "Paused: runtime error",
+    );
+    expect(status(detail)).not.toContain("Paused:");
+  });
   it("uses the kernel idle flag even below the previous threshold", () => {
     expect(status({ ...detail, idle: true, idle_streak: 1 })).toContain(
       "1 idle Turn",
