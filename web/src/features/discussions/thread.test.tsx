@@ -9,6 +9,7 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import {
   atDiscussionBottom,
   MessageRow,
+  scrollDiscussionToBottom,
   ThreadPage,
 } from "@/features/discussions/thread";
 import type { DiscussionDetail, MessageMention } from "@/lib/backend";
@@ -222,6 +223,26 @@ describe("thread page", () => {
 });
 
 describe("composer resize scroll anchoring", () => {
+  it("uses the true scroll end including the trailing 24px padding", () => {
+    const area = { scrollHeight: 915, clientHeight: 600, scrollTop: 291.5 };
+    expect(
+      atDiscussionBottom(area.scrollHeight, area.clientHeight, area.scrollTop),
+    ).toBe(false);
+    scrollDiscussionToBottom(area);
+    expect(area.scrollTop).toBe(315);
+    expect(
+      atDiscussionBottom(area.scrollHeight, area.clientHeight, area.scrollTop),
+    ).toBe(true);
+    area.scrollHeight = 983;
+    scrollDiscussionToBottom(area);
+    expect(area.scrollTop).toBe(383);
+  });
+
+  it("keeps short content at zero", () => {
+    const area = { scrollHeight: 500, clientHeight: 600, scrollTop: 0 };
+    scrollDiscussionToBottom(area);
+    expect(area.scrollTop).toBe(0);
+  });
   it("preserves bottom attachment with subpixel rounding", () => {
     expect(atDiscussionBottom(915, 623, 291.5)).toBe(true);
     expect(atDiscussionBottom(915, 623, 250)).toBe(false);

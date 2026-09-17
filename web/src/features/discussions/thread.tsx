@@ -41,6 +41,12 @@ export function atDiscussionBottom(
   return height - viewport - top <= 1;
 }
 
+export function scrollDiscussionToBottom(
+  element: Pick<HTMLDivElement, "scrollTop" | "scrollHeight" | "clientHeight">,
+) {
+  element.scrollTop = Math.max(0, element.scrollHeight - element.clientHeight);
+}
+
 export function ThreadPage({ id }: { id: number }) {
   const { members, humanId, discussions, refresh } = useOrganization();
   const navigate = useNavigate();
@@ -67,10 +73,8 @@ export function ThreadPage({ id }: { id: number }) {
   }, []);
   useLayoutEffect(() => {
     const element = scrollArea.current;
-    if (element && preserveBottom.current)
-      element.scrollTop = element.scrollHeight;
+    if (element && preserveBottom.current) scrollDiscussionToBottom(element);
   }, [composerSize]);
-  const bottom = useRef<HTMLDivElement>(null);
   const seen = useRef(0);
   const first = useRef(true);
 
@@ -121,7 +125,7 @@ export function ThreadPage({ id }: { id: number }) {
     );
     if (first.current || newest > seen.current) {
       first.current = false;
-      bottom.current?.scrollIntoView({ block: "end" });
+      if (scrollArea.current) scrollDiscussionToBottom(scrollArea.current);
     }
     if (seen.current > 0 && newest > seen.current) {
       const arrived = new Set(
@@ -316,7 +320,6 @@ export function ThreadPage({ id }: { id: number }) {
               })}
             </ol>
             <div aria-hidden="true" style={{ height: composerSize + 16 }} />
-            <div ref={bottom} />
           </div>
 
           <Composer
