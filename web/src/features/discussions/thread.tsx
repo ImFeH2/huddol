@@ -42,6 +42,7 @@ export function ThreadPage({ id }: { id: number }) {
   const [ackBusy, setAckBusy] = useState(false);
   const [editingMembers, setEditingMembers] = useState(false);
   const [fresh, setFresh] = useState<ReadonlySet<number>>(new Set());
+  const [composerSize, setComposerSize] = useState(48);
   const bottom = useRef<HTMLDivElement>(null);
   const seen = useRef(0);
   const first = useRef(true);
@@ -245,54 +246,58 @@ export function ThreadPage({ id }: { id: number }) {
       />
 
       <PageBody variant="flush">
-        <div className="min-h-0 flex-1 overflow-y-auto border-t border-line px-8 pt-4 pb-6 max-[940px]:px-6">
-          {detail && detail.messages.length === 0 ? (
-            <EmptyState title="No messages yet" />
-          ) : null}
-          <ol className="flex flex-col gap-4">
-            {(detail?.messages ?? []).map((message, index) => {
-              const previous = detail?.messages[index - 1];
-              const divider =
-                detail !== undefined &&
-                previous !== undefined &&
-                detail !== null &&
-                previous.id <= detail.read_through &&
-                message.id > detail.read_through;
-              const compact =
-                !divider &&
-                previous !== undefined &&
-                previous.sender_id === message.sender_id;
-              return (
-                <Fragment key={message.id}>
-                  {divider ? (
-                    <li className="flex items-center gap-3 text-xs font-medium uppercase tracking-caps text-primary before:content-[''] before:h-px before:flex-1 before:bg-blue-500/40 after:content-[''] after:h-px after:flex-1 after:bg-blue-500/40">
-                      <span>New</span>
-                    </li>
-                  ) : null}
-                  <MessageRow
-                    message={message}
-                    compact={compact}
-                    fresh={fresh.has(message.id)}
-                    pending={awaiting.has(message.id)}
-                    acknowledged={acknowledged.has(message.id)}
-                    busy={ackBusy}
-                    onAck={() => void ack([message.id])}
-                    onRevoke={() => void ack([message.id], true)}
-                  />
-                </Fragment>
-              );
-            })}
-          </ol>
-          <div ref={bottom} />
-        </div>
+        <div className="relative flex min-h-0 flex-1 flex-col">
+          <div className="min-h-0 flex-1 overflow-y-auto border-t border-line px-8 pt-4 pb-6 max-[940px]:px-6">
+            {detail && detail.messages.length === 0 ? (
+              <EmptyState title="No messages yet" />
+            ) : null}
+            <ol className="flex flex-col gap-4">
+              {(detail?.messages ?? []).map((message, index) => {
+                const previous = detail?.messages[index - 1];
+                const divider =
+                  detail !== undefined &&
+                  previous !== undefined &&
+                  detail !== null &&
+                  previous.id <= detail.read_through &&
+                  message.id > detail.read_through;
+                const compact =
+                  !divider &&
+                  previous !== undefined &&
+                  previous.sender_id === message.sender_id;
+                return (
+                  <Fragment key={message.id}>
+                    {divider ? (
+                      <li className="flex items-center gap-3 text-xs font-medium uppercase tracking-caps text-primary before:content-[''] before:h-px before:flex-1 before:bg-blue-500/40 after:content-[''] after:h-px after:flex-1 after:bg-blue-500/40">
+                        <span>New</span>
+                      </li>
+                    ) : null}
+                    <MessageRow
+                      message={message}
+                      compact={compact}
+                      fresh={fresh.has(message.id)}
+                      pending={awaiting.has(message.id)}
+                      acknowledged={acknowledged.has(message.id)}
+                      busy={ackBusy}
+                      onAck={() => void ack([message.id])}
+                      onRevoke={() => void ack([message.id], true)}
+                    />
+                  </Fragment>
+                );
+              })}
+            </ol>
+            <div aria-hidden="true" style={{ height: composerSize + 16 }} />
+            <div ref={bottom} />
+          </div>
 
-        <Composer
-          members={members}
-          memberIds={memberIds}
-          busy={busy}
-          placeholder={topic ? `Message ${topic}` : "Message"}
-          onSend={send}
-        />
+          <Composer
+            members={members}
+            memberIds={memberIds}
+            busy={busy}
+            placeholder={topic ? `Message ${topic}` : "Message"}
+            onSend={send}
+            onHeightChange={setComposerSize}
+          />
+        </div>
       </PageBody>
 
       {editingMembers && detail ? (

@@ -223,3 +223,17 @@ describe("Field", () => {
     expect(html).not.toContain("<label");
   });
 });
+
+describe("composer textarea variant", () => {
+  it("limits borderless styling to the explicit composer variant", () => {
+    const standard = renderToStaticMarkup(<Textarea aria-label="Notes" />);
+    const composer = renderToStaticMarkup(
+      <Textarea variant="composer" aria-label="Message" />,
+    );
+    expect(standard).toContain("border-line-interactive");
+    expect(standard).toContain("min-h-18");
+    expect(composer).not.toContain("border-line-interactive");
+    expect(composer).toContain("leading-[22px]");
+    expect(composer).not.toContain('variant="composer"');
+  });
+});

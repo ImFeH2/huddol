@@ -191,11 +191,13 @@ export function Textarea({
   ref,
   autoGrow = false,
   maxRows,
+  variant = "default",
   ...rest
 }: Omit<TextareaHTMLAttributes<HTMLTextAreaElement>, "className"> & {
   ref?: Ref<HTMLTextAreaElement>;
   autoGrow?: boolean;
   maxRows?: number;
+  variant?: "default" | "composer";
 }) {
   const inner = useRef<HTMLTextAreaElement | null>(null);
 
@@ -227,9 +229,13 @@ export function Textarea({
         assignRef(ref, element);
       }}
       className={clsx(
-        inputClasses,
-        "h-auto resize-none py-2 px-3 leading-body",
-        autoGrow ? "min-h-0 overflow-y-auto" : "min-h-18",
+        variant === "composer"
+          ? "block w-full min-h-0 resize-none border-0 bg-transparent pl-4 pr-12 py-3 text-sm leading-[22px] text-fg placeholder:text-fg-muted outline-none overflow-y-auto"
+          : clsx(
+              inputClasses,
+              "h-auto resize-none py-2 px-3 leading-body",
+              autoGrow ? "min-h-0 overflow-y-auto" : "min-h-18",
+            ),
       )}
     />
   );

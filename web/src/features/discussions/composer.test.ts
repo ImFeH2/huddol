@@ -1,5 +1,13 @@
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
-import { type ComposerKey, composerKey } from "@/features/discussions/composer";
+import {
+  Composer,
+  type ComposerKey,
+  composerHeight,
+  composerKey,
+  composerMultiline,
+} from "@/features/discussions/composer";
 
 function press(key: string, modifiers: Partial<ComposerKey> = {}): ComposerKey {
   return { key, shiftKey: false, ctrlKey: false, metaKey: false, ...modifiers };
@@ -59,5 +67,48 @@ describe("composerKey", () => {
   it("ignores ordinary typing", () => {
     expect(composerKey(press("a"), false)).toBeNull();
     expect(composerKey(press("a"), true)).toBeNull();
+  });
+});
+
+describe("composer layout", () => {
+  it("uses measured wrapping rather than character count", () => {
+    expect(composerMultiline("x".repeat(500), 46, 22, 24)).toBe(false);
+    expect(composerMultiline("中文😀", 68, 22, 24)).toBe(true);
+    expect(composerMultiline("", 68, 22, 24)).toBe(false);
+    expect(composerMultiline("text", 47, 22, 24)).toBe(false);
+  });
+
+  it("expands explicit newlines and contracts when measured as one line", () => {
+    expect(composerMultiline("\n", 46, 22, 24)).toBe(true);
+    expect(composerMultiline("first\nsecond", 68, 22, 24)).toBe(true);
+    expect(composerMultiline("first", 46, 22, 24)).toBe(false);
+  });
+
+  it("keeps reference silhouettes and grows with the capped input", () => {
+    expect(composerHeight(false, 46)).toBe(48);
+    expect(composerHeight(true, 68)).toBe(116);
+    expect(composerHeight(true, 200)).toBe(242);
+  });
+
+  it("renders a real compact input, an inaccessible measuring probe and disabled send", () => {
+    const html = renderToStaticMarkup(
+      createElement(Composer, {
+        members: [],
+        memberIds: new Set<number>(),
+        busy: false,
+        placeholder: "Message",
+        onSend: async () => true,
+        onHeightChange: () => {},
+      }),
+    );
+    expect(html).toContain('data-expanded="false"');
+    expect(html).toContain('role="combobox"');
+    expect(html).toContain('aria-label="Message"');
+    expect(html).toContain('aria-label="Send · Enter" disabled=""');
+    expect(html).toContain('aria-hidden="true"');
+    expect(html).toContain('tabindex="-1"');
+    expect(html).toContain("motion-reduce:transition-none");
+    expect(html).not.toContain("Open prompt input");
+    expect(html).not.toContain('type="file"');
   });
 });
