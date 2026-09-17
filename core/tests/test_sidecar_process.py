@@ -424,7 +424,8 @@ def test_agent_settings_and_window_survive_the_pipe_and_restart(tmp_path: Path) 
     )
     assert code == 0, stderr
     assert response(frames, 1)["result"] == asdict(AgentParameters())
-    assert response(frames, 2)["result"] == values
+    expected = {**asdict(AgentParameters()), **values}
+    assert response(frames, 2)["result"] == expected
     assert response(frames, 4)["result"]["idle"] is False
     assert response(frames, 4)["result"]["token_limit"] == values["token_limit"]
     assert response(frames, 4)["result"]["window"] == {
@@ -442,7 +443,7 @@ def test_agent_settings_and_window_survive_the_pipe_and_restart(tmp_path: Path) 
         [{"id": 1, "method": "settings.get", "params": {"section": "agent"}}],
     )
     assert code == 0, stderr
-    assert response(frames, 1)["result"] == values
+    assert response(frames, 1)["result"] == expected
 
 
 @pytest.mark.parametrize(
