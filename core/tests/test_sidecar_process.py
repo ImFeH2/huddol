@@ -32,10 +32,12 @@ class Kernel:
         env: dict[str, str] | None = None,
         web_directory: Path | None = None,
         stdin: int = subprocess.PIPE,
+        arguments: Sequence[str] = (),
     ) -> None:
         self.data_directory = data_directory
         self._cwd = cwd
         self._stdin = stdin
+        self._arguments = list(arguments)
         self._env = {
             "HUDDOL_DATA_DIR": str(data_directory),
             "HUDDOL_PORT": "0",
@@ -65,7 +67,7 @@ class Kernel:
 
     def __enter__(self) -> Self:
         self._process = subprocess.Popen(
-            [sys.executable, "-m", "huddol"],
+            [sys.executable, "-m", "huddol", *self._arguments],
             stdin=self._stdin,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
@@ -131,6 +133,12 @@ class Kernel:
         finally:
             connection.close()
 
+    def read_frame(self) -> dict[str, Any]:
+        assert self._process.stdout is not None
+        line = self._process.stdout.readline()
+        assert line, self.stderr
+        return json.loads(line.decode("utf-8"))
+
     def send_stdin(self, text: str) -> None:
         assert self._process.stdin is not None
         self._process.stdin.write(text.encode("utf-8"))
@@ -151,7 +159,7 @@ class Kernel:
 
     def run_second_instance(self) -> subprocess.CompletedProcess[bytes]:
         return subprocess.run(
-            [sys.executable, "-m", "huddol"],
+            [sys.executable, "-m", "huddol", *self._arguments],
             cwd=self._cwd or Path.cwd(),
             env=self._env,
             capture_output=True,

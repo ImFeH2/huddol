@@ -440,7 +440,7 @@ def test_execution_helpers_ignore_other_business_modules_on_pythonpath(
     assert not marker.exists()
     if sys.platform != "win32":
         assert reentered.returncode != 0
-        assert b"Unknown execution mode" in reentered.stderr
+        assert b"unrecognized arguments" in reentered.stderr
 
 
 def test_reconfiguration_reuses_the_same_execution_instance(tmp_path: Path) -> None:

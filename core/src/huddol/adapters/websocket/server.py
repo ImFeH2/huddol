@@ -3,7 +3,6 @@ from __future__ import annotations
 import email.utils
 import http
 import logging
-import os
 import secrets
 import sys
 import threading
@@ -18,7 +17,6 @@ from websockets.sync.server import Server, ServerConnection, serve
 
 from huddol.adapters.jsonl.protocol import Dispatcher, encode
 
-WEB_DIRECTORY_ENV = "HUDDOL_WEB_DIR"
 HOST = "127.0.0.1"
 CONTENT_TYPES = {
     ".css": "text/css; charset=utf-8",
@@ -41,14 +39,13 @@ CONTENT_TYPES = {
 log = logging.getLogger(__name__)
 
 
-def web_directory() -> Path:
-    override = os.environ.get(WEB_DIRECTORY_ENV)
+def web_directory(override: str | None = None) -> Path | None:
     if override:
         return Path(override).expanduser().resolve()
     bundle = getattr(sys, "_MEIPASS", None)
     if bundle:
         return Path(bundle) / "web"
-    return Path(__file__).resolve().parents[5] / "web" / "dist"
+    return None
 
 
 def _response(status: http.HTTPStatus, content_type: str, body: bytes) -> Response:
@@ -87,7 +84,7 @@ class WebServer:
         self,
         dispatcher: Dispatcher,
         token: str,
-        directory: Path,
+        directory: Path | None,
         port: int = 0,
     ) -> None:
         self._dispatcher = dispatcher
@@ -130,6 +127,8 @@ class WebServer:
             if supplied and secrets.compare_digest(supplied, self._token):
                 return None
             return _plain(http.HTTPStatus.UNAUTHORIZED, "Unauthorized")
+        if self._directory is None:
+            return _plain(http.HTTPStatus.NOT_FOUND, "Not found")
         return static_response(self._directory, url.path)
 
     def _handle(self, connection: ServerConnection) -> None:

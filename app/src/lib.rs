@@ -23,6 +23,7 @@ pub struct Launcher {
 pub fn launcher(development: bool, project: &Path, resources: &Path) -> Launcher {
     let env = vec![("HUDDOL_PORT".to_string(), "0".to_string())];
     if development {
+        let parent = project.parent().expect("the core project has a parent");
         Launcher {
             program: "uv".into(),
             args: vec![
@@ -32,6 +33,8 @@ pub fn launcher(development: bool, project: &Path, resources: &Path) -> Launcher
                 "python".into(),
                 "-m".into(),
                 "huddol".into(),
+                "--web-dir".into(),
+                parent.join("web/dist").to_string_lossy().into_owned(),
             ],
             env,
         }
@@ -195,7 +198,16 @@ mod tests {
         assert_eq!(launcher.program, Path::new("uv"));
         assert_eq!(
             launcher.args,
-            ["run", "--project", "repo/core", "python", "-m", "huddol"]
+            [
+                "run",
+                "--project",
+                "repo/core",
+                "python",
+                "-m",
+                "huddol",
+                "--web-dir",
+                "repo/web/dist"
+            ]
         );
     }
 

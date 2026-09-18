@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import argparse
 import json
 import logging
 import os
@@ -11,18 +12,25 @@ import threading
 from io import TextIOWrapper
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
-from typing import cast
+from typing import TYPE_CHECKING, Any, cast
 from urllib.parse import quote
+
+if TYPE_CHECKING:
+    from collections.abc import Sequence
+
+    from huddol.adapters.jsonl.protocol import Dispatcher, Sink
 
 DATA_DIRECTORY_ENV = "HUDDOL_DATA_DIR"
 PORT_ENV = "HUDDOL_PORT"
 TOKEN_ENV = "HUDDOL_TOKEN"
+WEB_DIRECTORY_ENV = "HUDDOL_WEB_DIR"
 DEVELOPMENT_PORT = 2461
 ALREADY_RUNNING = 2
+WEBSOCKET = "websocket"
+STDIO = "stdio"
 
 
-def data_directory() -> Path:
-    override = os.environ.get(DATA_DIRECTORY_ENV)
+def data_directory(override: str | None) -> Path:
     if override:
         return Path(override).expanduser().resolve()
     return Path.home() / ".huddol"
@@ -32,6 +40,38 @@ def default_port() -> int:
     return 0 if getattr(sys, "frozen", False) else DEVELOPMENT_PORT
 
 
+def parse_arguments(argv: Sequence[str]) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(prog="huddol", description="Run a Huddol kernel.")
+    parser.add_argument(
+        "--data-dir",
+        default=os.environ.get(DATA_DIRECTORY_ENV) or None,
+        help="directory holding the database, logs, agents and library (default: ~/.huddol)",
+    )
+    parser.add_argument(
+        "--transport",
+        choices=(WEBSOCKET, STDIO),
+        default=WEBSOCKET,
+        help="websocket listens on a loopback port; stdio reads requests from stdin (default: websocket)",
+    )
+    parser.add_argument(
+        "--port",
+        type=int,
+        default=os.environ.get(PORT_ENV) or default_port(),
+        help="websocket port; 0 selects a free port",
+    )
+    parser.add_argument(
+        "--token",
+        default=os.environ.get(TOKEN_ENV) or None,
+        help="websocket token (default: the data directory's token file)",
+    )
+    parser.add_argument(
+        "--web-dir",
+        default=os.environ.get(WEB_DIRECTORY_ENV) or None,
+        help="directory with a built frontend to serve beside the websocket endpoint",
+    )
+    return parser.parse_args(argv)
+
+
 def write_private(path: Path, payload: str) -> None:
     descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
     with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
@@ -39,8 +79,7 @@ def write_private(path: Path, payload: str) -> None:
     os.chmod(path, 0o600)
 
 
-def load_token(directory: Path) -> str:
-    override = os.environ.get(TOKEN_ENV)
+def load_token(directory: Path, override: str | None) -> str:
     if override:
         return override
     path = directory / "token"
@@ -53,15 +92,15 @@ def load_token(directory: Path) -> str:
     return token
 
 
-def running_instance(run_file: Path) -> int | None:
+def running_instance(run_file: Path) -> dict[str, Any] | None:
     import psutil
 
     try:
         payload = json.loads(run_file.read_text(encoding="utf-8"))
-        pid, port = int(payload["pid"]), int(payload["port"])
+        pid = int(payload["pid"])
     except (OSError, ValueError, KeyError, TypeError):
         return None
-    return port if psutil.pid_exists(pid) else None
+    return payload if psutil.pid_exists(pid) else None
 
 
 def stdin_is_piped() -> bool:
@@ -72,28 +111,31 @@ def stdin_is_piped() -> bool:
     return stat.S_ISFIFO(mode) or stat.S_ISSOCK(mode)
 
 
-def wait_for_signal_or_stdin() -> str:
-    from huddol.adapters.jsonl.protocol import wait_for_shutdown
+class Stop:
+    def __init__(self) -> None:
+        self._stopped = threading.Event()
+        self._reason: list[str] = []
 
-    done = threading.Event()
-    reason: list[str] = []
+    @property
+    def stopped(self) -> bool:
+        return self._stopped.is_set()
 
-    def finish(why: str) -> None:
-        if not reason:
-            reason.append(why)
-        done.set()
+    def stop(self, reason: str) -> None:
+        if not self._reason:
+            self._reason.append(reason)
+        self._stopped.set()
 
+    def wait(self) -> str:
+        while not self._stopped.wait(0.5):
+            pass
+        return self._reason[0]
+
+
+def install_signal_handlers(stop: Stop) -> None:
     for name in ("sigint", "sigterm"):
         number = getattr(signal, name.upper(), None)
         if number is not None:
-            signal.signal(number, lambda *_, why=name: finish(why))
-    if stdin_is_piped():
-        threading.Thread(
-            target=lambda: finish(wait_for_shutdown()), daemon=True
-        ).start()
-    while not done.wait(0.5):
-        pass
-    return reason[0]
+            signal.signal(number, lambda *_, why=name: stop.stop(why))
 
 
 def configure_logging(directory: Path) -> list[logging.Handler]:
@@ -114,20 +156,67 @@ def configure_logging(directory: Path) -> list[logging.Handler]:
     return handlers
 
 
-def write_run_file(path: Path, port: int, token: str) -> None:
+def write_run_file(path: Path, port: int | None, token: str | None) -> None:
     write_private(path, json.dumps({"port": port, "token": token, "pid": os.getpid()}))
 
 
+def announce(payload: dict[str, Any]) -> None:
+    sys.stdout.write(json.dumps(payload, separators=(",", ":")) + "\n")
+    sys.stdout.flush()
+
+
+def stdio_sink(stop: Stop) -> Sink:
+    from huddol.adapters.jsonl.protocol import encode
+
+    lock = threading.Lock()
+
+    def sink(payload: dict[str, Any]) -> None:
+        with lock:
+            try:
+                sys.stdout.write(encode(payload) + "\n")
+                sys.stdout.flush()
+            except BrokenPipeError:
+                stop.stop("eof")
+
+    return sink
+
+
+def read_requests(
+    dispatcher: Dispatcher, sink: Sink, stop: Stop, lock: threading.Lock
+) -> None:
+    from huddol.adapters.jsonl.protocol import SHUTDOWN_METHOD, parse
+
+    try:
+        for line in sys.stdin:
+            with lock:
+                if stop.stopped:
+                    return
+                request = parse(line)
+                if request is not None and request.method == SHUTDOWN_METHOD:
+                    stop.stop("shutdown")
+                    return
+                dispatcher.receive(line, sink)
+    finally:
+        stop.stop("eof")
+
+
+def wait_for_stdin_shutdown(stop: Stop) -> None:
+    from huddol.adapters.jsonl.protocol import wait_for_shutdown
+
+    stop.stop(wait_for_shutdown())
+
+
 def main(argv: list[str] | None = None) -> int:
-    args = list(sys.argv[1:] if argv is None else argv)
+    raw = list(sys.argv[1:] if argv is None else argv)
 
-    if args:
-        if args[0] == "--windows-write-sandbox" and os.name == "nt":
-            from huddol.adapters.sandbox.windows import run_restricted_command
+    if raw and raw[0] == "--windows-write-sandbox" and os.name == "nt":
+        from huddol.adapters.sandbox.windows import run_restricted_command
 
-            separator = args.index("--")
-            return run_restricted_command(args[1], args[separator + 1 :], os.getcwd())
-        raise SystemExit("Unknown execution mode")
+        separator = raw.index("--")
+        return run_restricted_command(raw[1], raw[separator + 1 :], os.getcwd())
+
+    options = parse_arguments(raw)
+    stdio = options.transport == STDIO
 
     cast(TextIOWrapper, sys.stdin).reconfigure(encoding="utf-8", errors="strict")
     cast(TextIOWrapper, sys.stdout).reconfigure(
@@ -145,13 +234,13 @@ def main(argv: list[str] | None = None) -> int:
     from huddol.runtime.scheduler import Scheduler
     from huddol.tools import Dependencies
 
-    directory = data_directory()
+    directory = data_directory(options.data_dir)
     run_file = directory / "run.json"
-    occupied = running_instance(run_file)
-    if occupied is not None:
-        sys.stderr.write(
-            f"Huddol is already running on port {occupied} for {directory}\n"
-        )
+    running = running_instance(run_file)
+    if running is not None:
+        listening = running.get("port")
+        where = f" on port {listening}" if listening is not None else ""
+        sys.stderr.write(f"Huddol is already running{where} for {directory}\n")
         return ALREADY_RUNNING
     directory.mkdir(parents=True, exist_ok=True)
     handlers = configure_logging(directory)
@@ -196,47 +285,65 @@ def main(argv: list[str] | None = None) -> int:
     )
     Api(scheduler, dispatcher)
 
-    token = load_token(directory)
-    server = WebServer(
-        dispatcher,
-        token,
-        web_directory(),
-        port=int(os.environ.get(PORT_ENV) or default_port()),
-    )
-
+    stop = Stop()
+    dispatch_lock = threading.Lock()
+    server: WebServer | None = None
+    install_signal_handlers(stop)
     scheduler.start()
-    server.start()
-    write_run_file(run_file, server.port, token)
-    log.info(
-        "Listening on http://127.0.0.1:%d with data directory %s",
-        server.port,
-        directory,
-    )
-    sys.stdout.write(
-        json.dumps(
+
+    if stdio:
+        sink = stdio_sink(stop)
+        dispatcher.attach(sink)
+        write_run_file(run_file, None, None)
+        log.info("Reading stdio requests with data directory %s", directory)
+        announce({"type": "ready", "transport": STDIO})
+        threading.Thread(
+            target=read_requests,
+            args=(dispatcher, sink, stop, dispatch_lock),
+            name="huddol-stdio",
+            daemon=True,
+        ).start()
+    else:
+        token = load_token(directory, options.token)
+        server = WebServer(
+            dispatcher,
+            token,
+            web_directory(options.web_dir),
+            port=options.port,
+        )
+        server.start()
+        write_run_file(run_file, server.port, token)
+        log.info(
+            "Listening on http://127.0.0.1:%d with data directory %s",
+            server.port,
+            directory,
+        )
+        announce(
             {
                 "type": "ready",
                 "port": server.port,
                 "token": token,
                 "url": f"http://127.0.0.1:{server.port}/?token={quote(token, safe='')}",
-            },
-            separators=(",", ":"),
+            }
         )
-        + "\n"
-    )
-    sys.stdout.flush()
+        if stdin_is_piped():
+            threading.Thread(
+                target=wait_for_stdin_shutdown, args=(stop,), daemon=True
+            ).start()
 
     try:
-        reason = wait_for_signal_or_stdin()
+        reason = stop.wait()
         log.info("Shutting down (%s)", reason)
     finally:
-        server.stop()
-        scheduler.stop()
-        store.close()
-        run_file.unlink(missing_ok=True)
-        for handler in handlers:
-            logging.getLogger().removeHandler(handler)
-            handler.close()
+        with dispatch_lock:
+            if server is not None:
+                server.stop()
+            scheduler.stop()
+            store.close()
+            run_file.unlink(missing_ok=True)
+            for handler in handlers:
+                logging.getLogger().removeHandler(handler)
+                handler.close()
     return 0
 
 
