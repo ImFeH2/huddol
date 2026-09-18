@@ -121,7 +121,6 @@ def test_every_tool_named_in_the_prompt_is_actually_registered() -> None:
         "organization",
         "run",
         "edit",
-        "memory",
         "library",
         "history",
         "web_search",

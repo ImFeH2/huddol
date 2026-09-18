@@ -9,8 +9,8 @@ import { TreeView } from "@/features/library/tree-view";
 import {
   AgentDetailStatus,
   MemberPage,
-  MemoryContent,
-  MemorySection,
+  WorkspaceContent,
+  WorkspaceSection,
 } from "@/features/members/detail";
 import { type AgentDetail, backend, type LibraryEntry } from "@/lib/backend";
 
@@ -26,7 +26,7 @@ afterEach(() => {
 
 const detail: AgentDetail = {
   id: 2,
-  memory: [],
+  workspace: [],
   runs: [],
   usage: {
     input_tokens: 0,
@@ -144,15 +144,15 @@ describe("Agent detail status", () => {
   });
 });
 
-describe("Memory tree", () => {
+describe("Workspace tree", () => {
   it("uses the shared tree with collapsed folders and file counts", () => {
     const html = renderToStaticMarkup(
       <TooltipProvider>
-        <MemorySection agentId={2} entries={entries} />
+        <WorkspaceSection agentId={2} entries={entries} />
       </TooltipProvider>,
     );
-    expect(html).toMatch(/<h2\b[^>]*>Memory<\/h2>/);
-    expect(html).toContain('aria-label="Memory files"');
+    expect(html).toMatch(/<h2\b[^>]*>Workspace<\/h2>/);
+    expect(html).toContain('aria-label="Workspace files"');
     expect(html).toContain('aria-expanded="false"');
     expect(html).toContain("notes");
     expect(html).toContain(">1</p>");
@@ -183,15 +183,15 @@ describe("Memory tree", () => {
     expect(html).not.toContain("Actions");
   });
 
-  it("preserves the empty Memory state", () => {
+  it("preserves the empty Workspace state", () => {
     expect(
-      renderToStaticMarkup(<MemorySection agentId={2} entries={[]} />),
-    ).toContain("No Memory files");
+      renderToStaticMarkup(<WorkspaceSection agentId={2} entries={[]} />),
+    ).toContain("No Workspace files");
   });
 
   it("renders escaped, read-only content and its UTF-8 byte size without actions", () => {
     const html = renderToStaticMarkup(
-      <MemoryContent
+      <WorkspaceContent
         file={{ path: "notes/MEMORY.md", content: "<中文>\n", hash: "hash" }}
       />,
     );

@@ -17,7 +17,7 @@ layers =
 name = Services do not know about each other
 type = independence
 modules =
-    huddol.services.memory
+    huddol.services.workspace
     huddol.services.library
     huddol.services.history
 

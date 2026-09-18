@@ -189,7 +189,7 @@ export function MembersPage({ tokenLimit }: { tokenLimit: number }) {
         open={doomed !== null}
         onOpenChange={(next) => !next && setDoomed(null)}
         title={`Delete ${doomed?.name ?? ""}?`}
-        description="Its Memory and history are removed."
+        description="Its Workspace and history are removed."
         confirmLabel="Delete Agent"
         onConfirm={async () => {
           if (doomed) await backend.deleteAgent(doomed.id);

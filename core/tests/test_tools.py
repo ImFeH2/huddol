@@ -39,8 +39,8 @@ def world(tmp_path: Path):
         execution=ExecutionManager(enforce=False),
         agent_directory_for=agent_directory_for,
         library_tree=DirectoryTree(tmp_path / "library"),
-        memory_tree_for=lambda member_id: DirectoryTree(
-            tmp_path / "agents" / str(member_id) / "memory"
+        workspace_tree_for=lambda member_id: DirectoryTree(
+            tmp_path / "agents" / str(member_id) / "workspace"
         ),
     )
     yield deps
@@ -84,7 +84,7 @@ def test_run_keeps_absolute_cwd(world, tmp_path: Path) -> None:
     )
     assert result["exit_code"] == 0
     assert result["stdout"].strip() == str(tmp_path)
-    assert (tmp_path / "agents" / str(MAIN) / "memory").is_dir()
+    assert (tmp_path / "agents" / str(MAIN) / "workspace").is_dir()
 
 
 @pytest.mark.parametrize(
@@ -111,7 +111,7 @@ def test_tools_forward_absolute_paths_in_both_platform_formats(
     tools.run(["pwd"], cwd=path, timeout=7)
     tools.edit(path, "before", "after", replace_all=True)
     assert calls == [(["pwd"], path, 7), (path, "before", "after", True)]
-    assert (tmp_path / "agents" / str(MAIN) / "memory").is_dir()
+    assert (tmp_path / "agents" / str(MAIN) / "workspace").is_dir()
 
 
 def test_relative_edit_resolves_under_the_agents_directory_and_is_not_writable(
@@ -170,7 +170,7 @@ def test_edit_keeps_absolute_paths(world, tmp_path: Path) -> None:
     result = tools_for(world, MAIN).edit(str(target), "before", "after")
     assert result["path"] == str(target)
     assert target.read_text(encoding="utf-8") == "after"
-    assert (tmp_path / "agents" / str(MAIN) / "memory").is_dir()
+    assert (tmp_path / "agents" / str(MAIN) / "workspace").is_dir()
 
 
 @pytest.mark.parametrize("actor_id", [HUMAN, MAIN])
@@ -526,13 +526,13 @@ def test_deleting_an_agent_preserves_all_its_data(world) -> None:
     human.send_message(rooms[0], "@Main review")
     agent.read_discussion(rooms[0])
     agent.ack(rooms[0], [2])
-    world.memory_tree_for(MAIN).write("notes.md", "Keep notes")
+    world.workspace_tree_for(MAIN).write("notes.md", "Keep notes")
     world.history.start_run(MAIN)
     window = world.history.reset_window(MAIN, "prepared")
     runs = world.history.runs(MAIN)
     files = {
-        path.relative_to(world.memory_tree_for(MAIN).root): path.read_bytes()
-        for path in world.memory_tree_for(MAIN).root.rglob("*")
+        path.relative_to(world.workspace_tree_for(MAIN).root): path.read_bytes()
+        for path in world.workspace_tree_for(MAIN).root.rglob("*")
         if path.is_file()
     }
     messages = world.store.messages(rooms[0])
@@ -542,8 +542,8 @@ def test_deleting_an_agent_preserves_all_its_data(world) -> None:
     assert world.history.runs(MAIN) == runs
     assert world.history.window(MAIN) == window
     assert {
-        path.relative_to(world.memory_tree_for(MAIN).root): path.read_bytes()
-        for path in world.memory_tree_for(MAIN).root.rglob("*")
+        path.relative_to(world.workspace_tree_for(MAIN).root): path.read_bytes()
+        for path in world.workspace_tree_for(MAIN).root.rglob("*")
         if path.is_file()
     } == files
     assert world.store.messages(rooms[0]) == messages
@@ -580,9 +580,9 @@ def test_read_and_search_return_stored_mentions_not_current_names(
 def test_tree_tools_accept_root_paths(world, path) -> None:
     tools = tools_for(world, HUMAN)
     tools.write_library("a/b.md", "shared")
-    world.memory_tree_for(MAIN).write("notes.md", "private")
+    world.workspace_tree_for(MAIN).write("notes.md", "private")
     assert tools.list_library(path=path) == tools.list_library()
-    assert tools.list_memory(path=path, agent_id=MAIN) == tools.list_memory(
+    assert tools.list_workspace(path=path, agent_id=MAIN) == tools.list_workspace(
         agent_id=MAIN
     )
 
@@ -609,12 +609,12 @@ def test_human_library_write_emits_one_update_and_conflicts_emit_none(world) -> 
     assert len(emitted) == 1
 
 
-def test_memory_is_private_to_each_agent(world) -> None:
-    world.memory_tree_for(MAIN).write("notes.md", "mine")
-    assert [item["path"] for item in tools_for(world, OTHER).list_memory()] == [
+def test_workspace_is_private_to_each_agent(world) -> None:
+    world.workspace_tree_for(MAIN).write("notes.md", "mine")
+    assert [item["path"] for item in tools_for(world, OTHER).list_workspace()] == [
         "MEMORY.md"
     ]
-    assert len(tools_for(world, MAIN).list_memory()) == 2
+    assert len(tools_for(world, MAIN).list_workspace()) == 2
 
 
 def test_library_is_shared_across_members(world) -> None:
@@ -679,8 +679,8 @@ def test_a_turn_records_what_it_produced(world) -> None:
     discussion = tools.create_discussion("Work", [OTHER])["id"]
     sent = tools.send_message(discussion, "Starting now")["id"]
     tools.run([sys.executable, "-c", "print('hi')"])
-    world.memory_tree_for(MAIN).write("notes.md", "content")
-    tools.edit("memory/notes.md", "content", "updated")
+    world.workspace_tree_for(MAIN).write("notes.md", "content")
+    tools.edit("workspace/notes.md", "content", "updated")
 
     recorded = world.history.effects(MAIN, sequences=[1])
     assert [item.tool for item in recorded] == ["send", "run", "edit"]
@@ -770,22 +770,22 @@ def test_run_and_edit_add_existing_implicit_roots_to_current_configuration(
     world, tmp_path, monkeypatch, member_id
 ) -> None:
     tools = tools_for(world, member_id)
-    memory = tmp_path / "agents" / str(member_id) / "memory"
+    workspace = tmp_path / "agents" / str(member_id) / "workspace"
     library = world.library_tree.root
     library.rmdir()
-    assert not memory.exists() and not library.exists()
+    assert not workspace.exists() and not library.exists()
     configured = tmp_path / "configured"
     configured.mkdir()
     environment = world.execution.snapshot()
     calls = []
 
     def run(argv, **params):
-        assert memory.is_dir() and library.is_dir()
+        assert workspace.is_dir() and library.is_dir()
         calls.append(("run", argv, params))
         return RunResult(0, "", "", False)
 
     def edit(path, old_text, new_text, **params):
-        assert memory.is_dir() and library.is_dir()
+        assert workspace.is_dir() and library.is_dir()
         calls.append(("edit", path, params))
         return EditResult(path, "", 1)
 
@@ -795,21 +795,21 @@ def test_run_and_edit_add_existing_implicit_roots_to_current_configuration(
     for roots in ([str(configured)], []):
         world.execution.configure({"write_directories": roots}, lambda values: None)
         tools.run(["command"], timeout=7)
-        tools.edit("memory/MEMORY.md", "old", "new", replace_all=True)
-        expected = [*roots, str(memory), str(library)]
+        tools.edit("workspace/MEMORY.md", "old", "new", replace_all=True)
+        expected = [*roots, str(workspace), str(library)]
         assert calls[-2:] == [
             (
                 "run",
                 ["command"],
                 {
-                    "cwd": str(memory.parent),
+                    "cwd": str(workspace.parent),
                     "timeout": 7,
                     "write_directories": expected,
                 },
             ),
             (
                 "edit",
-                str(memory / "MEMORY.md"),
+                str(workspace / "MEMORY.md"),
                 {"replace_all": True, "write_directories": expected},
             ),
         ]
@@ -845,7 +845,7 @@ def test_execution_emits_partial_library_changes_on_error(
     ]
 
 
-def test_edit_emits_library_changes_but_memory_run_and_edit_do_not(world) -> None:
+def test_edit_emits_library_changes_but_workspace_run_and_edit_do_not(world) -> None:
     emitted = []
     tools = tools_for(
         world, MAIN, on_change=lambda name, payload: emitted.append((name, payload))
@@ -863,12 +863,12 @@ def test_edit_emits_library_changes_but_memory_run_and_edit_do_not(world) -> Non
         [
             sys.executable,
             "-c",
-            "from pathlib import Path; Path('memory/note.md').write_text('private')",
+            "from pathlib import Path; Path('workspace/note.md').write_text('private')",
         ]
     )
     assert result["exit_code"] == 0
-    tools.edit("memory/note.md", "private", "updated")
-    assert tools.read_memory("note.md")["content"] == "updated"
+    tools.edit("workspace/note.md", "private", "updated")
+    assert tools.read_workspace("note.md")["content"] == "updated"
     assert emitted == []
 
 
@@ -878,7 +878,7 @@ def test_edit_emits_library_changes_but_memory_run_and_edit_do_not(world) -> Non
 def test_agent_run_writes_only_configured_and_implicit_roots(world, tmp_path) -> None:
     configured = tmp_path / "configured"
     configured.mkdir()
-    other_memory = world.memory_tree_for(OTHER).root
+    other_workspace = world.workspace_tree_for(OTHER).root
     world.execution.close()
     world.execution = ExecutionManager(
         settings={"write_directories": [str(configured)]}
@@ -892,17 +892,17 @@ def test_agent_run_writes_only_configured_and_implicit_roots(world, tmp_path) ->
                 "from pathlib import Path; import sys; "
                 "[Path(path).write_text('allowed') for path in sys.argv[1:]]"
             ),
-            "memory/note.md",
+            "workspace/note.md",
             str(library / "shared.txt"),
             str(configured / "work.txt"),
         ]
     )
     assert result["exit_code"] == 0, result["stderr"]
-    for root in (world.memory_tree_for(MAIN).root, library, configured):
+    for root in (world.workspace_tree_for(MAIN).root, library, configured):
         assert any(path.read_text() == "allowed" for path in root.iterdir())
     for path in (
         world.agent_directory_for(MAIN) / "outside.txt",
-        other_memory / "private.md",
+        other_workspace / "private.md",
     ):
         denied = tools_for(world, MAIN).run(
             [
@@ -959,31 +959,31 @@ def test_human_file_moves_preserve_update_hashes(world, content) -> None:
     assert "hash" not in tools.list_library()[0]
 
 
-def test_humans_can_read_other_agents_memory_but_agents_cannot(world) -> None:
+def test_humans_can_read_other_agents_workspace_but_agents_cannot(world) -> None:
     tools = tools_for(world, MAIN)
-    tree = world.memory_tree_for(MAIN)
+    tree = world.workspace_tree_for(MAIN)
     tree.write("notes/note.md", "updated")
     human = tools_for(world, HUMAN)
-    assert [entry["path"] for entry in human.list_memory(agent_id=MAIN)] == [
+    assert [entry["path"] for entry in human.list_workspace(agent_id=MAIN)] == [
         "MEMORY.md",
         "notes",
         "notes/note.md",
     ]
-    assert human.read_memory("notes/note.md", agent_id=MAIN)["content"] == "updated"
-    assert tools.read_memory("notes/note.md", agent_id=MAIN)["content"] == "updated"
+    assert human.read_workspace("notes/note.md", agent_id=MAIN)["content"] == "updated"
+    assert tools.read_workspace("notes/note.md", agent_id=MAIN)["content"] == "updated"
     other = tools_for(world, OTHER)
     for operation in (
-        lambda: other.list_memory(agent_id=MAIN),
-        lambda: other.read_memory("notes/note.md", agent_id=MAIN),
+        lambda: other.list_workspace(agent_id=MAIN),
+        lambda: other.read_workspace("notes/note.md", agent_id=MAIN),
     ):
         with pytest.raises(DomainError) as error:
             operation()
         assert (
             error.value.code == "not_allowed"
-            and str(error.value) == "Memory is private"
+            and str(error.value) == "Workspace is private"
         )
     tree.delete("notes")
-    assert [entry["path"] for entry in human.list_memory(agent_id=MAIN)] == [
+    assert [entry["path"] for entry in human.list_workspace(agent_id=MAIN)] == [
         "MEMORY.md"
     ]
 
@@ -994,7 +994,7 @@ def test_humans_can_read_other_agents_memory_but_agents_cannot(world) -> None:
         ("edit_library", ("doc.txt", "old", "new"), "library.edit"),
         ("mkdir_library", ("folder",), "library.mkdir"),
         ("run", (["echo"],), "run"),
-        ("edit", ("memory/doc.md", "old", "new"), "edit"),
+        ("edit", ("workspace/doc.md", "old", "new"), "edit"),
     ],
 )
 def test_tree_capabilities_are_checked_before_changes(

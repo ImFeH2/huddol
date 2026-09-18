@@ -1426,11 +1426,13 @@ def test_ping_works_without_a_token(tmp_path: Path) -> None:
     assert response(frames, 1)["result"] == {"pong": None}
 
 
-def test_library_trees_and_human_memory_reads_survive_the_pipe(tmp_path: Path) -> None:
+def test_library_trees_and_human_workspace_reads_survive_the_pipe(
+    tmp_path: Path,
+) -> None:
     data = tmp_path / "data"
-    memory = data / "agents/2/memory/topics"
-    memory.mkdir(parents=True)
-    (memory / "note.md").write_text("private", encoding="utf-8")
+    workspace = data / "agents/2/workspace/topics"
+    workspace.mkdir(parents=True)
+    (workspace / "note.md").write_text("private", encoding="utf-8")
     requests = [
         ("organization.create_agent", {"name": "Main"}),
         ("library.mkdir", {"path": "folder"}),
@@ -1444,11 +1446,11 @@ def test_library_trees_and_human_memory_reads_survive_the_pipe(tmp_path: Path) -
         ("library.read", {"path": "renamed/note.txt"}),
         ("library.delete", {"path": "renamed"}),
         ("library.list", {}),
-        ("memory.list", {"agent_id": 2}),
-        ("memory.read", {"agent_id": 2, "path": "topics/note.md"}),
-        ("memory.read", {"agent_id": 2, "path": "MEMORY.md"}),
+        ("workspace.list", {"agent_id": 2}),
+        ("workspace.read", {"agent_id": 2, "path": "topics/note.md"}),
+        ("workspace.read", {"agent_id": 2, "path": "MEMORY.md"}),
         ("agent.detail", {"agent_id": 2}),
-        ("memory.list", {"agent_id": 2, "path": "topics"}),
+        ("workspace.list", {"agent_id": 2, "path": "topics"}),
     ]
     frames, code, stderr = drive(
         data,
@@ -1467,16 +1469,16 @@ def test_library_trees_and_human_memory_reads_survive_the_pipe(tmp_path: Path) -
     assert response(frames, 7)["result"]["content"] == "after\n"
     assert response(frames, 8)["result"] == {"path": "renamed", "deleted": True}
     assert response(frames, 9)["result"] == []
-    memory_entries = response(frames, 10)["result"]
-    assert [(entry["path"], entry["kind"]) for entry in memory_entries] == [
+    workspace_entries = response(frames, 10)["result"]
+    assert [(entry["path"], entry["kind"]) for entry in workspace_entries] == [
         ("MEMORY.md", "file"),
         ("topics", "directory"),
         ("topics/note.md", "file"),
     ]
     assert response(frames, 11)["result"]["content"] == "private"
     assert response(frames, 12)["result"]["content"] == ""
-    assert response(frames, 13)["result"]["memory"] == memory_entries
-    assert response(frames, 14)["result"] == memory_entries[2:]
+    assert response(frames, 13)["result"]["workspace"] == workspace_entries
+    assert response(frames, 14)["result"] == workspace_entries[2:]
     assert len(events(frames, "library.updated")) == 6
 
 

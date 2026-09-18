@@ -180,7 +180,7 @@ def flattened(messages) -> list[tuple]:
 def test_next_turn_settles_unanswered_history_calls(settings, with_text) -> None:
     calls = [
         ToolCallPart("library", {"action": "list"}, tool_call_id="library-list"),
-        ToolCallPart("memory", {"action": "list"}, tool_call_id="memory-list"),
+        ToolCallPart("workspace", {"action": "list"}, tool_call_id="workspace-list"),
     ]
     history = [
         ModelRequest(parts=[UserPromptPart("Old prompt")]),
@@ -1102,12 +1102,12 @@ def test_every_call_extends_what_the_previous_call_sent(settings, start) -> None
         (
             "edit",
             {
-                "path": "memory/MEMORY.md",
+                "path": "workspace/MEMORY.md",
                 "old_text": "before",
                 "new_text": "",
                 "replace_all": True,
             },
-            ("memory/MEMORY.md", "before", "", True),
+            ("workspace/MEMORY.md", "before", "", True),
         ),
     ],
 )
@@ -1128,7 +1128,7 @@ def test_model_file_tools_forward_arguments_without_tree_tools(
     def respond(messages, info):
         names = {tool.name for tool in info.function_tools}
         assert {"run", "edit"} <= names
-        assert names.isdisjoint({"memory", "library"})
+        assert names.isdisjoint({"workspace", "library"})
         if not calls:
             return ModelResponse(parts=[ToolCallPart(name, params)])
         return ModelResponse(parts=[TextPart("Done")])

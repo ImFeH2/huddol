@@ -21,7 +21,7 @@ from huddol.runtime.reminder import (
     render_resident,
     reset_notice,
 )
-from huddol.services.memory import Memory
+from huddol.services.workspace import Workspace
 from huddol.tools import AgentTools, Dependencies, TurnBinding
 from huddol.tools.authorize import Actor, Authorizer
 
@@ -178,7 +178,7 @@ class Scheduler:
 
     def resident_block(self, agent_id: int) -> str:
         return render_resident(
-            Memory(self._deps.memory_tree_for(agent_id)).index(
+            Workspace(self._deps.workspace_tree_for(agent_id)).index(
                 self.parameters().memory_index_bytes
             ),
             self.environment_facts(agent_id),
@@ -190,8 +190,8 @@ class Scheduler:
             return self._deps.execution.snapshot().describe_environment(
                 (
                     (
-                        str(self._deps.memory_tree_for(agent_id).root),
-                        "your Memory, private, Markdown",
+                        str(self._deps.workspace_tree_for(agent_id).root),
+                        "your workspace, private",
                     ),
                     (
                         str(self._deps.library_tree.root),

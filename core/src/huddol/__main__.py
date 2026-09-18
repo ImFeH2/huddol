@@ -270,8 +270,8 @@ def main(argv: list[str] | None = None) -> int:
         execution=execution,
         agent_directory_for=agent_directory_for,
         library_tree=DirectoryTree(directory / "library"),
-        memory_tree_for=lambda member_id: DirectoryTree(
-            directory / "agents" / str(member_id) / "memory"
+        workspace_tree_for=lambda member_id: DirectoryTree(
+            directory / "agents" / str(member_id) / "workspace"
         ),
     )
 

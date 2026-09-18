@@ -69,8 +69,8 @@ def server(tmp_path: Path):
             enforce=False,
         ),
         library_tree=DirectoryTree(tmp_path / "library"),
-        memory_tree_for=lambda member_id: DirectoryTree(
-            tmp_path / "agents" / str(member_id) / "memory"
+        workspace_tree_for=lambda member_id: DirectoryTree(
+            tmp_path / "agents" / str(member_id) / "workspace"
         ),
     )
     output = Capture()
@@ -681,7 +681,7 @@ def test_accepted_write_directories_are_stored_canonically(
     assert result["write_directories"] == [str(target.resolve())]
 
 
-def test_library_directory_operations_and_memory_read_protocol(server) -> None:
+def test_library_directory_operations_and_workspace_read_protocol(server) -> None:
     dispatcher, output, deps = server
     agent_id = call(dispatcher, output, "organization.create_agent", name="Main")[
         "result"
@@ -732,37 +732,43 @@ def test_library_directory_operations_and_memory_read_protocol(server) -> None:
         "deleted": True,
     }
     assert call(dispatcher, output, "library.list")["result"] == []
-    deps.memory_tree_for(agent_id).write("topics/note.md", "private")
-    memory = call(dispatcher, output, "memory.list", agent_id=agent_id)["result"]
-    assert all("hash" not in entry for entry in memory)
-    assert [(entry["path"], entry["kind"]) for entry in memory] == [
+    deps.workspace_tree_for(agent_id).write("topics/note.md", "private")
+    workspace = call(dispatcher, output, "workspace.list", agent_id=agent_id)["result"]
+    assert all("hash" not in entry for entry in workspace)
+    assert [(entry["path"], entry["kind"]) for entry in workspace] == [
         ("MEMORY.md", "file"),
         ("topics", "directory"),
         ("topics/note.md", "file"),
     ]
     assert (
-        call(dispatcher, output, "memory.list", agent_id=agent_id, path="topics")[
+        call(dispatcher, output, "workspace.list", agent_id=agent_id, path="topics")[
             "result"
         ]
-        == memory[2:]
+        == workspace[2:]
     )
     assert (
         call(
-            dispatcher, output, "memory.read", agent_id=agent_id, path="topics/note.md"
+            dispatcher,
+            output,
+            "workspace.read",
+            agent_id=agent_id,
+            path="topics/note.md",
         )["result"]["content"]
         == "private"
     )
     assert (
-        call(dispatcher, output, "agent.detail", agent_id=agent_id)["result"]["memory"]
-        == memory
+        call(dispatcher, output, "agent.detail", agent_id=agent_id)["result"][
+            "workspace"
+        ]
+        == workspace
     )
     for method in (
         "library.run",
-        "memory.write",
-        "memory.edit",
-        "memory.mkdir",
-        "memory.move",
-        "memory.delete",
+        "workspace.write",
+        "workspace.edit",
+        "workspace.mkdir",
+        "workspace.move",
+        "workspace.delete",
     ):
         assert call(dispatcher, output, method)["error"]["code"] == "unknown_method"
     updates = [frame for frame in output.frames() if frame["type"] == "library.updated"]

@@ -484,23 +484,23 @@ describe("Backend", () => {
     await expect(promise).resolves.toEqual(result);
   });
 
-  it("sends Library and Memory tree requests with their kernel parameters", async () => {
+  it("sends Library and Workspace tree requests with their kernel parameters", async () => {
     const { backend, connected } = harness();
     const socket = await connected();
     const pending = [
       backend.mkdirLibrary("notes/deep"),
-      backend.memoryList(2, "notes"),
-      backend.memoryList(2),
-      backend.memoryRead(2, "notes/a.md"),
+      backend.workspaceList(2, "notes"),
+      backend.workspaceList(2),
+      backend.workspaceRead(2, "notes/a.md"),
     ];
     await vi.waitFor(() => expect(socket.sent).toHaveLength(4));
     expect(
       socket.sent.map(({ method, params }) => ({ method, params })),
     ).toEqual([
       { method: "library.mkdir", params: { path: "notes/deep" } },
-      { method: "memory.list", params: { agent_id: 2, path: "notes" } },
-      { method: "memory.list", params: { agent_id: 2 } },
-      { method: "memory.read", params: { agent_id: 2, path: "notes/a.md" } },
+      { method: "workspace.list", params: { agent_id: 2, path: "notes" } },
+      { method: "workspace.list", params: { agent_id: 2 } },
+      { method: "workspace.read", params: { agent_id: 2, path: "notes/a.md" } },
     ]);
     for (const request of socket.sent)
       socket.reply({ type: "response", id: request.id, result: [] });

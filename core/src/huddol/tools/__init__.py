@@ -16,7 +16,7 @@ from huddol.ports.files import ConflictError, FileTree
 from huddol.ports.store import OrganizationStore
 from huddol.services.history import History
 from huddol.services.library import Library
-from huddol.services.memory import Memory
+from huddol.services.workspace import Workspace
 from huddol.tools.authorize import Actor, Authorizer
 
 
@@ -27,7 +27,7 @@ class Dependencies:
     settings: SettingsStore
     execution: ExecutionControl
     library_tree: FileTree
-    memory_tree_for: Callable[[int], FileTree]
+    workspace_tree_for: Callable[[int], FileTree]
     agent_directory_for: Callable[[int], Path]
 
 
@@ -540,7 +540,7 @@ class AgentTools:
 
     def _write_directories(self, execution: ExecutionEnvironment) -> list[str]:
         roots = (
-            self._deps.memory_tree_for(self._actor.member_id).root,
+            self._deps.workspace_tree_for(self._actor.member_id).root,
             self._deps.library_tree.root,
         )
         for root in roots:
@@ -619,17 +619,17 @@ class AgentTools:
             "replacements": result.replacements,
         }
 
-    def _memory(self, agent_id: int | None = None) -> Memory:
+    def _workspace(self, agent_id: int | None = None) -> Workspace:
         if agent_id is None:
             agent_id = self._actor.member_id
         if self._actor.is_agent and agent_id != self._actor.member_id:
-            raise DomainError("not_allowed", "Memory is private")
-        return Memory(self._deps.memory_tree_for(agent_id))
+            raise DomainError("not_allowed", "Workspace is private")
+        return Workspace(self._deps.workspace_tree_for(agent_id))
 
-    def list_memory(
+    def list_workspace(
         self, path: str | None = None, *, agent_id: int | None = None
     ) -> list[dict[str, Any]]:
-        self._check("memory.list")
+        self._check("workspace.list")
         return [
             {
                 "path": item.path,
@@ -637,12 +637,14 @@ class AgentTools:
                 "size": item.size,
                 "modified_at": item.modified_at,
             }
-            for item in self._memory(agent_id).list(path)
+            for item in self._workspace(agent_id).list(path)
         ]
 
-    def read_memory(self, path: str, *, agent_id: int | None = None) -> dict[str, Any]:
-        self._check("memory.read", path)
-        content, digest = self._memory(agent_id).read(path)
+    def read_workspace(
+        self, path: str, *, agent_id: int | None = None
+    ) -> dict[str, Any]:
+        self._check("workspace.read", path)
+        content, digest = self._workspace(agent_id).read(path)
         return {"path": path, "content": content, "hash": digest}
 
     def _library(self) -> Library:

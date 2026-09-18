@@ -90,7 +90,7 @@ export type Usage = {
 
 export type AgentDetail = {
   id: number;
-  memory: LibraryEntry[];
+  workspace: LibraryEntry[];
   runs: AgentRun[];
   usage: Usage;
   token_limit: number;
@@ -600,12 +600,12 @@ export class Backend {
     return this.call<LibraryEntry>("library.mkdir", { path });
   }
 
-  memoryList(agent_id: number, path?: string) {
-    return this.call<LibraryEntry[]>("memory.list", { agent_id, path });
+  workspaceList(agent_id: number, path?: string) {
+    return this.call<LibraryEntry[]>("workspace.list", { agent_id, path });
   }
 
-  memoryRead(agent_id: number, path: string) {
-    return this.call<LibraryDocument>("memory.read", { agent_id, path });
+  workspaceRead(agent_id: number, path: string) {
+    return this.call<LibraryDocument>("workspace.read", { agent_id, path });
   }
 
   readLibrary(path: string) {

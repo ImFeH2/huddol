@@ -7,7 +7,7 @@ import pytest
 from huddol.adapters.files.tree import DirectoryTree, content_hash
 from huddol.core.errors import DomainError
 from huddol.services.library import Library
-from huddol.services.memory import Memory
+from huddol.services.workspace import Workspace
 
 
 @pytest.fixture
@@ -16,8 +16,8 @@ def library(tmp_path: Path) -> Library:
 
 
 @pytest.fixture
-def memory(tmp_path: Path) -> Memory:
-    return Memory(DirectoryTree(tmp_path / "agents" / "13" / "memory"))
+def workspace(tmp_path: Path) -> Workspace:
+    return Workspace(DirectoryTree(tmp_path / "agents" / "13" / "workspace"))
 
 
 def test_library_round_trips_a_document(library: Library) -> None:
@@ -37,45 +37,45 @@ def test_library_concurrent_edit_is_rejected_then_recoverable(library: Library) 
     assert library.write("shared.md", "v3", expected_hash=latest.content_hash)
 
 
-def test_memory_lists_non_markdown_and_hidden_files_without_changing_index(
-    memory,
+def test_workspace_lists_non_markdown_and_hidden_files_without_changing_index(
+    workspace,
 ) -> None:
-    _, digest = memory.read("MEMORY.md")
-    memory.write("MEMORY.md", "remember", expected_hash=digest)
-    memory.write(".config/settings.json", "{}")
-    memory.write("notes.txt", "details")
-    (memory._tree.root / "image.png").write_bytes(b"\x89PNG\xff")
-    assert [entry.path for entry in memory.list()] == [
+    _, digest = workspace.read("MEMORY.md")
+    workspace.write("MEMORY.md", "remember", expected_hash=digest)
+    workspace.write(".config/settings.json", "{}")
+    workspace.write("notes.txt", "details")
+    (workspace._tree.root / "image.png").write_bytes(b"\x89PNG\xff")
+    assert [entry.path for entry in workspace.list()] == [
         ".config",
         ".config/settings.json",
         "MEMORY.md",
         "image.png",
         "notes.txt",
     ]
-    assert memory.read("notes.txt")[0] == "details"
+    assert workspace.read("notes.txt")[0] == "details"
     with pytest.raises(DomainError) as error:
-        memory.read("image.png")
+        workspace.read("image.png")
     assert error.value.code == "not_readable"
-    assert memory.index(16_384) == "remember"
+    assert workspace.index(16_384) == "remember"
 
 
-def test_memory_index_is_empty_without_files(memory: Memory) -> None:
-    assert memory.index(16_384) == ""
+def test_workspace_index_is_empty_without_files(workspace: Workspace) -> None:
+    assert workspace.index(16_384) == ""
 
 
 @pytest.mark.parametrize("content", ["", "  - remember this\n", "记忆😀"])
-def test_memory_index_returns_only_the_unchanged_index(
-    memory: Memory, content: str
+def test_workspace_index_returns_only_the_unchanged_index(
+    workspace: Workspace, content: str
 ) -> None:
-    _, digest = memory.read("MEMORY.md")
-    memory.write("MEMORY.md", content, expected_hash=digest)
-    memory.write("topics/rewrite.md", "details")
-    assert memory.index(len(content.encode("utf-8"))) == content
+    _, digest = workspace.read("MEMORY.md")
+    workspace.write("MEMORY.md", content, expected_hash=digest)
+    workspace.write("topics/rewrite.md", "details")
+    assert workspace.index(len(content.encode("utf-8"))) == content
 
 
-def test_memory_does_not_list_files_without_an_index(memory: Memory) -> None:
-    memory.write("topics/rewrite.md", "details")
-    assert memory.index(16_384) == ""
+def test_workspace_does_not_list_files_without_an_index(workspace: Workspace) -> None:
+    workspace.write("topics/rewrite.md", "details")
+    assert workspace.index(16_384) == ""
 
 
 @pytest.mark.parametrize(
@@ -91,52 +91,54 @@ def test_memory_does_not_list_files_without_an_index(memory: Memory) -> None:
         (10, "记忆😀"),
     ],
 )
-def test_memory_index_is_cut_at_a_utf8_boundary(
-    memory: Memory, limit: int, prefix: str
+def test_workspace_index_is_cut_at_a_utf8_boundary(
+    workspace: Workspace, limit: int, prefix: str
 ) -> None:
     content = "记忆😀 more"
-    _, digest = memory.read("MEMORY.md")
-    memory.write("MEMORY.md", content, expected_hash=digest)
-    assert memory.index(limit) == prefix + (
+    _, digest = workspace.read("MEMORY.md")
+    workspace.write("MEMORY.md", content, expected_hash=digest)
+    assert workspace.index(limit) == prefix + (
         f"\n[MEMORY.md is longer than {limit} bytes and was cut here. "
         "Reorganize it: keep only what you must always remember and a map of "
-        "your other memory files.]"
+        "your other workspace files.]"
     )
     assert len(prefix.encode("utf-8")) <= limit
-    assert memory.read("MEMORY.md")[0] == content
+    assert workspace.read("MEMORY.md")[0] == content
 
 
-def test_library_and_memory_are_separate_trees(
-    library: Library, memory: Memory
+def test_library_and_workspace_are_separate_trees(
+    library: Library, workspace: Workspace
 ) -> None:
     library.write("shared.md", "org wide")
-    memory.write("private.md", "mine")
+    workspace.write("private.md", "mine")
     assert [item.path for item in library.list()] == ["shared.md"]
-    assert [item.path for item in memory.list()] == ["MEMORY.md", "private.md"]
+    assert [item.path for item in workspace.list()] == ["MEMORY.md", "private.md"]
 
 
-def test_memory_recreates_its_index_after_deletion_or_movement(memory: Memory) -> None:
-    entries = memory.list()
+def test_workspace_recreates_its_index_after_deletion_or_movement(
+    workspace: Workspace,
+) -> None:
+    entries = workspace.list()
     assert [(entry.path, entry.kind, entry.size) for entry in entries] == [
         ("MEMORY.md", "file", 0)
     ]
-    memory.delete("MEMORY.md")
-    assert memory.index(100) == ""
-    memory.move("MEMORY.md", "other.md")
-    assert memory.index(100) == ""
-    assert memory.read("other.md")[0] == ""
+    workspace.delete("MEMORY.md")
+    assert workspace.index(100) == ""
+    workspace.move("MEMORY.md", "other.md")
+    assert workspace.index(100) == ""
+    assert workspace.read("other.md")[0] == ""
 
 
-def test_memory_directory_operations_and_edit(memory: Memory) -> None:
-    memory.mkdir("topics")
-    memory.write("topics/note.md", "before")
-    entry, diff = memory.edit("topics/note.md", "before", "after")
-    assert memory.read(entry.path) == ("after", content_hash("after"))
+def test_workspace_directory_operations_and_edit(workspace: Workspace) -> None:
+    workspace.mkdir("topics")
+    workspace.write("topics/note.md", "before")
+    entry, diff = workspace.edit("topics/note.md", "before", "after")
+    assert workspace.read(entry.path) == ("after", content_hash("after"))
     assert "+after" in diff
-    memory.move("topics", "renamed")
-    assert [item.path for item in memory.list("renamed")] == ["renamed/note.md"]
-    memory.delete("renamed")
-    assert [item.path for item in memory.list()] == ["MEMORY.md"]
+    workspace.move("topics", "renamed")
+    assert [item.path for item in workspace.list("renamed")] == ["renamed/note.md"]
+    workspace.delete("renamed")
+    assert [item.path for item in workspace.list()] == ["MEMORY.md"]
 
 
 def test_library_snapshots_detect_presence_and_metadata_changes(
@@ -196,23 +198,25 @@ def test_library_snapshot_reads_metadata_only_including_hidden_files(
         DomainError("invalid_path", "Cannot create index"),
     ],
 )
-def test_memory_index_is_empty_when_creation_fails(memory, monkeypatch, error) -> None:
+def test_workspace_index_is_empty_when_creation_fails(
+    workspace, monkeypatch, error
+) -> None:
     def fail(*args, **kwargs):
         raise error
 
-    monkeypatch.setattr(memory._tree, "write", fail)
-    assert memory.index(100) == ""
-    assert not (memory._tree.root / "MEMORY.md").exists()
+    monkeypatch.setattr(workspace._tree, "write", fail)
+    assert workspace.index(100) == ""
+    assert not (workspace._tree.root / "MEMORY.md").exists()
 
 
-def test_unreadable_memory_index_does_not_hide_the_tree(tmp_path: Path) -> None:
-    tree = DirectoryTree(tmp_path / "memory")
+def test_unreadable_workspace_index_does_not_hide_the_tree(tmp_path: Path) -> None:
+    tree = DirectoryTree(tmp_path / "workspace")
     (tree.root / "MEMORY.md").write_bytes(b"\xff")
-    memory = Memory(tree)
-    (entry,) = memory.list()
+    workspace = Workspace(tree)
+    (entry,) = workspace.list()
     assert entry.path == "MEMORY.md" and entry.size == 1
-    memory.write("other.md", "readable")
-    assert memory.read("other.md")[0] == "readable"
+    workspace.write("other.md", "readable")
+    assert workspace.read("other.md")[0] == "readable"
     with pytest.raises(DomainError) as error:
-        memory.index(100)
+        workspace.index(100)
     assert error.value.code == "not_readable"

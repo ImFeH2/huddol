@@ -196,7 +196,7 @@ function AgentPage({
               />
             </div>
 
-            <MemorySection agentId={member.id} entries={detail.memory} />
+            <WorkspaceSection agentId={member.id} entries={detail.workspace} />
 
             <Section title="Recent Turns">
               {detail.runs.length === 0 ? (
@@ -264,7 +264,7 @@ export function AgentDetailStatus({ detail }: { detail: AgentDetail }) {
   );
 }
 
-export function MemoryContent({ file }: { file: LibraryDocument }) {
+export function WorkspaceContent({ file }: { file: LibraryDocument }) {
   return (
     <>
       <Chip>{formatBytes(new TextEncoder().encode(file.content).length)}</Chip>
@@ -275,7 +275,7 @@ export function MemoryContent({ file }: { file: LibraryDocument }) {
   );
 }
 
-export function MemorySection({
+export function WorkspaceSection({
   agentId,
   entries,
 }: {
@@ -289,10 +289,10 @@ export function MemorySection({
   useEffect(() => {
     if (path === null) return;
     let active = true;
-    const toastId = `memory-read:${agentId}:${path}`;
+    const toastId = `workspace-read:${agentId}:${path}`;
     const load = async () => {
       try {
-        const result = await backend.memoryRead(agentId, path);
+        const result = await backend.workspaceRead(agentId, path);
         if (!active) return;
         setFile(result);
         dismissToast(toastId);
@@ -308,9 +308,9 @@ export function MemorySection({
   }, [agentId, path]);
 
   return (
-    <Section title="Memory">
+    <Section title="Workspace">
       {entries.length === 0 ? (
-        <p className="text-fg-muted">No Memory files</p>
+        <p className="text-fg-muted">No Workspace files</p>
       ) : (
         <TreeView
           entries={entries}
@@ -336,7 +336,7 @@ export function MemorySection({
         title={path ?? ""}
         footer={null}
       >
-        {file ? <MemoryContent file={file} /> : null}
+        {file ? <WorkspaceContent file={file} /> : null}
       </Modal>
     </Section>
   );

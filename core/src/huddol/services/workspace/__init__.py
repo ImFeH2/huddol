@@ -6,7 +6,7 @@ from huddol.ports.files import FileTree, TreeEntry
 INDEX = "MEMORY.md"
 
 
-class Memory:
+class Workspace:
     def __init__(self, tree: FileTree) -> None:
         self._tree = tree
 
@@ -66,5 +66,5 @@ class Memory:
         return encoded[:limit_bytes].decode("utf-8", errors="ignore") + (
             f"\n[MEMORY.md is longer than {limit_bytes} bytes and was cut here. "
             "Reorganize it: keep only what you must always remember and a map of "
-            "your other memory files.]"
+            "your other workspace files.]"
         )

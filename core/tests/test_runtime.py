@@ -62,8 +62,8 @@ def world(tmp_path: Path):
             enforce=False,
         ),
         library_tree=DirectoryTree(tmp_path / "library"),
-        memory_tree_for=lambda member_id: DirectoryTree(
-            tmp_path / "agents" / str(member_id) / "memory"
+        workspace_tree_for=lambda member_id: DirectoryTree(
+            tmp_path / "agents" / str(member_id) / "workspace"
         ),
     )
     yield deps
@@ -710,11 +710,13 @@ def test_resident_is_persisted_and_stays_unchanged_until_a_reset(
     )
     scheduler = Scheduler(world, runner)
     tools = scheduler.tools_for(MAIN)
-    world.memory_tree_for(MAIN).write("MEMORY.md", "MEMORY_STATE_OLD")
+    world.workspace_tree_for(MAIN).write("MEMORY.md", "WORKSPACE_STATE_OLD")
 
     for turn, state in enumerate(("OLD", "NEW"), start=1):
         if state == "NEW":
-            tools.edit("memory/MEMORY.md", "MEMORY_STATE_OLD", "MEMORY_STATE_NEW")
+            tools.edit(
+                "workspace/MEMORY.md", "WORKSPACE_STATE_OLD", "WORKSPACE_STATE_NEW"
+            )
             world.store.append_message(room, HUMAN, "@Main continue")
         reminder = build_reminder(world.store, world.history, MAIN, "Main")
         assert reminder is not None
@@ -726,10 +728,10 @@ def test_resident_is_persisted_and_stays_unchanged_until_a_reset(
         assert record.status == ("failed" if fail else "completed")
         assert len(received) == start + 2
         for request in received[start:]:
-            assert "MEMORY_STATE_OLD" in request
-            assert "MEMORY_STATE_NEW" not in request
+            assert "WORKSPACE_STATE_OLD" in request
+            assert "WORKSPACE_STATE_NEW" not in request
         saved = world.history.latest_messages(MAIN)
-        assert "MEMORY_STATE_OLD" in saved
+        assert "WORKSPACE_STATE_OLD" in saved
         messages = ModelMessagesTypeAdapter.validate_json(saved)
         prompts = [
             part.content
@@ -765,8 +767,8 @@ def test_resident_is_persisted_and_stays_unchanged_until_a_reset(
     record = scheduler.run_turn(MAIN)
     assert record is not None and record.status == ("failed" if fail else "completed")
     saved = world.history.latest_messages(MAIN)
-    assert "MEMORY_STATE_NEW" in saved
-    assert "MEMORY_STATE_OLD" not in saved
+    assert "WORKSPACE_STATE_NEW" in saved
+    assert "WORKSPACE_STATE_OLD" not in saved
     assert saved.count('"block":"resident"') == 1
 
 
@@ -843,9 +845,9 @@ def test_history_is_preserved_or_reset_without_rewriting_old_prompts(
     assert world.history.runs(MAIN)[1].messages_json == original
 
 
-def test_resident_carries_memory_and_environment(world, tmp_path: Path) -> None:
+def test_resident_carries_workspace_and_environment(world, tmp_path: Path) -> None:
     mention(world)
-    DirectoryTree(world.memory_tree_for(MAIN).root).write(
+    DirectoryTree(world.workspace_tree_for(MAIN).root).write(
         "MEMORY.md", "- prior knowledge"
     )
     runner = RecordingRunner()
@@ -855,19 +857,19 @@ def test_resident_carries_memory_and_environment(world, tmp_path: Path) -> None:
         "Your MEMORY.md:\n- prior knowledge\n\n"
         f"Commands run on {sys.platform}\n"
         "Writable directories:\n"
-        f"- {world.memory_tree_for(MAIN).root} (your Memory, private, Markdown)\n"
+        f"- {world.workspace_tree_for(MAIN).root} (your workspace, private)\n"
         f"- {world.library_tree.root} (Library, shared with the whole organization)\n"
         f"- {tmp_path}"
     )
 
 
 @pytest.mark.parametrize("error_kind", ["os", "domain"])
-def test_resident_renders_when_memory_index_creation_fails(
+def test_resident_renders_when_workspace_index_creation_fails(
     world, monkeypatch, error_kind
 ) -> None:
     from huddol.core.errors import DomainError
 
-    tree = world.memory_tree_for(MAIN)
+    tree = world.workspace_tree_for(MAIN)
 
     def fail(*args, **kwargs):
         if error_kind == "os":
@@ -875,34 +877,34 @@ def test_resident_renders_when_memory_index_creation_fails(
         raise DomainError("invalid_path", "Cannot create index")
 
     monkeypatch.setattr(tree, "write", fail)
-    monkeypatch.setattr(world, "memory_tree_for", lambda agent_id: tree)
+    monkeypatch.setattr(world, "workspace_tree_for", lambda agent_id: tree)
     mention(world)
     runner = RecordingRunner()
     record = Scheduler(world, runner).run_turn(MAIN)
     assert record.status == "completed"
     assert runner.requests[0].resident.startswith("Your MEMORY.md is empty.")
-    assert "(your Memory, private, Markdown)" in runner.requests[0].resident
+    assert "(your workspace, private)" in runner.requests[0].resident
     assert not (tree.root / "MEMORY.md").exists()
 
 
 @pytest.mark.parametrize("environment", [None, "environment facts"])
-@pytest.mark.parametrize("memory", ["", "remember this"])
+@pytest.mark.parametrize("workspace", ["", "remember this"])
 @pytest.mark.parametrize("reset", [None, "Window reset notice"])
 def test_render_resident_orders_only_the_requested_blocks(
-    memory, environment, reset
+    workspace, environment, reset
 ) -> None:
     expected = (
-        "Your MEMORY.md:\nremember this" if memory else "Your MEMORY.md is empty."
+        "Your MEMORY.md:\nremember this" if workspace else "Your MEMORY.md is empty."
     )
     if environment is not None:
         expected += "\n\nenvironment facts"
     if reset is not None:
         expected += "\n\n" + reset
-    assert render_resident(memory, environment, reset) == expected
+    assert render_resident(workspace, environment, reset) == expected
 
 
-def test_memory_index_truncation_follows_the_current_parameter(world) -> None:
-    world.memory_tree_for(MAIN).write("MEMORY.md", "abc😀def")
+def test_workspace_index_truncation_follows_the_current_parameter(world) -> None:
+    world.workspace_tree_for(MAIN).write("MEMORY.md", "abc😀def")
     runner = RecordingRunner()
     scheduler = Scheduler(world, runner)
     for limit, prefix, truncated in [(5, "abc", True), (10, "abc😀def", False)]:
@@ -926,13 +928,13 @@ def test_resident_loading_failure_preserves_history_and_hard_pauses(
     previous = world.history.latest_messages(MAIN)
 
     def fail(agent_id):
-        raise OSError("memory is unreadable")
+        raise OSError("workspace is unreadable")
 
     monkeypatch.setattr(scheduler, "resident_block", fail)
     mention(world)
     record = scheduler.run_turn(MAIN)
     assert record is not None and record.status == "failed"
-    assert "memory is unreadable" in record.error
+    assert "workspace is unreadable" in record.error
     assert world.history.latest_messages(MAIN) == previous
     assert world.store.get_member(MAIN).state == "paused"
     assert world.history.pause_reason(MAIN) == "runtime_error"

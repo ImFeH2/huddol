@@ -80,7 +80,7 @@ export function TreeView({
     <div ref={container} className="min-w-0">
       <Table
         columns={columns}
-        label={readOnly ? "Memory files" : "Library documents"}
+        label={readOnly ? "Workspace files" : "Library documents"}
       >
         {rows.map(({ node, depth }) => {
           const folder = node.kind === "directory";

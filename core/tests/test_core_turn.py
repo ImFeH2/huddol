@@ -7,7 +7,7 @@ def test_only_send_edit_and_run_count_as_output() -> None:
     assert is_productive(["send"])
     assert is_productive(["ack", "run"])
     assert not is_productive(["ack"])
-    assert not is_productive(["ack", "memory.write", "library.write"])
+    assert not is_productive(["ack", "workspace.write", "library.write"])
     assert not is_productive([])
 
 
