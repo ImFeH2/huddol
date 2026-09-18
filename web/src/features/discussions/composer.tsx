@@ -244,18 +244,24 @@ export function Composer({
     const measureInput = probe.current;
     if (!element || !measureInput) return;
     const measure = (typing = false) => {
+      const compactStyle = getComputedStyle(measureInput);
+      const compactLine = Number.parseFloat(compactStyle.lineHeight);
+      const compactPadding =
+        Number.parseFloat(compactStyle.paddingTop) +
+        Number.parseFloat(compactStyle.paddingBottom);
+      measureInput.style.height = "auto";
+      const expanded = composerMultiline(
+        element.value,
+        measureInput.scrollHeight,
+        compactLine,
+        compactPadding,
+      );
+      element.style.paddingBlock = expanded ? "14px" : "12px";
       const style = getComputedStyle(element);
       const line = Number.parseFloat(style.lineHeight);
       const padding =
         Number.parseFloat(style.paddingTop) +
         Number.parseFloat(style.paddingBottom);
-      measureInput.style.height = "auto";
-      const expanded = composerMultiline(
-        element.value,
-        measureInput.scrollHeight,
-        line,
-        padding,
-      );
       const scrollTop = element.scrollTop;
       element.style.height = "auto";
       const height = expanded
@@ -383,7 +389,7 @@ export function Composer({
         ref={card}
         data-expanded={layout.expanded}
         className={clsx(
-          "pointer-events-auto relative w-full rounded-[24px] border border-(--composer-border) bg-(--composer-card) text-(--composer-foreground) shadow-sm focus-within:border-(--composer-ring)/40 focus-within:ring-1 focus-within:ring-(--composer-ring)/20 hover:border-(--composer-border)/80 transition-[width,height] motion-reduce:transition-none",
+          "pointer-events-auto relative w-full rounded-[24px] border border-(--composer-border) bg-(--composer-card) text-(--composer-foreground) shadow-[0_1px_3px_0_rgb(0_0_0/0.1),0_1px_2px_-1px_rgb(0_0_0/0.1)] focus-within:border-(--composer-ring)/40 focus-within:ring-1 focus-within:ring-(--composer-ring)/20 hover:border-(--composer-border)/80 transition-[width,height] motion-reduce:transition-none",
           layout.expanded ? "@[601px]:w-[90%]" : "@[601px]:w-3/4",
         )}
         style={{

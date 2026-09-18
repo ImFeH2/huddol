@@ -1,6 +1,7 @@
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
+import { autoGrowHeight } from "@/components/ui/index";
 import {
   Composer,
   type ComposerKey,
@@ -89,6 +90,8 @@ describe("composer layout", () => {
     expect(composerHeight(false, 46)).toBe(48);
     expect(composerHeight(true, 68)).toBe(116);
     expect(composerHeight(true, 200)).toBe(248);
+    expect(autoGrowHeight(248, 22, 28, 0, 8)).toBe(204);
+    expect(composerHeight(true, 204)).toBe(252);
   });
 
   it("renders a real compact input, an inaccessible measuring probe and disabled send", () => {
@@ -122,6 +125,9 @@ describe("composer layout", () => {
     expect(html).toContain('aria-label="Model selection · Coming soon"');
     expect(html).toContain("from-(--composer-card)");
     expect(html).not.toContain("lucide");
+    expect(html).toContain(
+      "shadow-[0_1px_3px_0_rgb(0_0_0/0.1),0_1px_2px_-1px_rgb(0_0_0/0.1)]",
+    );
   });
 });
 
