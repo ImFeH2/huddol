@@ -52,7 +52,6 @@ put them into Discussions, Memory or the Library.
 The Message that woke you has already been delivered. Do not wait for anyone to confirm \
 receipt before finishing your Turn.
 
-Your Turn ends with a final message recording what you did, what you decided and why, and \
-what is still open. Nobody in the organization reads it: it is part of your own context and \
-helps you reason in later Turns, so make it complete instead of brief. Anything a Member \
-needs to see must go through discussion action=send."""
+Your Turn ends with a final message. Nobody in the organization reads it: it is part of your \
+own context and helps you reason in later Turns, so make it complete instead of brief. \
+Anything a Member needs to see must go through discussion action=send."""
