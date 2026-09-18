@@ -88,7 +88,7 @@ def request() -> TurnRequest:
         prompt=reminder.render(),
         reminder=reminder,
         history_json="[]",
-        resident="Your MEMORY.md is empty.\n\nTodos: none\n\nenvironment A",
+        resident="Your MEMORY.md is empty.\n\nenvironment A",
         environment=lambda: "environment A",
         ephemeral=lambda: "",
         persist=lambda messages_json: None,
@@ -297,7 +297,9 @@ def test_each_response_persists_the_complete_history_without_ephemeral(
         assert len(persisted) == len(responses)
         response = ModelResponse(
             parts=[
-                ToolCallPart("todo", {"action": "list"}, tool_call_id="list")
+                ToolCallPart(
+                    "organization", {"action": "list_members"}, tool_call_id="list"
+                )
                 if not responses
                 else TextPart("Done")
             ],
@@ -308,7 +310,7 @@ def test_each_response_persists_the_complete_history_without_ephemeral(
         return response
 
     class Tools:
-        def list_todos(self):
+        def list_members(self):
             nonlocal environment
             assert len(persisted) == 1
             environment = "environment B"
@@ -350,7 +352,7 @@ def test_each_response_persists_the_complete_history_without_ephemeral(
     }
     assert second[-3].parts == [
         ToolReturnPart(
-            "todo",
+            "organization",
             [{"id": 1, "title": "Work"}],
             tool_call_id="list",
             timestamp=second[-3].parts[0].timestamp,
@@ -466,13 +468,15 @@ def test_model_settings_are_resolved_after_a_tool_call_in_the_same_turn(
         def respond(messages, info):
             received.append(config.model)
             if config.model == "first":
-                return ModelResponse(parts=[ToolCallPart("todo", {"action": "list"})])
+                return ModelResponse(
+                    parts=[ToolCallPart("organization", {"action": "list_members"})]
+                )
             return ModelResponse(parts=[TextPart("Done")])
 
         return FunctionModel(respond)
 
     class Tools:
-        def list_todos(self):
+        def list_members(self):
             settings.set_settings("model", {} if remove else model_values("second"))
             return []
 
@@ -496,13 +500,15 @@ def test_ephemeral_is_loaded_each_call_and_never_persisted(settings, fail) -> No
     def respond(messages, info):
         received.append(ModelMessagesTypeAdapter.dump_json(messages).decode())
         if len(received) == 1:
-            return ModelResponse(parts=[ToolCallPart("todo", {"action": "list"})])
+            return ModelResponse(
+                parts=[ToolCallPart("organization", {"action": "list_members"})]
+            )
         if fail:
             raise RuntimeError("local failure")
         return ModelResponse(parts=[TextPart("Done")])
 
     class Tools:
-        def list_todos(self):
+        def list_members(self):
             return []
 
     outcome = PydanticModelRunner(
@@ -576,13 +582,15 @@ def test_durable_changes_are_persisted_once_and_survive_runner_restarts(
             )
         )
         if len(received) < 3:
-            return ModelResponse(parts=[ToolCallPart("todo", {"action": "list"})])
+            return ModelResponse(
+                parts=[ToolCallPart("organization", {"action": "list_members"})]
+            )
         if fail:
             raise RuntimeError("local failure after environment change")
         return ModelResponse(parts=[TextPart("Done")])
 
     class Tools:
-        def list_todos(self):
+        def list_members(self):
             nonlocal environment
             environment = "environment B"
             return []
@@ -689,13 +697,15 @@ def test_observability_changes_during_a_turn_apply_to_the_next_turn(settings) ->
         nonlocal calls
         calls += 1
         if calls == 1:
-            return ModelResponse(parts=[ToolCallPart("todo", {"action": "list"})])
+            return ModelResponse(
+                parts=[ToolCallPart("organization", {"action": "list_members"})]
+            )
         assert len(exporters) == 1
         assert not exporters[0].stopped
         return ModelResponse(parts=[TextPart("Done")])
 
     class Tools:
-        def list_todos(self):
+        def list_members(self):
             settings.set_settings("observability", {"enabled": False})
             return []
 
@@ -798,7 +808,7 @@ def test_last_input_tokens_excludes_old_history_and_is_not_a_turn_total(
         calls += 1
         if calls == 1:
             return ModelResponse(
-                parts=[ToolCallPart("todo", {"action": "list"})],
+                parts=[ToolCallPart("organization", {"action": "list_members"})],
                 usage=RequestUsage(input_tokens=250, output_tokens=2),
             )
         if fail:
@@ -811,7 +821,7 @@ def test_last_input_tokens_excludes_old_history_and_is_not_a_turn_total(
         )
 
     class Tools:
-        def list_todos(self):
+        def list_members(self):
             return []
 
     history = ModelMessagesTypeAdapter.dump_json(
@@ -1041,14 +1051,16 @@ def test_every_call_extends_what_the_previous_call_sent(settings, start) -> None
             return ModelResponse(
                 parts=[
                     ToolCallPart(
-                        "todo", {"action": "list"}, tool_call_id=f"c{len(sent)}"
+                        "organization",
+                        {"action": "list_members"},
+                        tool_call_id=f"c{len(sent)}",
                     )
                 ]
             )
         return ModelResponse(parts=[TextPart(f"done {len(sent)}")])
 
     class Tools:
-        def list_todos(self):
+        def list_members(self):
             return [{"id": len(sent), "title": "Work"}]
 
     original = request()
@@ -1153,7 +1165,7 @@ def test_search_failures_continue_past_retry_budget(
     monkeypatch.setattr(module, "duckduckgo_search_tool", lambda **kw: Tool(function))
 
     class Tools:
-        def list_todos(self):
+        def list_members(self):
             return ["alternate tool worked"]
 
     def respond(messages, info):
@@ -1180,7 +1192,11 @@ def test_search_failures_continue_past_retry_budget(
         if len(received) == 5:
             return ModelResponse(
                 parts=[
-                    ToolCallPart("todo", {"action": "list"}, tool_call_id="alternate")
+                    ToolCallPart(
+                        "organization",
+                        {"action": "list_members"},
+                        tool_call_id="alternate",
+                    )
                 ]
             )
         assert messages[-1].parts[0].content == ["alternate tool worked"]
@@ -1211,7 +1227,7 @@ def test_execution_domain_failures_do_not_replay_writes(settings, code):
             writes.append(body)
             raise DomainError(code, "private execution diagnostic")
 
-        def list_todos(self):
+        def list_members(self):
             return []
 
     def respond(messages, info):
@@ -1390,7 +1406,7 @@ def test_non_tool_faults_are_not_tool_failures(settings, monkeypatch, stage):
         pass
 
     class Tools:
-        def list_todos(self):
+        def list_members(self):
             executions.append(1)
             return Unserializable()
 
@@ -1407,7 +1423,11 @@ def test_non_tool_faults_are_not_tool_failures(settings, monkeypatch, stage):
             ModelMessagesTypeAdapter.dump_json(messages)
             return ModelResponse(parts=[TextPart("Done")])
         return ModelResponse(
-            parts=[ToolCallPart("todo", {"action": "list"}, tool_call_id="call")]
+            parts=[
+                ToolCallPart(
+                    "organization", {"action": "list_members"}, tool_call_id="call"
+                )
+            ]
         )
 
     runner = PydanticModelRunner(settings, build_model=lambda _: FunctionModel(respond))
@@ -1430,7 +1450,6 @@ def test_non_tool_faults_are_not_tool_failures(settings, monkeypatch, stage):
         ("discussion", {"action": "list"}, "list_discussions"),
         ("run", {"argv": ["true"]}, "run"),
         ("edit", {"path": "/fake", "old_text": "old", "new_text": "new"}, "edit"),
-        ("todo", {"action": "list"}, "list_todos"),
         ("history", {"action": "read", "sequence": 1}, "read_history"),
     ],
 )
@@ -1499,7 +1518,7 @@ def test_tool_context_does_not_leak_between_concurrent_turns(settings, caplog):
     seen = []
 
     class Tools:
-        def list_todos(self):
+        def list_members(self):
             agent_id, sequence, call = module._tool_call.get()
             barrier.wait(timeout=5)
             assert module._tool_call.get() == (agent_id, sequence, call)
@@ -1515,7 +1534,13 @@ def test_tool_context_does_not_leak_between_concurrent_turns(settings, caplog):
         ):
             return ModelResponse(parts=[TextPart("Done")])
         return ModelResponse(
-            parts=[ToolCallPart("todo", {"action": "list"}, tool_call_id="same-id")]
+            parts=[
+                ToolCallPart(
+                    "organization",
+                    {"action": "list_members"},
+                    tool_call_id="same-id",
+                )
+            ]
         )
 
     runner = PydanticModelRunner(settings, build_model=lambda _: FunctionModel(respond))
@@ -1537,11 +1562,13 @@ def test_runner_does_not_convert_tool_cancellation_to_failure(settings):
     from huddol.adapters.model import runner as module
 
     class Tools:
-        def list_todos(self):
+        def list_members(self):
             raise asyncio.CancelledError()
 
     def respond(messages, info):
-        return ModelResponse(parts=[ToolCallPart("todo", {"action": "list"})])
+        return ModelResponse(
+            parts=[ToolCallPart("organization", {"action": "list_members"})]
+        )
 
     runner = PydanticModelRunner(settings, build_model=lambda _: FunctionModel(respond))
     with pytest.raises(asyncio.CancelledError):

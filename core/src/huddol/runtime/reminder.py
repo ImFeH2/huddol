@@ -118,8 +118,8 @@ def exchange_nudge(
 PREPARATION_PROMPT = (
     "Your context window is almost full and will be reset when this Turn ends."
     " Nothing in this window carries over by itself. Write what you will still need"
-    " into MEMORY.md or a memory file, and put the current state of your in-progress"
-    " work into that todo's detail. Do not start new work. Then end the Turn."
+    " into MEMORY.md or a file in your working directory, including the current state"
+    " of your in-progress work. Do not start new work. Then end the Turn."
 )
 
 
@@ -141,13 +141,12 @@ def reset_notice(state: WindowState) -> str | None:
 
 
 def render_resident(
-    memory_index: str, todos: str, environment: str | None, reset: str | None
+    memory_index: str, environment: str | None, reset: str | None
 ) -> str:
     parts = [
         f"Your MEMORY.md:\n{memory_index}"
         if memory_index
         else "Your MEMORY.md is empty.",
-        todos,
     ]
     if environment is not None:
         parts.append(environment)

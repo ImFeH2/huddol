@@ -6,8 +6,6 @@ import uuid
 from collections.abc import Sequence
 
 from huddol.adapters.sqlite.store import LockedConnection, first
-from huddol.core.errors import DomainError
-from huddol.core.todo import Todo, TodoStatus
 from huddol.ports.agent import AgentRun, TurnEffect, WindowState
 
 SCHEMA = """
@@ -22,15 +20,6 @@ CREATE TABLE IF NOT EXISTS agent_windows (
     since_sequence INTEGER NOT NULL,
     reset_at TEXT,
     reason TEXT
-);
-CREATE TABLE IF NOT EXISTS agent_todos (
-    agent_id INTEGER NOT NULL,
-    id INTEGER NOT NULL,
-    title TEXT NOT NULL,
-    detail TEXT NOT NULL DEFAULT '',
-    status TEXT NOT NULL DEFAULT 'pending',
-    created_at TEXT NOT NULL,
-    PRIMARY KEY (agent_id, id)
 );
 CREATE TABLE IF NOT EXISTS settings (
     section TEXT PRIMARY KEY,
@@ -65,75 +54,6 @@ class SqliteAgentStore:
         from huddol.adapters.sqlite.store import now
 
         return now()
-
-    def list_todos(self, agent_id: int) -> tuple[Todo, ...]:
-        rows = self._db.execute(
-            "SELECT id, title, status, detail FROM agent_todos WHERE agent_id = ?"
-            " ORDER BY id",
-            (agent_id,),
-        )
-        return tuple(
-            Todo(
-                int(row["id"]),
-                str(row["title"]),
-                str(row["status"]),  # type: ignore[arg-type]
-                str(row["detail"]),
-            )
-            for row in rows
-        )
-
-    def add_todo(self, agent_id: int, title: str, detail: str = "") -> Todo:
-        row = first(
-            self._db.execute(
-                "SELECT COALESCE(MAX(id), 0) + 1 AS v FROM agent_todos WHERE agent_id = ?",
-                (agent_id,),
-            )
-        )
-        assert row is not None
-        todo_id = int(row["v"])
-        with self._db:
-            self._db.execute(
-                "INSERT INTO agent_todos (agent_id, id, title, detail, status,"
-                " created_at) VALUES (?, ?, ?, ?, 'pending', ?)",
-                (agent_id, todo_id, title, detail, self._now()),
-            )
-        return Todo(todo_id, title, "pending", detail)
-
-    def set_todo_status(self, agent_id: int, todo_id: int, status: TodoStatus) -> Todo:
-        with self._db:
-            cursor = self._db.execute_cursor(
-                "UPDATE agent_todos SET status = ? WHERE agent_id = ? AND id = ?",
-                (status, agent_id, todo_id),
-            )
-        if cursor.rowcount == 0:
-            raise DomainError("not_found", f"Todo {todo_id} does not exist")
-        row = first(
-            self._db.execute(
-                "SELECT id, title, status, detail FROM agent_todos WHERE agent_id = ?"
-                " AND id = ?",
-                (agent_id, todo_id),
-            )
-        )
-        assert row is not None
-        return Todo(
-            int(row["id"]),
-            str(row["title"]),
-            str(row["status"]),  # type: ignore[arg-type]
-            str(row["detail"]),
-        )
-
-    def remove_todo(self, agent_id: int, todo_id: int) -> None:
-        with self._db:
-            cursor = self._db.execute_cursor(
-                "DELETE FROM agent_todos WHERE agent_id = ? AND id = ?",
-                (agent_id, todo_id),
-            )
-        if cursor.rowcount == 0:
-            raise DomainError("not_found", f"Todo {todo_id} does not exist")
-
-    def clear_todos(self, agent_id: int) -> None:
-        with self._db:
-            self._db.execute("DELETE FROM agent_todos WHERE agent_id = ?", (agent_id,))
 
     def _run(self, row: sqlite3.Row) -> AgentRun:
         return AgentRun(

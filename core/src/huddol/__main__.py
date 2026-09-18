@@ -265,7 +265,6 @@ def main(argv: list[str] | None = None) -> int:
     )
     deps = Dependencies(
         store=store,
-        todos=agent_store,
         history=agent_store,
         settings=agent_store,
         execution=execution,

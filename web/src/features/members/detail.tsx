@@ -15,14 +15,7 @@ import {
 import { type ReactNode, useCallback, useEffect, useState } from "react";
 import { useOrganization } from "@/app/organization";
 import { useNavigate } from "@/app/router";
-import {
-  type Column,
-  Page,
-  PageBody,
-  PageHeader,
-  Section,
-  Table,
-} from "@/components/layout/shell";
+import { Page, PageBody, PageHeader, Section } from "@/components/layout/shell";
 import { ConfirmDialog, Modal } from "@/components/ui/dialog";
 import {
   Avatar,
@@ -46,14 +39,8 @@ import {
   type LibraryDocument,
   type LibraryEntry,
   type Member,
-  type Todo,
 } from "@/lib/backend";
 import { formatBytes, formatTime, plural, relativeTime } from "@/lib/format";
-
-const TODO_COLUMNS: Column[] = [
-  { key: "todo", label: "Todo" },
-  { key: "status", label: "Status", width: "160px" },
-];
 
 const TOOL_ICONS: Record<string, ReactNode> = {
   send: <Send size={13} />,
@@ -122,9 +109,6 @@ function AgentPage({
     });
   }, [load]);
 
-  const openTodos = detail
-    ? detail.todos.filter((todo) => todo.status !== "done").length
-    : 0;
   const tokenLimit = detail?.token_limit ?? 0;
 
   return (
@@ -210,32 +194,7 @@ function AgentPage({
                 label="State"
                 value={<AgentState member={member} tokenLimit={tokenLimit} />}
               />
-              <Stat
-                label="Open Todos"
-                value={openTodos.toLocaleString("en-US")}
-                detail={
-                  <span className="text-fg-muted">
-                    {plural(
-                      detail.memory.filter((entry) => entry.kind === "file")
-                        .length,
-                      "Memory file",
-                    )}
-                  </span>
-                }
-              />
             </div>
-
-            <Section title="Todos">
-              {detail.todos.length === 0 ? (
-                <p className="text-fg-muted">No Todos</p>
-              ) : (
-                <Table columns={TODO_COLUMNS} label="Todos">
-                  {detail.todos.map((todo) => (
-                    <TodoRow key={todo.id} todo={todo} />
-                  ))}
-                </Table>
-              )}
-            </Section>
 
             <MemorySection agentId={member.id} entries={detail.memory} />
 
@@ -420,36 +379,6 @@ function Stat({
         <span className="flex flex-col gap-1 text-xs">{detail}</span>
       ) : null}
     </div>
-  );
-}
-
-function TodoRow({ todo }: { todo: Todo }) {
-  return (
-    <tr>
-      <td>
-        <span className={todo.status === "done" ? "text-fg-muted" : undefined}>
-          {todo.title}
-        </span>
-        {todo.detail ? <p className="text-fg-muted">{todo.detail}</p> : null}
-      </td>
-      <td>
-        <Chip
-          tone={
-            todo.status === "in_progress"
-              ? "blue"
-              : todo.status === "done"
-                ? "success"
-                : "neutral"
-          }
-        >
-          {todo.status === "in_progress"
-            ? "In progress"
-            : todo.status === "done"
-              ? "Done"
-              : "Pending"}
-        </Chip>
-      </td>
-    </tr>
   );
 }
 

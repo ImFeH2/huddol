@@ -73,7 +73,7 @@ def test_build_model_returns_a_google_model_for_google() -> None:
         "discussion action=ack",
         "handled, not that the entire task is finished",
         "clarification question or handing off the next step, ack the Message",
-        "Track ongoing work in todo",
+        "Track ongoing work in your own Memory",
         "ack the Message instead of mentioning them back",
         "Only Members of the Discussion can be notified",
         "do not assume that Member has been asked or will act",
@@ -83,16 +83,6 @@ def test_build_model_returns_a_google_model_for_google() -> None:
 )
 def test_system_prompt_states_what_structure_cannot_enforce(phrase: str) -> None:
     assert phrase in SYSTEM_PROMPT
-
-
-@pytest.mark.parametrize(
-    "phrase",
-    ["Todo state never replaces", "does not schedule another Turn"],
-)
-def test_system_prompt_omits_rules_the_architecture_already_enforces(
-    phrase: str,
-) -> None:
-    assert phrase not in SYSTEM_PROMPT
 
 
 def test_tool_errors_are_reported_as_retryable_guidance() -> None:
@@ -131,7 +121,6 @@ def test_every_tool_named_in_the_prompt_is_actually_registered() -> None:
         "organization",
         "run",
         "edit",
-        "todo",
         "memory",
         "library",
         "history",
@@ -151,7 +140,6 @@ def test_the_full_tool_surface_matches_the_specification() -> None:
         "organization",
         "run",
         "edit",
-        "todo",
         "history",
         "web_search",
     }

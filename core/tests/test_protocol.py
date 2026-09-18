@@ -61,7 +61,6 @@ def server(tmp_path: Path):
 
     deps = Dependencies(
         store=store,
-        todos=agent_store,
         history=agent_store,
         settings=agent_store,
         agent_directory_for=agent_directory_for,
@@ -512,17 +511,16 @@ def test_execution_settings_update_the_live_sandbox(server, tmp_path: Path) -> N
     }
 
 
-def test_agent_detail_reports_todos_and_runs(server) -> None:
+def test_agent_detail_reports_runs(server) -> None:
     dispatcher, output, deps = server
     agent = call(dispatcher, output, "organization.create_agent", name="Main")["result"]
-    deps.todos.add_todo(agent["id"], "some work", "detail")
     run = deps.history.start_run(agent["id"])
     deps.history.finish_run(
         agent["id"], run.sequence, status="completed", messages_json="[]"
     )
 
     detail = call(dispatcher, output, "agent.detail", agent_id=agent["id"])["result"]
-    assert detail["todos"][0]["title"] == "some work"
+    assert "todos" not in detail
     assert detail["runs"][0]["status"] == "completed"
     assert detail["window"] == {
         "number": 1,

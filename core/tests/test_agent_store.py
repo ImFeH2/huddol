@@ -7,10 +7,8 @@ import pytest
 
 from huddol.adapters.sqlite.agent import SqliteAgentStore
 from huddol.adapters.sqlite.store import SqliteStore
-from huddol.core.errors import DomainError
 from huddol.ports.agent import WindowState
 from huddol.services.history import History
-from huddol.services.todo import Todos
 
 AGENT = 13
 
@@ -20,59 +18,6 @@ def agent_store(tmp_path: Path) -> SqliteAgentStore:
     base = SqliteStore(tmp_path / "huddol.sqlite3")
     yield SqliteAgentStore(base._db)
     base.close()
-
-
-@pytest.fixture
-def todos(agent_store: SqliteAgentStore) -> Todos:
-    return Todos(agent_store, AGENT)
-
-
-def test_at_most_one_todo_may_be_in_progress(todos: Todos) -> None:
-    first = todos.add("write the store")
-    second = todos.add("write the runtime")
-    todos.start(first.id)
-
-    with pytest.raises(DomainError) as error:
-        todos.start(second.id)
-    assert error.value.code == "todo_already_in_progress"
-
-    todos.complete(first.id)
-    assert todos.start(second.id).status == "in_progress"
-
-
-def test_starting_the_same_todo_twice_is_allowed(todos: Todos) -> None:
-    item = todos.add("keep going")
-    todos.start(item.id)
-    assert todos.start(item.id).status == "in_progress"
-
-
-def test_titles_are_normalized_and_validated(todos: Todos) -> None:
-    assert todos.add("  spaced   out  ").title == "spaced out"
-    with pytest.raises(DomainError):
-        todos.add("   ")
-
-
-def test_snapshot_lists_open_items_with_details(todos: Todos) -> None:
-    first = todos.add("alpha", "first line\nsecond line")
-    todos.add("beta")
-    done = todos.add("finished", "hidden")
-    todos.complete(done.id)
-    todos.start(first.id)
-    assert todos.snapshot() == (
-        "Todos:\n- [>] 1. alpha\n  first line\n  second line\n- [ ] 2. beta"
-    )
-
-
-def test_snapshot_has_no_items_when_empty_or_everything_is_done(todos: Todos) -> None:
-    assert todos.snapshot() == "Todos: none"
-    item = todos.add("only")
-    todos.complete(item.id)
-    assert todos.snapshot() == "Todos: none"
-
-
-def test_todos_are_private_to_each_agent(agent_store: SqliteAgentStore) -> None:
-    Todos(agent_store, 13).add("mine")
-    assert Todos(agent_store, 36).list() == ()
 
 
 def test_runs_append_and_report_the_latest_history(

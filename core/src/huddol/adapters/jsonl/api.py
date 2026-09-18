@@ -244,7 +244,6 @@ class Api:
 
         def agent_detail(params: dict[str, Any]) -> Any:
             agent_id = int(params["agent_id"])
-            tools = self._scheduler.tools_for_actor(Actor(agent_id, True))
             runs = self._scheduler.history.runs(agent_id, limit=30)
             effects = self._scheduler.history.effects(
                 agent_id, sequences=[run.sequence for run in runs]
@@ -270,7 +269,6 @@ class Api:
             return {
                 "id": agent_id,
                 "window": asdict(self._scheduler.history.window(agent_id)),
-                "todos": tools.list_todos(),
                 "memory": self._human().list_memory(agent_id=agent_id),
                 "usage": self._scheduler.history.usage_total(agent_id),
                 "token_limit": self._scheduler.token_limit(),

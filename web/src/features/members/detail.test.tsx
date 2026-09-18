@@ -26,7 +26,6 @@ afterEach(() => {
 
 const detail: AgentDetail = {
   id: 2,
-  todos: [],
   memory: [],
   runs: [],
   usage: {

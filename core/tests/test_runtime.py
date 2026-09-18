@@ -55,7 +55,6 @@ def world(tmp_path: Path):
 
     deps = Dependencies(
         store=store,
-        todos=agent_store,
         history=agent_store,
         settings=agent_store,
         agent_directory_for=agent_directory_for,
@@ -88,7 +87,7 @@ def test_unavailable_execution_does_not_disable_business_tools(
     world.execution = ExecutionManager(settings={"environment": {"kind": "invalid"}})
 
     def respond(request, tools):
-        assert request.resident == "Your MEMORY.md is empty.\n\nTodos: none"
+        assert request.resident == "Your MEMORY.md is empty."
         assert request.environment() is None
         assert tools.list_members()
         tools.send_message(room, "Business tools still work")
@@ -713,13 +712,10 @@ def test_resident_is_persisted_and_stays_unchanged_until_a_reset(
     scheduler = Scheduler(world, runner)
     tools = scheduler.tools_for(MAIN)
     world.memory_tree_for(MAIN).write("MEMORY.md", "MEMORY_STATE_OLD")
-    old_todo = tools.add_todo("TASK_STATE_OLD")
 
     for turn, state in enumerate(("OLD", "NEW"), start=1):
         if state == "NEW":
             tools.edit("memory/MEMORY.md", "MEMORY_STATE_OLD", "MEMORY_STATE_NEW")
-            tools.complete_todo(old_todo["id"])
-            tools.add_todo("TASK_STATE_NEW")
             world.store.append_message(room, HUMAN, "@Main continue")
         reminder = build_reminder(world.store, world.history, MAIN, "Main")
         assert reminder is not None
@@ -732,12 +728,9 @@ def test_resident_is_persisted_and_stays_unchanged_until_a_reset(
         assert len(received) == start + 2
         for request in received[start:]:
             assert "MEMORY_STATE_OLD" in request
-            assert "TASK_STATE_OLD" in request
             assert "MEMORY_STATE_NEW" not in request
-            assert "TASK_STATE_NEW" not in request
         saved = world.history.latest_messages(MAIN)
         assert "MEMORY_STATE_OLD" in saved
-        assert "TASK_STATE_OLD" in saved
         messages = ModelMessagesTypeAdapter.validate_json(saved)
         prompts = [
             part.content
@@ -773,8 +766,8 @@ def test_resident_is_persisted_and_stays_unchanged_until_a_reset(
     record = scheduler.run_turn(MAIN)
     assert record is not None and record.status == ("failed" if fail else "completed")
     saved = world.history.latest_messages(MAIN)
-    assert "MEMORY_STATE_NEW" in saved and "TASK_STATE_NEW" in saved
-    assert "MEMORY_STATE_OLD" not in saved and "TASK_STATE_OLD" not in saved
+    assert "MEMORY_STATE_NEW" in saved
+    assert "MEMORY_STATE_OLD" not in saved
     assert saved.count('"block":"resident"') == 1
 
 
@@ -851,20 +844,16 @@ def test_history_is_preserved_or_reset_without_rewriting_old_prompts(
     assert world.history.runs(MAIN)[1].messages_json == original
 
 
-def test_resident_carries_memory_todo_details_and_environment(
-    world, tmp_path: Path
-) -> None:
+def test_resident_carries_memory_and_environment(world, tmp_path: Path) -> None:
     mention(world)
     DirectoryTree(world.memory_tree_for(MAIN).root).write(
         "MEMORY.md", "- prior knowledge"
     )
-    world.todos.add_todo(MAIN, "unfinished work", "detail")
     runner = RecordingRunner()
     Scheduler(world, runner).run_turn(MAIN)
     context = runner.requests[0].resident
     assert context == (
         "Your MEMORY.md:\n- prior knowledge\n\n"
-        "Todos:\n- [ ] 1. unfinished work\n  detail\n\n"
         f"Execution environment: native ({sys.platform})\n"
         "Writable directories:\n"
         f"- {world.memory_tree_for(MAIN).root} (your Memory, private, Markdown)\n"
@@ -923,9 +912,7 @@ def test_resident_renders_when_memory_index_creation_fails(
     runner = RecordingRunner()
     record = Scheduler(world, runner).run_turn(MAIN)
     assert record.status == "completed"
-    assert runner.requests[0].resident.startswith(
-        "Your MEMORY.md is empty.\n\nTodos: none"
-    )
+    assert runner.requests[0].resident.startswith("Your MEMORY.md is empty.")
     assert "(your Memory, private, Markdown)" in runner.requests[0].resident
     assert not (tree.root / "MEMORY.md").exists()
 
@@ -939,12 +926,11 @@ def test_render_resident_orders_only_the_requested_blocks(
     expected = (
         "Your MEMORY.md:\nremember this" if memory else "Your MEMORY.md is empty."
     )
-    expected += "\n\nTodos: none"
     if environment is not None:
         expected += "\n\nenvironment facts"
     if reset is not None:
         expected += "\n\n" + reset
-    assert render_resident(memory, "Todos: none", environment, reset) == expected
+    assert render_resident(memory, environment, reset) == expected
 
 
 def test_memory_index_truncation_follows_the_current_parameter(world) -> None:

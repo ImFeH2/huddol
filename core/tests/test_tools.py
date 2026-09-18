@@ -34,7 +34,6 @@ def world(tmp_path: Path):
 
     deps = Dependencies(
         store=store,
-        todos=agent_store,
         history=agent_store,
         settings=agent_store,
         execution=ExecutionManager(enforce=False),
@@ -551,12 +550,10 @@ def test_deleting_an_agent_preserves_all_its_data(world) -> None:
     human.send_message(rooms[0], "@Main review")
     agent.read_discussion(rooms[0])
     agent.ack(rooms[0], [2])
-    agent.add_todo("Keep work", "Keep details")
     world.memory_tree_for(MAIN).write("notes.md", "Keep notes")
     world.history.start_run(MAIN)
     window = world.history.reset_window(MAIN, "prepared")
     runs = world.history.runs(MAIN)
-    todos = world.todos.list_todos(MAIN)
     files = {
         path.relative_to(world.memory_tree_for(MAIN).root): path.read_bytes()
         for path in world.memory_tree_for(MAIN).root.rglob("*")
@@ -566,7 +563,6 @@ def test_deleting_an_agent_preserves_all_its_data(world) -> None:
 
     assert human.delete_agent(MAIN) == {"id": MAIN, "deleted": True}
 
-    assert world.todos.list_todos(MAIN) == todos
     assert world.history.runs(MAIN) == runs
     assert world.history.window(MAIN) == window
     assert {
@@ -661,16 +657,6 @@ def test_authorization_hook_can_deny_a_capability(world) -> None:
     with pytest.raises(DomainError) as error:
         tools.send_message(room["id"], "blocked")
     assert error.value.code == "not_permitted"
-
-
-def test_todo_hard_constraint_surfaces_through_the_tool(world) -> None:
-    tools = tools_for(world, MAIN)
-    first = tools.add_todo("one", "detail one")
-    second = tools.add_todo("two")
-    tools.start_todo(first["id"])
-    with pytest.raises(DomainError) as error:
-        tools.start_todo(second["id"])
-    assert error.value.code == "todo_already_in_progress"
 
 
 def test_read_reports_what_is_waiting_for_you(world) -> None:

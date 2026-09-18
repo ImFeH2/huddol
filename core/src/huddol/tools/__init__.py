@@ -10,21 +10,19 @@ from huddol.core.context import advance_watermark, context_window
 from huddol.core.discussion import Discussion, Message, validate_body, validate_topic
 from huddol.core.errors import DomainError
 from huddol.core.member import validate_name
-from huddol.ports.agent import HistoryStore, SettingsStore, TodoStore
+from huddol.ports.agent import HistoryStore, SettingsStore
 from huddol.ports.execution import ExecutionControl, ExecutionEnvironment
 from huddol.ports.files import ConflictError, FileTree
 from huddol.ports.store import OrganizationStore
 from huddol.services.history import History
 from huddol.services.library import Library
 from huddol.services.memory import Memory
-from huddol.services.todo import Todos
 from huddol.tools.authorize import Actor, Authorizer
 
 
 @dataclass
 class Dependencies:
     store: OrganizationStore
-    todos: TodoStore
     history: HistoryStore
     settings: SettingsStore
     execution: ExecutionControl
@@ -620,41 +618,6 @@ class AgentTools:
             "diff": result.diff,
             "replacements": result.replacements,
         }
-
-    def _todos(self) -> Todos:
-        return Todos(self._deps.todos, self._actor.member_id)
-
-    def list_todos(self) -> list[dict[str, Any]]:
-        self._check("todo.list")
-        return [
-            {
-                "id": item.id,
-                "title": item.title,
-                "status": item.status,
-                "detail": item.detail,
-            }
-            for item in self._todos().list()
-        ]
-
-    def add_todo(self, title: str, detail: str | None = None) -> dict[str, Any]:
-        self._check("todo.add")
-        item = self._todos().add(title, detail)
-        return {"id": item.id, "title": item.title, "status": item.status}
-
-    def start_todo(self, todo_id: int) -> dict[str, Any]:
-        self._check("todo.start", todo_id)
-        item = self._todos().start(todo_id)
-        return {"id": item.id, "status": item.status}
-
-    def complete_todo(self, todo_id: int) -> dict[str, Any]:
-        self._check("todo.complete", todo_id)
-        item = self._todos().complete(todo_id)
-        return {"id": item.id, "status": item.status}
-
-    def remove_todo(self, todo_id: int) -> dict[str, Any]:
-        self._check("todo.remove", todo_id)
-        self._todos().remove(todo_id)
-        return {"id": todo_id, "removed": True}
 
     def _memory(self, agent_id: int | None = None) -> Memory:
         if agent_id is None:

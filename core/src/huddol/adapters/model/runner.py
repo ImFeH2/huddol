@@ -530,35 +530,6 @@ class PydanticModelRunner:
             return _guard(lambda: ctx.deps.edit(path, old_text, new_text, replace_all))
 
         @tool(sequential=True)
-        def todo(
-            ctx: RunContext[AgentTools],
-            action: str,
-            todo_id: int | None = None,
-            title: str | None = None,
-            detail: str | None = None,
-        ) -> Any:
-            tools = ctx.deps
-            if action == "list":
-                return _guard(tools.list_todos)
-            if action == "add":
-                return _guard(
-                    lambda: tools.add_todo(_required(title, "title", action), detail)
-                )
-            if action == "start":
-                return _guard(
-                    lambda: tools.start_todo(_required(todo_id, "todo_id", action))
-                )
-            if action == "complete":
-                return _guard(
-                    lambda: tools.complete_todo(_required(todo_id, "todo_id", action))
-                )
-            if action == "remove":
-                return _guard(
-                    lambda: tools.remove_todo(_required(todo_id, "todo_id", action))
-                )
-            raise ModelRetry(f"todo has no action {action}")
-
-        @tool(sequential=True)
         def history(
             ctx: RunContext[AgentTools],
             action: str,
@@ -581,7 +552,6 @@ class PydanticModelRunner:
             discussion,
             run,
             edit,
-            todo,
             history,
         ):
             _result(tool)

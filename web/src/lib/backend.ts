@@ -68,13 +68,6 @@ export type PageRequest = {
   metadata?: boolean;
 };
 
-export type Todo = {
-  id: number;
-  title: string;
-  status: "pending" | "in_progress" | "done";
-  detail: string;
-};
-
 export type TurnEffect = { ordinal: number; tool: string; summary: string };
 
 export type AgentRun = {
@@ -97,7 +90,6 @@ export type Usage = {
 
 export type AgentDetail = {
   id: number;
-  todos: Todo[];
   memory: LibraryEntry[];
   runs: AgentRun[];
   usage: Usage;

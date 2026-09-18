@@ -4,8 +4,6 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Protocol
 
-from huddol.core.todo import Todo, TodoStatus
-
 
 @dataclass(frozen=True)
 class AgentRun:
@@ -35,20 +33,6 @@ class TurnEffect:
     tool: str
     summary: str
     created_at: str
-
-
-class TodoStore(Protocol):
-    def list_todos(self, agent_id: int) -> tuple[Todo, ...]: ...
-
-    def add_todo(self, agent_id: int, title: str, detail: str = "") -> Todo: ...
-
-    def set_todo_status(
-        self, agent_id: int, todo_id: int, status: TodoStatus
-    ) -> Todo: ...
-
-    def remove_todo(self, agent_id: int, todo_id: int) -> None: ...
-
-    def clear_todos(self, agent_id: int) -> None: ...
 
 
 class HistoryStore(Protocol):

@@ -8,7 +8,7 @@ from dataclasses import dataclass, replace
 
 from huddol.core.errors import DomainError
 from huddol.core.parameters import AgentParameters, agent_parameters
-from huddol.ports.agent import HistoryStore, SettingsStore, TodoStore
+from huddol.ports.agent import HistoryStore, SettingsStore
 from huddol.ports.execution import ExecutionControl
 from huddol.ports.store import OrganizationStore
 from huddol.runtime.reminder import (
@@ -22,7 +22,6 @@ from huddol.runtime.reminder import (
     reset_notice,
 )
 from huddol.services.memory import Memory
-from huddol.services.todo import Todos
 from huddol.tools import AgentTools, Dependencies, TurnBinding
 from huddol.tools.authorize import Actor, Authorizer
 
@@ -59,10 +58,6 @@ class Scheduler:
     @property
     def store(self) -> OrganizationStore:
         return self._deps.store
-
-    @property
-    def todos(self) -> TodoStore:
-        return self._deps.todos
 
     @property
     def history(self) -> HistoryStore:
@@ -186,7 +181,6 @@ class Scheduler:
             Memory(self._deps.memory_tree_for(agent_id)).index(
                 self.parameters().memory_index_bytes
             ),
-            Todos(self._deps.todos, agent_id).snapshot(),
             self.environment_facts(agent_id),
             reset_notice(self.history.window(agent_id)),
         )
