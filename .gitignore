@@ -18,6 +18,7 @@ __pycache__/
 .venv/
 
 /app/core/
+/web/huddol_web/static/
 /app/gen/schemas
 /app/icons/android/
 /app/icons/ios/

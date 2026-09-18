@@ -8,6 +8,8 @@ pre-release-replacements = [
   { file = "../app/package.json", search = '"version": "[^"]+"', replace = '"version": "{{version}}"', exactly = 1 },
   { file = "../web/package.json", search = '"version": "[^"]+"', replace = '"version": "{{version}}"', exactly = 1 },
   { file = "../core/pyproject.toml", search = '(?m)^version = "[^"]+"', replace = 'version = "{{version}}"', exactly = 1 },
+  { file = "../web/pyproject.toml", search = '(?m)^version = "[^"]+"', replace = 'version = "{{version}}"', exactly = 1 },
+  { file = "../web/pyproject.toml", search = 'huddol==[^"]+', replace = "huddol=={{version}}", exactly = 1 },
 ]
 
 tag-name = "v{{version}}"

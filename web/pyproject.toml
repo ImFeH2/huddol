@@ -1,0 +1,17 @@
+[project]
+name = "huddol-web"
+version = "0.0.2"
+description = "Browser interface for Huddol."
+requires-python = ">=3.13"
+authors = [{ name = "ImFeH2", email = "i@feh2.im" }]
+dependencies = ["huddol==0.0.2"]
+
+[project.scripts]
+huddol-web = "huddol_web.__main__:run"
+
+[build-system]
+requires = ["uv_build>=0.11.16,<0.12.0"]
+build-backend = "uv_build"
+
+[tool.uv.build-backend]
+module-root = ""
