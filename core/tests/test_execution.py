@@ -14,7 +14,13 @@ import pytest
 from huddol.adapters.execution import worker
 from huddol.adapters.execution.local import LocalExecution, entrypoint
 from huddol.adapters.execution.manager import ExecutionManager
-from huddol.adapters.execution.wsl import COMPONENT_SOURCES, WslConnection, component
+from huddol.adapters.execution.wsl import (
+    COMPONENT_ENTRY,
+    COMPONENT_SOURCES,
+    WslConnection,
+    component,
+    component_entry,
+)
 from huddol.core.errors import DomainError
 from huddol.ports.execution import EditResult, RunResult
 
@@ -32,7 +38,7 @@ def staged_component(destination: Path) -> Path:
         target = destination / source
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy(component() / source, target)
-    return destination
+    return destination / COMPONENT_ENTRY
 
 
 @pytest.mark.skipif(not sys.platform.startswith("linux"), reason="Linux execution")
@@ -178,7 +184,7 @@ def test_worker_pipe_closure_ends_the_linux_command(tmp_path: Path) -> None:
         },
     }
     process = subprocess.Popen(
-        [sys.executable, "-I", str(component())],
+        [sys.executable, "-I", str(component_entry())],
         stdin=subprocess.PIPE,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
@@ -208,7 +214,7 @@ def test_wsl_reinspection_keeps_unusable_directory_diagnostics(
 ) -> None:
     connection = WslConnection("test", [str(tmp_path), "relative/bad"], tolerant=True)
     monkeypatch.setattr(
-        connection, "_command", lambda: [sys.executable, "-I", str(component())]
+        connection, "_command", lambda: [sys.executable, "-I", str(component_entry())]
     )
     try:
         connection.inspect()
@@ -219,7 +225,9 @@ def test_wsl_reinspection_keeps_unusable_directory_diagnostics(
         assert connection.run(["/bin/true"], cwd=str(tmp_path)).exit_code == 0
         candidate = WslConnection("test", [str(tmp_path)])
         monkeypatch.setattr(
-            candidate, "_command", lambda: [sys.executable, "-I", str(component())]
+            candidate,
+            "_command",
+            lambda: [sys.executable, "-I", str(component_entry())],
         )
         candidate.inspect()
         connection.apply_configuration(candidate)

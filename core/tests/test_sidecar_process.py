@@ -1497,7 +1497,7 @@ def test_library_trees_and_human_memory_reads_survive_the_pipe(tmp_path: Path) -
 def test_execution_worker_edit_accepts_per_call_write_directories(
     tmp_path, monkeypatch, override
 ) -> None:
-    from huddol.adapters.execution.wsl import WslConnection, component
+    from huddol.adapters.execution.wsl import WslConnection, component_entry
     from huddol.core.errors import DomainError
 
     configured = tmp_path / "configured"
@@ -1508,7 +1508,7 @@ def test_execution_worker_edit_accepts_per_call_write_directories(
     target.write_text("before", encoding="utf-8")
     connection = WslConnection("test", [str(configured)])
     monkeypatch.setattr(
-        connection, "_command", lambda: [sys.executable, "-I", str(component())]
+        connection, "_command", lambda: [sys.executable, "-I", str(component_entry())]
     )
     directories = [str(library)] if override == "library" else override
     try:

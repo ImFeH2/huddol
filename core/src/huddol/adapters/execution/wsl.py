@@ -13,8 +13,9 @@ from huddol.adapters.execution.worker import result_value
 from huddol.core.errors import DomainError
 from huddol.ports.execution import EditResult, RunResult
 
+COMPONENT_ENTRY = "huddol/adapters/execution/__main__.py"
 COMPONENT_SOURCES = (
-    "__main__.py",
+    COMPONENT_ENTRY,
     "huddol/__init__.py",
     "huddol/core/__init__.py",
     "huddol/core/errors.py",
@@ -35,6 +36,10 @@ def component() -> Path:
     if getattr(sys, "frozen", False):
         return Path(vars(sys)["_MEIPASS"]) / "execution"
     return Path(__file__).resolve().parents[3]
+
+
+def component_entry() -> Path:
+    return component() / COMPONENT_ENTRY
 
 
 def wsl_output(arguments: Sequence[str]) -> bytes:
@@ -97,13 +102,11 @@ class WslConnection:
         with self._lock:
             if self._worker is not None:
                 return self._worker
-        directory = component()
-        if not (directory / "__main__.py").is_file():
+        entry = component_entry()
+        if not entry.is_file():
             raise DomainError("execution_unavailable", "Execution component is missing")
         translated = (
-            wsl_output(
-                ["-d", self.distribution, "--exec", "wslpath", "-u", str(directory)]
-            )
+            wsl_output(["-d", self.distribution, "--exec", "wslpath", "-u", str(entry)])
             .decode("utf-8")
             .strip()
         )
