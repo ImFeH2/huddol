@@ -1,13 +1,8 @@
 import { clsx } from "clsx";
 import {
-  ArrowUp,
-  ChevronDown,
-  Mic,
-  Plus,
-  SlidersHorizontal,
-} from "lucide-react";
-import {
+  type CSSProperties,
   Fragment,
+  useCallback,
   useId,
   useLayoutEffect,
   useMemo,
@@ -23,6 +18,134 @@ import {
 import type { Member } from "@/lib/backend";
 
 const MENU_LIMIT = 8;
+const composerTheme = {
+  "--composer-background": "oklch(14.5% 0 0)",
+  "--composer-foreground": "oklch(98.5% 0 0)",
+  "--composer-card": "oklch(20.5% 0 0)",
+  "--composer-primary": "oklch(92.2% 0 0)",
+  "--composer-primary-foreground": "oklch(20.5% 0 0)",
+  "--composer-accent": "oklch(26.9% 0 0)",
+  "--composer-muted-foreground": "oklch(70.8% 0 0)",
+  "--composer-border": "rgb(255 255 255 / 0.1)",
+  "--composer-ring": "oklch(55.6% 0 0)",
+} as CSSProperties;
+
+function ArrowUpIcon() {
+  return (
+    <svg
+      width="12"
+      height="12"
+      viewBox="0 0 14 14"
+      fill="none"
+      aria-hidden="true"
+    >
+      <path
+        d="M7 12V2M7 2L2.5 6.5M7 2L11.5 6.5"
+        stroke="currentColor"
+        strokeWidth="1.75"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
+function MicIcon() {
+  return (
+    <svg
+      width="13"
+      height="13"
+      viewBox="0 0 14 14"
+      fill="none"
+      aria-hidden="true"
+    >
+      <rect
+        x="5"
+        y="1"
+        width="4"
+        height="7"
+        rx="2"
+        stroke="currentColor"
+        strokeWidth="1.5"
+      />
+      <path
+        d="M2.75 6.5V7a4.25 4.25 0 0 0 8.5 0v-.5M7 11.25V13"
+        stroke="currentColor"
+        strokeWidth="1.5"
+        strokeLinecap="round"
+      />
+    </svg>
+  );
+}
+
+function PlusIcon() {
+  return (
+    <svg
+      width="14"
+      height="14"
+      viewBox="0 0 14 14"
+      fill="none"
+      aria-hidden="true"
+    >
+      <path
+        d="M7 2.5V11.5M2.5 7H11.5"
+        stroke="currentColor"
+        strokeWidth="1.5"
+        strokeLinecap="round"
+      />
+    </svg>
+  );
+}
+
+function EffortIcon() {
+  return (
+    <svg
+      width="14"
+      height="14"
+      viewBox="0 0 14 14"
+      fill="none"
+      aria-hidden="true"
+    >
+      <rect
+        x="1.5"
+        y="8"
+        width="2.5"
+        height="4.5"
+        rx="1"
+        fill="currentColor"
+        className="transition-opacity duration-300"
+        opacity={1}
+      />
+      <rect
+        x="5.75"
+        y="5"
+        width="2.5"
+        height="7.5"
+        rx="1"
+        fill="currentColor"
+        className="transition-opacity duration-300"
+        opacity={1}
+      />
+      <rect
+        x="10"
+        y="2"
+        width="2.5"
+        height="10.5"
+        rx="1"
+        fill="currentColor"
+        className="transition-opacity duration-300"
+        opacity={0.3}
+      />
+    </svg>
+  );
+}
+
+export function composerFades(top: number, height: number, viewport: number) {
+  return {
+    top: Math.min(top / 20, 1),
+    bottom: Math.min(Math.max(height - viewport - top - 16, 0) / 10, 1),
+  };
+}
 
 export function composerMultiline(
   value: string,
@@ -37,7 +160,7 @@ export function composerMultiline(
 }
 
 export function composerHeight(expanded: boolean, inputHeight: number) {
-  return expanded ? Math.max(116, inputHeight + 42) : 48;
+  return expanded ? Math.max(116, inputHeight + 48) : 48;
 }
 
 export type ComposerKey = {
@@ -96,6 +219,20 @@ export function Composer({
   const menuId = useId();
   const card = useRef<HTMLDivElement>(null);
   const probe = useRef<HTMLTextAreaElement>(null);
+  const topFade = useRef<HTMLDivElement>(null);
+  const bottomFade = useRef<HTMLDivElement>(null);
+  const updateFades = useCallback(() => {
+    const element = input.current;
+    if (!element || !topFade.current || !bottomFade.current) return;
+    const fades = composerFades(
+      element.scrollTop,
+      element.scrollHeight,
+      element.clientHeight,
+    );
+    topFade.current.style.opacity = String(fades.top);
+    bottomFade.current.style.opacity = String(fades.bottom);
+    bottomFade.current.style.top = `${element.offsetHeight - 32}px`;
+  }, []);
   const [layout, setLayout] = useState({
     expanded: false,
     height: 48,
@@ -122,10 +259,14 @@ export function Composer({
       const scrollTop = element.scrollTop;
       element.style.height = "auto";
       const height = expanded
-        ? autoGrowHeight(element.scrollHeight, line, padding, 0, 8)
+        ? Math.max(
+            68,
+            autoGrowHeight(element.scrollHeight, line, padding, 0, 8),
+          )
         : line + padding;
       element.style.height = `${height}px`;
       element.scrollTop = scrollTop;
+      updateFades();
       setLayout((previous) => {
         const nextHeight = composerHeight(expanded, height);
         const smooth =
@@ -162,7 +303,7 @@ export function Composer({
       mounted = false;
       observer.disconnect();
     };
-  }, [body]);
+  }, [body, updateFades]);
 
   useLayoutEffect(() => {
     const element = card.current;
@@ -221,7 +362,10 @@ export function Composer({
   };
 
   return (
-    <div className="pointer-events-none absolute inset-x-4 bottom-4 flex justify-center">
+    <div
+      style={composerTheme}
+      className="pointer-events-none absolute inset-x-4 bottom-4 flex justify-center"
+    >
       <div
         className="invisible pointer-events-none absolute top-0 w-full @[601px]:w-3/4 border border-transparent"
         aria-hidden="true"
@@ -239,7 +383,7 @@ export function Composer({
         ref={card}
         data-expanded={layout.expanded}
         className={clsx(
-          "pointer-events-auto relative w-full rounded-[24px] border border-[#e5e5e5] bg-[#ffffff] text-[#171717] shadow-[0_1px_3px_rgb(0_0_0/0.1)] focus-within:border-[#a3a3a3] focus-within:ring-1 focus-within:ring-black/10 transition-[width,height] motion-reduce:transition-none",
+          "pointer-events-auto relative w-full rounded-[24px] border border-(--composer-border) bg-(--composer-card) text-(--composer-foreground) shadow-sm focus-within:border-(--composer-ring)/40 focus-within:ring-1 focus-within:ring-(--composer-ring)/20 hover:border-(--composer-border)/80 transition-[width,height] motion-reduce:transition-none",
           layout.expanded ? "@[601px]:w-[90%]" : "@[601px]:w-3/4",
         )}
         style={{
@@ -311,6 +455,7 @@ export function Composer({
             value={body}
             rows={1}
             variant="composer"
+            onScroll={updateFades}
             placeholder={placeholder}
             aria-label="Message"
             role="combobox"
@@ -363,42 +508,63 @@ export function Composer({
             }}
           />
         </div>
-        {layout.expanded ? (
-          <div className="absolute bottom-2 left-3 right-12 flex min-w-0 items-center gap-1 text-[#737373]">
-            <button
-              type="button"
-              disabled
-              aria-label="Model selection · Coming soon"
-              title="Model selection · Coming soon"
-              className="flex min-w-0 items-center gap-1 rounded-full px-2 py-1 text-xs disabled:cursor-not-allowed"
-            >
-              <span className="truncate">Model</span>
-              <ChevronDown size={12} aria-hidden="true" />
-            </button>
-            <button
-              type="button"
-              disabled
-              aria-label="Thinking effort · Coming soon"
-              title="Thinking effort · Coming soon"
-              className="flex min-w-0 items-center gap-1 rounded-full px-2 py-1 text-xs disabled:cursor-not-allowed"
-            >
-              <SlidersHorizontal size={14} aria-hidden="true" />
-              <span className="truncate">Effort</span>
-            </button>
-            <button
-              type="button"
-              disabled
-              aria-label="Attach files · Coming soon"
-              title="Attach files · Coming soon"
-              className="ml-auto flex size-7 flex-none items-center justify-center rounded-full disabled:cursor-not-allowed"
-            >
-              <Plus size={14} aria-hidden="true" />
-            </button>
-          </div>
-        ) : null}
+        <div
+          ref={topFade}
+          aria-hidden="true"
+          className="pointer-events-none absolute left-4 right-12 top-0 z-[2] h-8 bg-gradient-to-b from-(--composer-card) via-(--composer-card)/90 to-transparent"
+          style={{ opacity: 0 }}
+        />
+        <div
+          ref={bottomFade}
+          aria-hidden="true"
+          className="pointer-events-none absolute left-4 right-12 z-[2] h-8 bg-gradient-to-t from-(--composer-card) via-(--composer-card)/90 to-transparent"
+          style={{ opacity: 0 }}
+        />
+        <div
+          aria-hidden={!layout.expanded}
+          className={clsx(
+            "absolute bottom-2 left-3 right-12 z-10 flex min-w-0 items-center gap-0 transition-all duration-300 ease-[cubic-bezier(0.175,0.885,0.32,1.275)] motion-reduce:transition-none",
+            layout.expanded
+              ? "opacity-100 blur-0 translate-y-0 pointer-events-auto"
+              : "opacity-0 blur-sm translate-y-2 pointer-events-none",
+          )}
+        >
+          <button
+            type="button"
+            disabled
+            aria-label="Model selection · Coming soon"
+            title="Model selection · Coming soon"
+            className="group flex min-w-0 items-center gap-1 rounded-full px-2 py-1 text-(--composer-foreground)/50 outline-none cursor-default"
+          >
+            <span className="truncate px-1 text-xs font-semibold select-none">
+              Model
+            </span>
+          </button>
+          <button
+            type="button"
+            disabled
+            aria-label="Thinking effort · Coming soon"
+            title="Thinking effort · Coming soon"
+            className="group flex min-w-0 items-center gap-1 rounded-full px-2 py-1 text-(--composer-foreground)/50 outline-none cursor-default"
+          >
+            <EffortIcon />
+            <span className="truncate px-1 text-xs font-semibold select-none">
+              Effort
+            </span>
+          </button>
+          <button
+            type="button"
+            disabled
+            aria-label="Attach files · Coming soon"
+            title="Attach files · Coming soon"
+            className="ml-auto flex size-7 flex-none items-center justify-center rounded-full text-(--composer-foreground)/50 outline-none cursor-default disabled:opacity-40"
+          >
+            <PlusIcon />
+          </button>
+        </div>
         <button
           type="button"
-          className="absolute right-2 bottom-2 flex size-8 items-center justify-center rounded-full bg-[#171717] text-white cursor-pointer hover:enabled:bg-[#404040] disabled:opacity-40 disabled:cursor-not-allowed focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#737373]"
+          className="absolute right-2 bottom-2 z-10 flex size-8 items-center justify-center rounded-full bg-(--composer-primary) text-(--composer-primary-foreground) transition-all duration-300 hover:enabled:opacity-90 outline-none focus-visible:ring-2 focus-visible:ring-(--composer-ring) cursor-default motion-reduce:transition-none"
           aria-label={
             body.trim() ? "Send · Enter" : "Voice input · Coming soon"
           }
@@ -406,11 +572,31 @@ export function Composer({
           disabled={busy || !body.trim()}
           onClick={() => void submit()}
         >
-          {body.trim() ? (
-            <ArrowUp size={15} aria-hidden="true" />
-          ) : (
-            <Mic size={15} aria-hidden="true" />
-          )}
+          <span
+            className="relative flex h-full w-full items-center justify-center"
+            aria-hidden="true"
+          >
+            <span
+              className={clsx(
+                "absolute inset-0 flex items-center justify-center transition-all duration-300 ease-[cubic-bezier(0.175,0.885,0.32,1.275)] motion-reduce:transition-none",
+                body.trim()
+                  ? "opacity-100 scale-100 rotate-0 blur-none"
+                  : "opacity-0 scale-50 rotate-45 blur-[1px] pointer-events-none",
+              )}
+            >
+              <ArrowUpIcon />
+            </span>
+            <span
+              className={clsx(
+                "absolute inset-0 flex items-center justify-center transition-all duration-300 ease-[cubic-bezier(0.175,0.885,0.32,1.275)] motion-reduce:transition-none",
+                body.trim()
+                  ? "opacity-0 scale-50 -rotate-45 blur-[1px] pointer-events-none"
+                  : "opacity-100 scale-100 rotate-0 blur-none",
+              )}
+            >
+              <MicIcon />
+            </span>
+          </span>
         </button>
       </div>
     </div>

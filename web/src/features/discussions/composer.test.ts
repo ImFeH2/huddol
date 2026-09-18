@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 import {
   Composer,
   type ComposerKey,
+  composerFades,
   composerHeight,
   composerKey,
   composerMultiline,
@@ -87,7 +88,7 @@ describe("composer layout", () => {
   it("keeps reference silhouettes and grows with the capped input", () => {
     expect(composerHeight(false, 46)).toBe(48);
     expect(composerHeight(true, 68)).toBe(116);
-    expect(composerHeight(true, 200)).toBe(242);
+    expect(composerHeight(true, 200)).toBe(248);
   });
 
   it("renders a real compact input, an inaccessible measuring probe and disabled send", () => {
@@ -112,5 +113,23 @@ describe("composer layout", () => {
     expect(html).not.toContain('type="file"');
     expect(html).toContain("@[601px]:w-3/4");
     expect(html).not.toContain("max-width");
+    expect(html).toContain("--composer-card:oklch(20.5% 0 0)");
+    expect(html).toContain("--composer-primary:oklch(92.2% 0 0)");
+    expect(html).toContain("M7 12V2M7 2L2.5 6.5M7 2L11.5 6.5");
+    expect(html).toContain("M7 2.5V11.5M2.5 7H11.5");
+    expect(html).toContain("opacity-0 scale-50 rotate-45 blur-[1px]");
+    expect(html).toContain("opacity-0 blur-sm translate-y-2");
+    expect(html).toContain('aria-label="Model selection · Coming soon"');
+    expect(html).toContain("from-(--composer-card)");
+    expect(html).not.toContain("lucide");
+  });
+});
+
+describe("composer scroll fades", () => {
+  it("fades only where more text remains", () => {
+    expect(composerFades(0, 46, 46)).toEqual({ top: 0, bottom: 0 });
+    expect(composerFades(0, 400, 200)).toEqual({ top: 0, bottom: 1 });
+    expect(composerFades(200, 400, 200)).toEqual({ top: 1, bottom: 0 });
+    expect(composerFades(10, 226, 200)).toEqual({ top: 0.5, bottom: 0 });
   });
 });

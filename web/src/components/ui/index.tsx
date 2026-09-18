@@ -230,7 +230,7 @@ export function Textarea({
       }}
       className={clsx(
         variant === "composer"
-          ? "block w-full min-h-0 resize-none border-0 bg-transparent pl-4 pr-12 py-3 text-sm leading-[22px] text-[#171717] placeholder:text-[#737373] outline-none overflow-y-auto"
+          ? "block w-full min-h-0 resize-none border-0 bg-transparent pl-4 pr-12 py-3 text-sm leading-[22px] text-(--composer-foreground) placeholder:font-medium placeholder:text-(--composer-muted-foreground)/80 cursor-text outline-none overflow-y-auto [&::-webkit-scrollbar]:w-1 [&::-webkit-scrollbar]:h-1 [&::-webkit-scrollbar]:bg-transparent [&::-webkit-scrollbar-track]:bg-transparent [&::-webkit-scrollbar-thumb]:bg-transparent [&::-webkit-scrollbar-thumb]:rounded-sm hover:[&::-webkit-scrollbar-thumb]:bg-(--composer-muted-foreground)/30"
           : clsx(
               inputClasses,
               "h-auto resize-none py-2 px-3 leading-body",
