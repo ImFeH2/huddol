@@ -397,6 +397,7 @@ def test_agent_settings_and_window_survive_the_pipe_and_restart(tmp_path: Path) 
         "exchange_nudge_after": 3,
         "max_concurrent_turns": 2,
         "idle_streak_after": 5,
+        "no_tool_turns_before_pause": 4,
         "memory_index_bytes": 256,
         "token_limit": 1000,
     }
