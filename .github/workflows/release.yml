@@ -25,9 +25,24 @@ jobs:
     name: CI
     uses: ./.github/workflows/ci.yml
 
+  release:
+    name: Draft release
+    needs: ci
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Create draft release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1 \
+            || gh release create "$GITHUB_REF_NAME" --draft --title "$GITHUB_REF_NAME"
+
   app:
     name: App (${{ matrix.name }})
-    needs: ci
+    needs: release
     strategy:
       fail-fast: false
       matrix:
@@ -106,7 +121,7 @@ jobs:
 
   cli:
     name: CLI (${{ matrix.name }})
-    needs: app
+    needs: release
     strategy:
       fail-fast: false
       matrix:
@@ -153,9 +168,56 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: gh release upload "$GITHUB_REF_NAME" release/* --clobber
 
+  python:
+    name: Python packages
+    needs: release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v6
+
+      - name: Set up Node
+        uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v10.0.1
+        with:
+          enable-cache: true
+          cache-dependency-glob: core/uv.lock
+
+      - name: Install frontend dependencies
+        run: pnpm install --frozen-lockfile
+        env:
+          LEFTHOOK: 0
+
+      - name: Build distributions
+        run: pnpm build:python
+
+      - name: Install distributions
+        run: |
+          uv venv --python 3.13 .packages
+          uv pip install --python .packages/bin/python dist/python/*.whl
+
+      - name: Check installed distributions
+        run: .packages/bin/python -I scripts/check-python.py .packages/check
+
+      - name: Upload distributions
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release upload "$GITHUB_REF_NAME" dist/python/* --clobber
+
   publish:
     name: Publish
-    needs: cli
+    needs: [app, cli, python]
     runs-on: ubuntu-latest
     permissions:
       contents: write
