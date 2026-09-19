@@ -12,5 +12,6 @@ rmSync(static_, { force: true, recursive: true });
 mkdirSync(static_, { recursive: true });
 cpSync(frontend, static_, { recursive: true });
 
+rmSync(packages, { force: true, recursive: true });
 run("uv", ["build", "--project", "core", "--out-dir", packages]);
 run("uv", ["build", "--project", "web", "--out-dir", packages]);
