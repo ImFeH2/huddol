@@ -15,10 +15,53 @@ import type { MenuAction } from "@/components/ui/menu";
 import { expandedFolders } from "@/features/library/tree";
 import { TreeView, type TreeViewProps } from "@/features/library/tree-view";
 import { reportLoadFailure } from "@/features/settings/saver";
-import { backend, type LibraryEntry } from "@/lib/backend";
+import { BackendError, backend, type LibraryEntry } from "@/lib/backend";
 import { plural } from "@/lib/format";
 
-type Creation = { kind: LibraryEntry["kind"]; initial: string };
+type Creation = { kind: LibraryEntry["kind"]; parent: string };
+
+export function creationNameError(name: string): string | undefined {
+  if (!name.trim()) return "Enter a name.";
+  if (name === "." || name === ".." || /[/\\]/.test(name))
+    return "Enter a single name, not a path (no / or \\).";
+  return undefined;
+}
+
+export function creationDestination(creation: Creation, name: string): string {
+  const error = creationNameError(name);
+  if (error) throw new Error(error);
+  return creation.parent ? `${creation.parent}/${name}` : name;
+}
+
+export async function createLibraryEntry(
+  creation: Creation,
+  name: string,
+  entries: LibraryEntry[],
+): Promise<string> {
+  const destination = creationDestination(creation, name);
+  const existing = entries.find((entry) => entry.path === destination);
+  if (existing)
+    throw new Error(
+      `A ${existing.kind === "directory" ? "folder" : "file"} with this name already exists at this location. Choose another name.`,
+    );
+  if (creation.kind === "directory") {
+    await backend.mkdirLibrary(destination);
+  } else {
+    try {
+      await backend.writeLibrary(destination, "");
+    } catch (failure) {
+      if (
+        failure instanceof BackendError &&
+        failure.code === "expected_hash_required"
+      )
+        throw new Error(
+          "A file with this name already exists at this location. Choose another name.",
+        );
+      throw failure;
+    }
+  }
+  return destination;
+}
 
 export function libraryActions(
   entry: LibraryEntry,
@@ -42,14 +85,14 @@ export function libraryActions(
             label: "New document inside",
             icon: <Plus size={15} />,
             onSelect: () =>
-              handlers.create({ kind: "file", initial: `${entry.path}/` }),
+              handlers.create({ kind: "file", parent: entry.path }),
           },
           {
             id: "folder",
             label: "New folder inside",
             icon: <FolderPlus size={15} />,
             onSelect: () =>
-              handlers.create({ kind: "directory", initial: `${entry.path}/` }),
+              handlers.create({ kind: "directory", parent: entry.path }),
           },
         ]
       : []),
@@ -87,7 +130,7 @@ function CreateActions({
       <Button
         variant="primary"
         disabled={disabled}
-        onClick={() => onCreate({ kind: "file", initial: "" })}
+        onClick={() => onCreate({ kind: "file", parent: "" })}
       >
         <Plus size={16} />
         New document
@@ -95,7 +138,7 @@ function CreateActions({
       <IconButton
         label="New folder"
         disabled={disabled}
-        onClick={() => onCreate({ kind: "directory", initial: "" })}
+        onClick={() => onCreate({ kind: "directory", parent: "" })}
       >
         <FolderPlus size={16} />
       </IconButton>
@@ -224,20 +267,27 @@ export function LibraryPage({ path }: { path?: string }) {
         open={creating !== null}
         onOpenChange={(next) => !next && setCreating(null)}
         title={creating?.kind === "directory" ? "New folder" : "New document"}
-        label="Path"
-        initial={creating?.initial ?? ""}
+        label="Name"
+        description={
+          creating?.parent
+            ? `Location: Library / ${creating.parent}`
+            : "Location: Library"
+        }
+        trim={false}
+        validate={creationNameError}
         submitLabel={
           creating?.kind === "directory" ? "Create folder" : "Create document"
         }
-        onSubmit={async (destination) => {
-          if (creating?.kind === "directory") {
-            await backend.mkdirLibrary(destination);
+        onSubmit={async (name) => {
+          if (!creating || !entries)
+            throw new Error("Library creation is not ready.");
+          const destination = await createLibraryEntry(creating, name, entries);
+          if (creating.kind === "directory") {
             setExpanded(
               (current) =>
                 new Set([...current, ...expandedFolders(destination)]),
             );
           } else {
-            await backend.writeLibrary(destination, "");
             navigate({ name: "document", path: destination });
           }
           await load();

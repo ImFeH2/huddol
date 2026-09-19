@@ -1,12 +1,15 @@
 import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import {
+  createLibraryEntry,
+  creationDestination,
+  creationNameError,
   deleteConsequence,
   LibraryContents,
   libraryActions,
 } from "@/features/library/list";
-import type { LibraryEntry } from "@/lib/backend";
+import { BackendError, backend, type LibraryEntry } from "@/lib/backend";
 
 const entries: LibraryEntry[] = [
   {
@@ -137,7 +140,7 @@ describe("Library row actions", () => {
     expect(callbacks.remove).toHaveBeenCalledWith(entries[2]);
   });
 
-  it("offers folder creation actions prefilled with its full path", () => {
+  it("keeps the full parent path separate from the entered name", () => {
     const callbacks = handlers();
     const actions = libraryActions(entries[1], callbacks);
     expect(actions.map((action) => action.label)).toEqual([
@@ -149,8 +152,8 @@ describe("Library row actions", () => {
     actions[1].onSelect();
     actions[2].onSelect();
     expect(callbacks.create.mock.calls).toEqual([
-      [{ kind: "file", initial: "runbooks/deep/" }],
-      [{ kind: "directory", initial: "runbooks/deep/" }],
+      [{ kind: "file", parent: "runbooks/deep" }],
+      [{ kind: "directory", parent: "runbooks/deep" }],
     ]);
   });
 
@@ -174,4 +177,107 @@ describe("Library row actions", () => {
       ]),
     ).toBe("Removes 2 files for every Member.");
   });
+});
+
+describe("Library creation", () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  it.each([
+    "",
+    "   ",
+    ".",
+    "..",
+    "temp/name",
+    "temp\\name",
+    "/root",
+    "../name",
+  ])("rejects invalid name %j without constructing another path", (name) => {
+    expect(creationNameError(name)).toBeTruthy();
+    expect(() =>
+      creationDestination({ kind: "file", parent: "temp" }, name),
+    ).toThrow();
+  });
+
+  it.each(["ai-chat-input.tsx", "notes.txt", "notes.md", ".hidden", " name "])(
+    "preserves the single name %j and the fixed parent",
+    (name) => {
+      expect(creationNameError(name)).toBeUndefined();
+      expect(creationDestination({ kind: "file", parent: "temp" }, name)).toBe(
+        `temp/${name}`,
+      );
+      expect(creationDestination({ kind: "file", parent: "" }, name)).toBe(
+        name,
+      );
+    },
+  );
+
+  it("creates inside the selected directory even when the root has the same file", async () => {
+    const write = vi
+      .spyOn(backend, "writeLibrary")
+      .mockResolvedValue(
+        {} as Awaited<ReturnType<typeof backend.writeLibrary>>,
+      );
+    const destination = await createLibraryEntry(
+      { kind: "file", parent: "temp" },
+      "ai-chat-input.tsx",
+      [{ ...entries[2], path: "ai-chat-input.tsx" }],
+    );
+    expect(destination).toBe("temp/ai-chat-input.tsx");
+    expect(write.mock.calls).toEqual([["temp/ai-chat-input.tsx", ""]]);
+  });
+
+  it.each(["file", "directory"] as const)(
+    "rejects a known same-location %s without any write",
+    async (kind) => {
+      const write = vi.spyOn(backend, "writeLibrary");
+      const mkdir = vi.spyOn(backend, "mkdirLibrary");
+      for (const creating of ["file", "directory"] as const) {
+        await expect(
+          createLibraryEntry({ kind: creating, parent: "temp" }, "same", [
+            { ...entries[0], kind, path: "temp/same" },
+          ]),
+        ).rejects.toThrow("already exists at this location");
+      }
+      expect(write).not.toHaveBeenCalled();
+      expect(mkdir).not.toHaveBeenCalled();
+    },
+  );
+
+  it("translates a backend duplicate only in creation and never retries with a hash", async () => {
+    const write = vi
+      .spyOn(backend, "writeLibrary")
+      .mockRejectedValue(
+        new BackendError("expected_hash_required", "internal detail"),
+      );
+    const read = vi.spyOn(backend, "readLibrary");
+    await expect(
+      createLibraryEntry({ kind: "file", parent: "temp" }, "race.txt", []),
+    ).rejects.toThrow(
+      "A file with this name already exists at this location. Choose another name.",
+    );
+    expect(write.mock.calls).toEqual([["temp/race.txt", ""]]);
+    expect(read).not.toHaveBeenCalled();
+  });
+
+  it("preserves unrelated backend failures", async () => {
+    const failure = new BackendError("invalid_path", "Path is a directory");
+    vi.spyOn(backend, "writeLibrary").mockRejectedValue(failure);
+    await expect(
+      createLibraryEntry({ kind: "file", parent: "" }, "name", []),
+    ).rejects.toBe(failure);
+  });
+
+  it.each(["", "temp"])(
+    "creates folders under fixed parent %j",
+    async (parent) => {
+      const mkdir = vi
+        .spyOn(backend, "mkdirLibrary")
+        .mockResolvedValue(entries[0]);
+      const expected = parent ? "temp/new-folder" : "new-folder";
+      await expect(
+        createLibraryEntry({ kind: "directory", parent }, "new-folder", []),
+      ).resolves.toBe(expected);
+      expect(mkdir).toHaveBeenCalledWith(expected);
+    },
+  );
 });

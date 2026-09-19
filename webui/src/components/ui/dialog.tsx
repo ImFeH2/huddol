@@ -113,6 +113,9 @@ export function PromptDialog({
   title,
   label,
   placeholder,
+  description,
+  validate,
+  trim = true,
   initial = "",
   submitLabel,
   onSubmit,
@@ -122,6 +125,9 @@ export function PromptDialog({
   title: string;
   label: string;
   placeholder?: string;
+  description?: ReactNode;
+  validate?: (value: string) => string | undefined;
+  trim?: boolean;
   initial?: string;
   submitLabel: string;
   onSubmit: (value: string) => void | Promise<void>;
@@ -135,12 +141,14 @@ export function PromptDialog({
     if (open) setValue(initial);
   }, [open, initial]);
 
+  const submitted = trim ? value.trim() : value;
+  const error = validate?.(submitted);
+
   const commit = async () => {
-    const trimmed = value.trim();
-    if (!trimmed || busy) return;
+    if (!submitted || error || busy) return;
     setBusy(true);
     try {
-      await onSubmit(trimmed);
+      await onSubmit(submitted);
       onOpenChange(false);
     } catch (failure) {
       reportFailure(`Could not ${submitLabel.toLowerCase()}`, failure);
@@ -155,6 +163,7 @@ export function PromptDialog({
       open={open}
       onOpenChange={onOpenChange}
       title={title}
+      description={description}
       footer={
         <>
           <Button disabled={busy} onClick={() => onOpenChange(false)}>
@@ -162,7 +171,7 @@ export function PromptDialog({
           </Button>
           <Button
             variant="primary"
-            disabled={!value.trim() || busy}
+            disabled={!submitted || !!error || busy}
             onClick={commit}
           >
             {submitLabel}
@@ -176,6 +185,8 @@ export function PromptDialog({
           id={inputId}
           value={value}
           placeholder={placeholder}
+          aria-invalid={!!error}
+          aria-describedby={error ? `${inputId}-error` : undefined}
           onChange={(event) => setValue(event.target.value)}
           onKeyDown={(event) => {
             if (event.key === "Enter") {
@@ -184,6 +195,15 @@ export function PromptDialog({
             }
           }}
         />
+        {error ? (
+          <p
+            id={`${inputId}-error`}
+            className="text-sm text-danger"
+            role="alert"
+          >
+            {error}
+          </p>
+        ) : null}
       </Field>
     </Modal>
   );
