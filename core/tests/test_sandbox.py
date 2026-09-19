@@ -162,8 +162,7 @@ def test_describe_environment_names_the_writable_roots(
     sandbox = LocalExecution(directories, enforce=False)
     listing = f"- {tmp_path.resolve()}" if writable else "- none"
     assert sandbox.describe_environment() == (
-        f"Execution environment: native ({sys.platform})\n"
-        f"Writable directories:\n{listing}"
+        f"Commands run on {sys.platform}\nWritable directories:\n{listing}"
     )
 
 

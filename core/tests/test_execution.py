@@ -56,7 +56,7 @@ def test_timeout_does_not_leave_a_linux_descendant_writing_later(
 
 def test_existing_snapshot_resolves_current_directories(tmp_path: Path) -> None:
     manager = ExecutionManager(
-        settings={"directories": {"native": [str(tmp_path)]}}, enforce=False
+        settings={"write_directories": [str(tmp_path)]}, enforce=False
     )
     first = manager.snapshot()
     second = manager.snapshot()
@@ -81,7 +81,7 @@ def test_failed_persistence_does_not_switch_execution_or_directories(
     tmp_path: Path,
 ) -> None:
     manager = ExecutionManager(
-        settings={"directories": {"native": [str(tmp_path)]}}, enforce=False
+        settings={"write_directories": [str(tmp_path)]}, enforce=False
     )
     bound = manager.snapshot()
 
@@ -135,7 +135,7 @@ def test_execution_helpers_ignore_other_business_modules_on_pythonpath(
 
 def test_reconfiguration_reuses_the_same_execution_instance(tmp_path: Path) -> None:
     manager = ExecutionManager(
-        settings={"directories": {"native": [str(tmp_path)]}}, enforce=False
+        settings={"write_directories": [str(tmp_path)]}, enforce=False
     )
     original = manager._environment
     try:
@@ -147,56 +147,42 @@ def test_reconfiguration_reuses_the_same_execution_instance(tmp_path: Path) -> N
         manager.close()
 
 
-def test_changing_the_current_directories_leaves_other_stored_keys_alone(
+def test_changing_the_current_directories_rewrites_the_stored_section(
     tmp_path: Path,
 ) -> None:
-    native_directory = tmp_path / "native"
     replacement = tmp_path / "replacement"
-    native_directory.mkdir()
     replacement.mkdir()
-    manager = ExecutionManager(
-        settings={
-            "environment": {"kind": "native"},
-            "directories": {
-                "native": [str(native_directory)],
-                "legacy": ["/mnt/c/elsewhere"],
-            },
-        },
-        enforce=False,
-    )
+    manager = ExecutionManager(settings={"write_directories": []}, enforce=False)
+    saved: list[dict[str, object]] = []
     try:
         status = manager.configure(
-            {"write_directories": [str(replacement)]}, lambda values: None
+            {"write_directories": [str(replacement)]}, saved.append
         )
-        assert status["environment"] == {"kind": "native"}
-        assert status["write_directories"] == [str(replacement)]
-        assert status["directories"] == {
-            "native": [str(replacement)],
-            "legacy": ["/mnt/c/elsewhere"],
+        assert status == {
+            "write_directories": [str(replacement)],
+            "unusable_write_directories": [],
+            "error": None,
         }
+        assert saved == [{"write_directories": [str(replacement)]}]
     finally:
         manager.close()
 
 
 def test_execution_status_reports_configuration_and_diagnostics(tmp_path: Path) -> None:
     manager = ExecutionManager(
-        settings={"directories": {"native": [str(tmp_path), "relative/bad"]}},
+        settings={"write_directories": [str(tmp_path), "relative/bad"]},
         enforce=False,
         tolerant=True,
     )
     try:
         status = manager.status()
         assert set(status) == {
-            "environment",
             "write_directories",
-            "directories",
             "unusable_write_directories",
             "error",
         }
-        assert status["environment"] == {"kind": "native"}
         assert "working_directory" not in status
         assert status["write_directories"] == [str(tmp_path), "relative/bad"]
-        assert status["directories"] == {"native": [str(tmp_path), "relative/bad"]}
         assert status["unusable_write_directories"] == [
             {"path": "relative/bad", "reason": "invalid_directory"}
         ]
@@ -205,13 +191,19 @@ def test_execution_status_reports_configuration_and_diagnostics(tmp_path: Path) 
         manager.close()
 
 
-def test_invalid_saved_environment_does_not_fall_back_to_native(tmp_path: Path) -> None:
-    manager = ExecutionManager(settings={"environment": {"kind": "invalid"}})
+def test_stored_settings_outside_the_contract_report_an_error(tmp_path: Path) -> None:
+    manager = ExecutionManager(
+        settings={
+            "environment": {"kind": "native"},
+            "directories": {"native": [str(tmp_path)]},
+        }
+    )
     assert manager.status()["error"]
     with pytest.raises(DomainError):
         manager.snapshot().run(["echo", "should not run"], cwd=str(tmp_path))
-    manager.configure({"environment": {"kind": "native"}}, lambda values: None)
+    manager.configure({"write_directories": [str(tmp_path)]}, lambda values: None)
     assert manager.status()["error"] is None
+    assert manager.snapshot().run(["/bin/true"], cwd=str(tmp_path)).exit_code == 0
     manager.close()
 
 

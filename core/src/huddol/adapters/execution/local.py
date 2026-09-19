@@ -86,10 +86,7 @@ class LocalExecution:
         entries = [f"- {path} ({label})" for path, label in labeled]
         entries.extend(f"- {item}" for item in self.write_directories)
         listing = "\n".join(entries) or "- none"
-        return (
-            f"Execution environment: native ({sys.platform})\n"
-            f"Writable directories:\n{listing}"
-        )
+        return f"Commands run on {sys.platform}\nWritable directories:\n{listing}"
 
     def _wrap(
         self, argv: Sequence[str], cwd: Path, roots: tuple[Path, ...]

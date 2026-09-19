@@ -3,18 +3,14 @@ import { Button, Chip, Field, Textarea, toast } from "@/components/ui/index";
 import { reportLoadFailure } from "@/features/settings/saver";
 import { backend } from "@/lib/backend";
 
-export type EnvironmentTarget = { kind: "native" };
-
 export type ExecutionSettings = {
-  environment: EnvironmentTarget;
   write_directories: string[];
-  directories: Record<string, string[]>;
-  error: string | null;
   unusable_write_directories: { path: string; reason: string }[];
+  error: string | null;
 };
 
 export function directoryDraft(settings: ExecutionSettings): string {
-  return (settings.directories.native ?? []).join("\n");
+  return settings.write_directories.join("\n");
 }
 
 export function executionChanged(
@@ -25,9 +21,7 @@ export function executionChanged(
 }
 
 export function executionUpdate(directories: string) {
-  const environment: EnvironmentTarget = { kind: "native" };
   return {
-    environment,
     write_directories: [
       ...new Set(
         directories

@@ -881,7 +881,7 @@ def test_agent_run_writes_only_configured_and_implicit_roots(world, tmp_path) ->
     other_memory = world.memory_tree_for(OTHER).root
     world.execution.close()
     world.execution = ExecutionManager(
-        settings={"directories": {"native": [str(configured)]}}
+        settings={"write_directories": [str(configured)]}
     )
     library = world.library_tree.root
     result = tools_for(world, MAIN).run(

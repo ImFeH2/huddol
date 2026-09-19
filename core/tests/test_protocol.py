@@ -506,8 +506,7 @@ def test_execution_settings_update_the_live_sandbox(server, tmp_path: Path) -> N
     )
     assert deps.execution.snapshot().write_directories == (str(target.resolve()),)
     assert deps.settings.get_settings("execution") == {
-        "environment": {"kind": "native"},
-        "directories": {"native": [str(target.resolve())]},
+        "write_directories": [str(target.resolve())]
     }
 
 

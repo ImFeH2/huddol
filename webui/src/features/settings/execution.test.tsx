@@ -9,17 +9,15 @@ import {
 } from "@/features/settings/execution";
 
 const initial: ExecutionSettings = {
-  environment: { kind: "native" },
   write_directories: ["/work"],
-  directories: { native: ["/work"] },
-  error: null,
   unusable_write_directories: [],
+  error: null,
 };
 
 describe("Execution settings", () => {
-  it("reads the draft of the native environment", () => {
+  it("reads the draft of the writable directories", () => {
     expect(directoryDraft(initial)).toBe("/work");
-    expect(directoryDraft({ ...initial, directories: {} })).toBe("");
+    expect(directoryDraft({ ...initial, write_directories: [] })).toBe("");
   });
 
   it("marks a change of the draft or a kernel error", () => {
@@ -33,15 +31,11 @@ describe("Execution settings", () => {
     ).toBe(true);
   });
 
-  it("saves the native environment and directories together without App startup fields", () => {
+  it("saves the directories without App startup fields", () => {
     expect(executionUpdate("/work\n/work\n/home/you/中文\n")).toEqual({
-      environment: { kind: "native" },
       write_directories: ["/work", "/home/you/中文"],
     });
-    expect(executionUpdate("")).toEqual({
-      environment: { kind: "native" },
-      write_directories: [],
-    });
+    expect(executionUpdate("")).toEqual({ write_directories: [] });
   });
 
   it("edits the file policy without an environment choice", () => {
@@ -54,11 +48,10 @@ describe("Execution settings", () => {
     expect(html).not.toContain("Next start");
   });
 
-  it("shows an unavailable environment with its diagnostics", () => {
+  it("shows an unavailable execution with its diagnostics", () => {
     const failed: ExecutionSettings = {
       ...initial,
       write_directories: [],
-      directories: { native: [] },
       error: "Execution environment is unavailable",
       unusable_write_directories: [
         { path: "/missing", reason: "invalid_directory" },
@@ -77,7 +70,7 @@ describe("Execution settings", () => {
     expect(html).toContain(">invalid_directory</span>");
   });
 
-  it("shows no fact list for a healthy environment", () => {
+  it("shows no fact list for a healthy execution", () => {
     const html = renderToStaticMarkup(
       <ExecutionForm initial={initial} onSave={async () => initial} />,
     );

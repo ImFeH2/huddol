@@ -8,29 +8,15 @@ from huddol.adapters.execution.local import LocalExecution
 from huddol.core.errors import DomainError
 from huddol.ports.execution import EditResult, ExecutionEnvironment, RunResult
 
-NATIVE = "native"
 
-
-def target_value(value: object) -> dict[str, str]:
-    if not isinstance(value, dict):
-        raise DomainError("invalid_environment", "Choose an execution environment")
-    if value == {"kind": NATIVE}:
-        return {"kind": NATIVE}
-    raise DomainError(
-        "invalid_environment", "The native execution environment is the only choice"
-    )
-
-
-def directory_map(value: object) -> dict[str, list[str]]:
-    if not isinstance(value, dict):
-        return {}
-    return {
-        key: list(items)
-        for key, items in value.items()
-        if isinstance(key, str)
-        and isinstance(items, list)
-        and all(isinstance(item, str) for item in items)
-    }
+def setting_directories(value: object) -> list[str]:
+    if value is None:
+        return []
+    if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
+        raise DomainError(
+            "invalid_directory", "Writable directories must be a list of paths"
+        )
+    return list(value)
 
 
 class BoundExecution:
@@ -90,17 +76,15 @@ class ExecutionManager:
         self._lock = threading.RLock()
         self._closed = False
         self._environment: LocalExecution | None = None
-        self._target: dict[str, str] = {"kind": "invalid"}
-        stored = settings or {}
-        self._directories = directory_map(stored.get("directories"))
+        self._directories: list[str] = []
         self._error: str | None = None
+        stored = settings or {}
         try:
-            environment = stored.get("environment")
-            self._target = target_value(
-                {"kind": NATIVE} if environment is None else environment
-            )
+            if set(stored) - {"write_directories"}:
+                raise DomainError("invalid_setting", "Unknown execution setting")
+            self._directories = setting_directories(stored.get("write_directories"))
             self._environment = LocalExecution(
-                self._directories.get(NATIVE, []),
+                self._directories,
                 enforce=self._enforce,
                 tolerant=tolerant,
             )
@@ -127,11 +111,7 @@ class ExecutionManager:
         with self._lock:
             skipped = self._environment.skipped if self._environment else ()
             return {
-                "environment": self._target,
-                "write_directories": list(self._directories.get(NATIVE, [])),
-                "directories": {
-                    name: list(items) for name, items in self._directories.items()
-                },
+                "write_directories": list(self._directories),
                 "unusable_write_directories": [
                     {"path": path, "reason": reason} for path, reason in skipped
                 ],
@@ -141,26 +121,17 @@ class ExecutionManager:
     def configure(
         self, values: dict[str, Any], persist: Callable[[dict[str, object]], None]
     ) -> dict[str, Any]:
-        if set(values) - {"environment", "write_directories"}:
+        if set(values) - {"write_directories"}:
             raise DomainError("invalid_setting", "Unknown execution setting")
         with self._lock:
             if self._closed:
                 raise DomainError("execution_closed", "Execution environment is closed")
-            target = target_value(values.get("environment", self._target))
-            directories = values.get(
-                "write_directories", self._directories.get(NATIVE, [])
+            directories = setting_directories(
+                values.get("write_directories", self._directories)
             )
-            if not isinstance(directories, list) or not all(
-                isinstance(item, str) for item in directories
-            ):
-                raise DomainError(
-                    "invalid_directory", "Writable directories must be a list of paths"
-                )
             candidate = LocalExecution(directories, enforce=self._enforce)
-            stored = {**self._directories, NATIVE: list(candidate.write_directories)}
             configured: dict[str, object] = {
-                "environment": target,
-                "directories": {name: list(items) for name, items in stored.items()},
+                "write_directories": list(candidate.write_directories)
             }
             try:
                 persist(configured)
@@ -172,8 +143,7 @@ class ExecutionManager:
             else:
                 self._environment.apply_configuration(candidate)
                 candidate.close()
-            self._target = target
-            self._directories = stored
+            self._directories = list(candidate.write_directories)
             self._error = None
         return self.status()
 

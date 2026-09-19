@@ -58,7 +58,7 @@ def world(tmp_path: Path):
         settings=agent_store,
         agent_directory_for=agent_directory_for,
         execution=ExecutionManager(
-            settings={"directories": {"native": [str(tmp_path)]}},
+            settings={"write_directories": [str(tmp_path)]},
             enforce=False,
         ),
         library_tree=DirectoryTree(tmp_path / "library"),
@@ -83,7 +83,7 @@ def test_unavailable_execution_does_not_disable_business_tools(
 
     room = mention(world)
     world.execution.close()
-    world.execution = ExecutionManager(settings={"environment": {"kind": "invalid"}})
+    world.execution = ExecutionManager(settings={"legacy": "invalid"})
 
     def respond(request, tools):
         assert request.resident == "Your MEMORY.md is empty."
@@ -853,7 +853,7 @@ def test_resident_carries_memory_and_environment(world, tmp_path: Path) -> None:
     context = runner.requests[0].resident
     assert context == (
         "Your MEMORY.md:\n- prior knowledge\n\n"
-        f"Execution environment: native ({sys.platform})\n"
+        f"Commands run on {sys.platform}\n"
         "Writable directories:\n"
         f"- {world.memory_tree_for(MAIN).root} (your Memory, private, Markdown)\n"
         f"- {world.library_tree.root} (Library, shared with the whole organization)\n"

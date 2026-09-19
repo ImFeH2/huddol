@@ -1170,14 +1170,7 @@ def test_unusable_write_directories_are_reported_not_fatal(tmp_path: Path) -> No
     connection = sqlite3.connect(data / "huddol.sqlite3")
     connection.execute(
         "UPDATE settings SET values_json = ? WHERE section = 'execution'",
-        (
-            json.dumps(
-                {
-                    "environment": {"kind": "native"},
-                    "directories": {"native": ["relative/bad"]},
-                }
-            ),
-        ),
+        (json.dumps({"write_directories": ["relative/bad"]}),),
     )
     connection.commit()
     connection.close()
@@ -1382,7 +1375,7 @@ def test_unknown_mode_does_not_initialize_business_data(tmp_path: Path) -> None:
     assert not directory.exists()
 
 
-def test_invalid_execution_configuration_keeps_the_original_organization_available(
+def test_settings_outside_the_execution_contract_keep_the_organization_available(
     tmp_path: Path,
 ) -> None:
     from huddol.adapters.sqlite.agent import SqliteAgentStore
@@ -1392,7 +1385,7 @@ def test_invalid_execution_configuration_keeps_the_original_organization_availab
     store = SqliteStore(data / "huddol.sqlite3")
     store.create_member("human", "Existing organization")
     SqliteAgentStore(store._db).set_settings(
-        "execution", {"environment": {"kind": "invalid"}}
+        "execution", {"directories": {"native": []}}
     )
     store.close()
     frames, code, stderr = drive(
@@ -1405,10 +1398,7 @@ def test_invalid_execution_configuration_keeps_the_original_organization_availab
                 "method": "settings.update",
                 "params": {
                     "section": "execution",
-                    "values": {
-                        "environment": {"kind": "native"},
-                        "write_directories": [],
-                    },
+                    "values": {"write_directories": []},
                 },
             },
         ],
