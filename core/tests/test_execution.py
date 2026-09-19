@@ -203,7 +203,10 @@ def test_stored_settings_outside_the_contract_report_an_error(tmp_path: Path) ->
         manager.snapshot().run(["echo", "should not run"], cwd=str(tmp_path))
     manager.configure({"write_directories": [str(tmp_path)]}, lambda values: None)
     assert manager.status()["error"] is None
-    assert manager.snapshot().run(["/bin/true"], cwd=str(tmp_path)).exit_code == 0
+    result = manager.snapshot().run(
+        [sys.executable, "-c", "print('ok')"], cwd=str(tmp_path)
+    )
+    assert result.exit_code == 0, result.stderr
     manager.close()
 
 
