@@ -73,7 +73,7 @@ def test_build_model_returns_a_google_model_for_google() -> None:
         "discussion action=ack",
         "handled, not that the entire task is finished",
         "clarification question or handing off the next step, ack the Message",
-        "Track ongoing work in your own Memory",
+        "Track ongoing work in your own workspace",
         "ack the Message instead of mentioning them back",
         "Only Members of the Discussion can be notified",
         "do not assume that Member has been asked or will act",
