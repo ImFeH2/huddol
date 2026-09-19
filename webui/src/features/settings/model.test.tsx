@@ -9,7 +9,7 @@ import {
 } from "@/features/settings/model";
 
 const values = {
-  api_type: "openai",
+  api_type: "openai-chat",
   base_url: "https://example.invalid/v1",
   model: "local",
   api_key_set: true,
@@ -20,7 +20,7 @@ describe("Model settings", () => {
     expect(
       modelUpdate({ ...values, compaction_threshold: 320000 }, " "),
     ).toEqual({
-      api_type: "openai",
+      api_type: "openai-chat",
       base_url: "https://example.invalid/v1",
       model: "local",
     });
@@ -30,14 +30,14 @@ describe("Model settings", () => {
     expect(
       modelUpdate({ ...values, api_key: "stored" }, " replacement "),
     ).toEqual({
-      api_type: "openai",
+      api_type: "openai-chat",
       base_url: "https://example.invalid/v1",
       model: "local",
       api_key: "replacement",
     });
   });
 
-  it.each(["openai", "openai-responses", "anthropic", "google"])(
+  it.each(["openai-chat", "openai-responses", "anthropic", "google"])(
     "enables Test for configured %s without requiring a typed key",
     (api_type) => {
       expect(

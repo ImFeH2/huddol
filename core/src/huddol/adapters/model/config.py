@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Literal, get_args
 
-ApiType = Literal["openai", "openai-responses", "anthropic", "google"]
+ApiType = Literal["openai-chat", "openai-responses", "anthropic", "google"]
 
 API_TYPES: tuple[ApiType, ...] = get_args(ApiType)
 
@@ -24,9 +24,9 @@ class ModelConfig:
         base_url = values.get("base_url")
         if not model or not api_key or not base_url:
             return None
-        api_type = str(values.get("api_type") or "openai")
+        api_type = str(values.get("api_type") or "openai-chat")
         if api_type not in API_TYPES:
-            api_type = "openai"
+            api_type = "openai-chat"
         return cls(
             api_type=api_type,  # type: ignore[arg-type]
             base_url=str(base_url),

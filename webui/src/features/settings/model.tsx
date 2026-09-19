@@ -14,7 +14,7 @@ import { reportLoadFailure, useSaver } from "@/features/settings/saver";
 import { backend } from "@/lib/backend";
 
 const PROVIDERS = [
-  { value: "openai", label: "OpenAI" },
+  { value: "openai-chat", label: "OpenAI" },
   { value: "openai-responses", label: "OpenAI Responses" },
   { value: "anthropic", label: "Anthropic" },
   { value: "google", label: "Google" },

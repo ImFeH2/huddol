@@ -97,7 +97,7 @@ def request() -> TurnRequest:
 
 def model_values(model: str) -> dict[str, object]:
     return {
-        "api_type": "openai",
+        "api_type": "openai-chat",
         "base_url": "https://example.invalid/v1",
         "api_key": "unused",
         "model": model,

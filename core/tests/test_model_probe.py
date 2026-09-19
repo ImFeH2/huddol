@@ -10,7 +10,7 @@ from huddol.adapters.model.config import ModelConfig
 from huddol.core.errors import DomainError
 
 STORED = {
-    "api_type": "openai",
+    "api_type": "openai-chat",
     "base_url": "https://stored.invalid/v1",
     "api_key": "STORED-KEY",
     "model": "stored-model",
@@ -51,7 +51,9 @@ def test_listing_falls_back_to_the_stored_key(supplied: str | None) -> None:
 def test_listing_without_any_key_names_the_problem() -> None:
     with pytest.raises(DomainError) as failed:
         probe.list_models(
-            {"api_type": "openai", "base_url": "https://a.invalid"}, {}, fetch=names
+            {"api_type": "openai-chat", "base_url": "https://a.invalid"},
+            {},
+            fetch=names,
         )
     assert failed.value.code == "model_key_missing"
 
@@ -69,7 +71,9 @@ def test_listing_rejects_unknown_api_types(api_type: object) -> None:
 
 def test_listing_requires_a_base_url() -> None:
     with pytest.raises(ValueError):
-        probe.list_models({"api_type": "openai", "api_key": "k"}, None, fetch=names)
+        probe.list_models(
+            {"api_type": "openai-chat", "api_key": "k"}, None, fetch=names
+        )
 
 
 def test_listing_failures_never_echo_the_key() -> None:
@@ -81,7 +85,11 @@ def test_listing_failures_never_echo_the_key() -> None:
 
     with pytest.raises(DomainError) as failed:
         probe.list_models(
-            {"api_type": "openai", "base_url": "https://a.invalid", "api_key": "TOP"},
+            {
+                "api_type": "openai-chat",
+                "base_url": "https://a.invalid",
+                "api_key": "TOP",
+            },
             None,
             fetch=explode,
         )
@@ -102,7 +110,11 @@ def test_listing_is_bounded_by_a_timeout(monkeypatch) -> None:
 
     with pytest.raises(DomainError) as failed:
         probe.list_models(
-            {"api_type": "openai", "base_url": "https://a.invalid", "api_key": "k"},
+            {
+                "api_type": "openai-chat",
+                "base_url": "https://a.invalid",
+                "api_key": "k",
+            },
             None,
             fetch=slow,
         )
@@ -114,7 +126,7 @@ def test_the_default_lister_covers_every_api_type() -> None:
     source = probe.fetch_model_names.__code__.co_consts
     del source
     assert probe.api_type_of("openai-responses") == "openai-responses"
-    for api_type in ("openai", "openai-responses", "anthropic", "google"):
+    for api_type in ("openai-chat", "openai-responses", "anthropic", "google"):
         assert probe.api_type_of(api_type) == api_type
 
 
@@ -171,7 +183,7 @@ def test_a_model_test_uses_the_stored_key_when_none_is_typed(monkeypatch) -> Non
         return function_model("OK")
 
     probe.try_model(
-        {"api_type": "openai", "base_url": "https://a.invalid/v1", "model": "m"},
+        {"api_type": "openai-chat", "base_url": "https://a.invalid/v1", "model": "m"},
         STORED,
         build=build,
     )
@@ -181,7 +193,11 @@ def test_a_model_test_uses_the_stored_key_when_none_is_typed(monkeypatch) -> Non
 def test_a_model_test_requires_a_model_name() -> None:
     with pytest.raises(ValueError):
         probe.try_model(
-            {"api_type": "openai", "base_url": "https://a.invalid", "api_key": "k"},
+            {
+                "api_type": "openai-chat",
+                "base_url": "https://a.invalid",
+                "api_key": "k",
+            },
             None,
             build=lambda config: function_model("OK"),
         )
@@ -216,7 +232,7 @@ def test_a_broken_provider_is_reported_as_a_failed_test() -> None:
     with pytest.raises(DomainError) as failed:
         probe.try_model(
             {
-                "api_type": "openai",
+                "api_type": "openai-chat",
                 "base_url": "https://a.invalid",
                 "api_key": "k",
                 "model": "m",

@@ -1260,7 +1260,7 @@ def test_agents_wake_and_report_turns_over_the_socket(tmp_path: Path) -> None:
 def test_secrets_never_come_back_over_the_pipe(tmp_path: Path, section: str) -> None:
     values = (
         {
-            "api_type": "openai",
+            "api_type": "openai-chat",
             "base_url": "https://example.invalid/v1",
             "model": "m",
             "api_key": "SECRET-API-KEY",

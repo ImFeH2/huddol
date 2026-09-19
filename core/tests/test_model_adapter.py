@@ -21,7 +21,7 @@ def test_config_defaults_to_openai_and_ignores_obsolete_settings(
         {"model": "m", "api_key": "k", "base_url": "u", **values}
     )
     assert config is not None
-    assert config.api_type == "openai"
+    assert config.api_type == "openai-chat"
     assert not hasattr(config, "compaction_threshold")
     assert "compaction_threshold" not in config.redacted()
 
@@ -31,7 +31,7 @@ def test_config_rejects_unknown_api_types() -> None:
         {"model": "m", "api_key": "k", "base_url": "u", "api_type": "made-up"}
     )
     assert config is not None
-    assert config.api_type == "openai"
+    assert config.api_type == "openai-chat"
 
 
 def test_redacted_config_never_exposes_the_key() -> None:
@@ -61,7 +61,7 @@ def test_build_model_returns_a_google_model_for_google() -> None:
     assert google.model_name == "name"
     assert google.base_url == "https://example.invalid/"
     assert isinstance(built("anthropic"), AnthropicModel)
-    assert isinstance(built("openai"), OpenAIChatModel)
+    assert isinstance(built("openai-chat"), OpenAIChatModel)
     assert isinstance(built("openai-responses"), OpenAIResponsesModel)
 
 

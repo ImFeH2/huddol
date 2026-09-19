@@ -295,7 +295,7 @@ def test_settings_never_return_the_api_key(server) -> None:
         "settings.update",
         section="model",
         values={
-            "api_type": "openai",
+            "api_type": "openai-chat",
             "base_url": "https://example.test/v1",
             "api_key": "super-secret-value",
             "model": "some-model",
@@ -431,7 +431,7 @@ def test_model_settings_ignore_the_obsolete_byte_threshold(server, configured) -
 def test_model_listing_and_testing_reach_the_injected_probe(server) -> None:
     dispatcher, output, deps = server
     stored = {
-        "api_type": "openai",
+        "api_type": "openai-chat",
         "base_url": "https://stored.invalid/v1",
         "api_key": "stored-key",
         "model": "m",
