@@ -1490,45 +1490,6 @@ def test_library_trees_and_human_memory_reads_survive_the_pipe(tmp_path: Path) -
     assert len(events(frames, "library.updated")) == 6
 
 
-@pytest.mark.skipif(
-    not sys.platform.startswith("linux"), reason="Linux execution worker"
-)
-@pytest.mark.parametrize("override", [None, [], "library"])
-def test_execution_worker_edit_accepts_per_call_write_directories(
-    tmp_path, monkeypatch, override
-) -> None:
-    from huddol.adapters.execution.wsl import WslConnection, component_entry
-    from huddol.core.errors import DomainError
-
-    configured = tmp_path / "configured"
-    library = tmp_path / "library"
-    configured.mkdir()
-    library.mkdir()
-    target = library / "note.txt"
-    target.write_text("before", encoding="utf-8")
-    connection = WslConnection("test", [str(configured)])
-    monkeypatch.setattr(
-        connection, "_command", lambda: [sys.executable, "-I", str(component_entry())]
-    )
-    directories = [str(library)] if override == "library" else override
-    try:
-        if override == "library":
-            result = connection.edit(
-                str(target), "before", "after", write_directories=directories
-            )
-            assert result.replacements == 1
-            assert target.read_text(encoding="utf-8") == "after"
-        else:
-            with pytest.raises(DomainError, match="outside"):
-                connection.edit(
-                    str(target), "before", "after", write_directories=directories
-                )
-            assert target.read_text(encoding="utf-8") == "before"
-        assert connection.write_directories == (str(configured),)
-    finally:
-        connection.close()
-
-
 def test_the_packaging_smoke_sequence_holds(tmp_path: Path) -> None:
     with Kernel(tmp_path / "data") as kernel:
         assert kernel.ready["type"] == "ready"

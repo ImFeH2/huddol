@@ -157,54 +157,11 @@ def check_web(directory: Path) -> None:
             assert_answered(exchange(connection))
 
 
-def check_execution(directory: Path) -> None:
-    if not sys.platform.startswith("linux"):
-        sys.stdout.write("Skipped the execution worker outside Linux.\n")
-        return
-    from huddol.adapters.execution.wsl import component_entry
-
-    entry = component_entry()
-    assert entry.is_file(), entry
-    directory.mkdir(parents=True, exist_ok=True)
-    target = directory / "note.txt"
-    target.write_text("before", encoding="utf-8")
-    request = {
-        "operation": "edit",
-        "directories": [str(directory)],
-        "params": {
-            "path": str(target),
-            "old_text": "before",
-            "new_text": "after",
-        },
-    }
-    process = subprocess.Popen(
-        [sys.executable, "-I", str(entry)],
-        stdin=subprocess.PIPE,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-        encoding="utf-8",
-    )
-    assert process.stdin is not None and process.stdout is not None
-    try:
-        process.stdin.write(json.dumps(request) + "\n")
-        process.stdin.flush()
-        line = process.stdout.readline()
-        assert line, process.stderr.read()
-        result = json.loads(line)
-        assert "error" not in result, result
-        assert target.read_text(encoding="utf-8") == "after"
-    finally:
-        process.kill()
-        process.wait(timeout=TIMEOUT)
-
-
 def check(directory: Path) -> None:
     check_commands()
     check_stdio(directory / "stdio")
     check_core(directory / "core")
     check_web(directory / "web")
-    check_execution(directory / "execution")
 
 
 def main() -> int:
@@ -215,7 +172,7 @@ def main() -> int:
     check(directory)
     sys.stdout.write(
         "Installed huddol and huddol-web passed commands, stdio, WebSocket, "
-        "events, frontend assets, and the execution worker.\n"
+        "events, and frontend assets.\n"
     )
     return 0
 

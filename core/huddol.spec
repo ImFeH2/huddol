@@ -1,14 +1,8 @@
-from pathlib import Path, PurePosixPath
+from pathlib import Path
 
 from PyInstaller.utils.hooks import copy_metadata
 
-from huddol.adapters.execution.wsl import COMPONENT_SOURCES
-
 datas = copy_metadata("pydantic-ai-slim", recursive=True)
-datas.extend(
-    (f"src/{source}", str(PurePosixPath("execution", source).parent))
-    for source in COMPONENT_SOURCES
-)
 webui = Path(SPECPATH, "..", "webui", "dist")
 if webui.is_dir():
     datas.append((str(webui), "webui"))

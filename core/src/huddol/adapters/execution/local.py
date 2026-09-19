@@ -91,9 +91,6 @@ class LocalExecution:
             f"Writable directories:\n{listing}"
         )
 
-    def execution_path(self, path: str) -> str:
-        return path
-
     def _wrap(
         self, argv: Sequence[str], cwd: Path, roots: tuple[Path, ...]
     ) -> list[str]:

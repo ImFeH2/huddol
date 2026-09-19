@@ -137,26 +137,10 @@ def test_relative_edit_resolves_under_the_agents_directory_and_is_not_writable(
     assert directory.is_dir()
 
 
-def test_existing_tools_follow_environment_and_directory_changes(
+def test_existing_tools_follow_directory_changes(
     world, tmp_path: Path, monkeypatch
 ) -> None:
-    from huddol.adapters.execution.local import LocalExecution
-
     manager = world.execution
-    original = manager._create
-
-    def create(target, directories, *, tolerant=False):
-        if target["kind"] == "wsl":
-            environment = LocalExecution(directories, enforce=False)
-            monkeypatch.setattr(
-                environment,
-                "run",
-                lambda *args, **kwargs: RunResult(0, "WSL", "", False),
-            )
-            return environment
-        return original(target, directories, tolerant=tolerant)
-
-    monkeypatch.setattr(manager, "_create", create)
     target = tmp_path / "file.txt"
     target.write_text("before", encoding="utf-8")
     tools = tools_for(world, MAIN)
@@ -166,20 +150,12 @@ def test_existing_tools_follow_environment_and_directory_changes(
         tools.edit(str(target), "before", "denied")
     manager.configure({"write_directories": [str(tmp_path)]}, lambda values: None)
     tools.edit(str(target), "before", "native")
-    manager.configure(
-        {"environment": {"kind": "wsl", "distribution": "test"}}, lambda values: None
-    )
-    assert tools.run(command)["stdout"] == "WSL"
+    assert tools.run(command)["stdout"].strip() == "native"
+    manager.configure({"write_directories": []}, lambda values: None)
     with pytest.raises(DomainError, match="outside"):
         tools.edit(str(target), "native", "denied")
     manager.configure({"write_directories": [str(tmp_path)]}, lambda values: None)
-    tools.edit(str(target), "native", "wsl")
-    manager.configure({"write_directories": []}, lambda values: None)
-    with pytest.raises(DomainError, match="outside"):
-        tools.edit(str(target), "wsl", "denied")
-    manager.configure({"environment": {"kind": "native"}}, lambda values: None)
-    assert tools.run(command)["stdout"].strip() == "native"
-    tools.edit(str(target), "wsl", "after")
+    tools.edit(str(target), "native", "after")
     assert target.read_text(encoding="utf-8") == "after"
 
 

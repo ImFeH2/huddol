@@ -7,7 +7,6 @@ from pathlib import Path
 import pytest
 
 from huddol.adapters.execution.manager import ExecutionManager
-from huddol.adapters.execution.wsl import WslConnection
 from huddol.adapters.files.tree import DirectoryTree
 from huddol.adapters.sqlite.agent import SqliteAgentStore
 from huddol.adapters.sqlite.store import SqliteStore
@@ -860,37 +859,6 @@ def test_resident_carries_memory_and_environment(world, tmp_path: Path) -> None:
         f"- {world.library_tree.root} (Library, shared with the whole organization)\n"
         f"- {tmp_path}"
     )
-
-
-def test_resident_paths_are_translated_by_the_execution_environment(
-    world, monkeypatch
-) -> None:
-    memory = world.memory_tree_for(MAIN).root
-    library = world.library_tree.root
-    paths = {
-        str(memory): "/mnt/c/data/agents/2/memory",
-        str(library): "/mnt/c/data/library",
-    }
-    translated = []
-
-    def translate(argv):
-        translated.append(argv[-1])
-        return (paths[argv[-1]] + "\n").encode()
-
-    monkeypatch.setattr("huddol.adapters.execution.wsl.wsl_output", translate)
-    connection = WslConnection("test", ["/mnt/c/work"])
-    monkeypatch.setattr(world.execution, "snapshot", lambda: connection)
-    try:
-        context = Scheduler(world, RecordingRunner()).resident_block(MAIN)
-    finally:
-        connection.close()
-    assert context.endswith(
-        "Execution environment: WSL (test)\nWritable directories:\n"
-        "- /mnt/c/data/agents/2/memory (your Memory, private, Markdown)\n"
-        "- /mnt/c/data/library (Library, shared with the whole organization)\n"
-        "- /mnt/c/work"
-    )
-    assert translated == [str(memory), str(library)]
 
 
 @pytest.mark.parametrize("error_kind", ["os", "domain"])
