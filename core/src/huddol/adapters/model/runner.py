@@ -34,10 +34,12 @@ from pydantic_ai.exceptions import (
     ToolFailed,
 )
 from pydantic_ai.messages import (
+    InstructionPart,
     ModelMessage,
     ModelRequest,
     ModelResponse,
     RetryPromptPart,
+    SystemPromptPart,
     ToolCallPart,
     ToolReturnPart,
     UserPromptPart,
@@ -246,10 +248,12 @@ class LiveModel(WrapperModel):
         resolve: Callable[[], Model],
         ephemeral: Callable[[], str],
         cache_key: str,
+        agents_instructions: str | None = None,
     ) -> None:
         self._resolve = resolve
         self._ephemeral = ephemeral
         self._cache_key = cache_key
+        self._agents_instructions = agents_instructions
         super().__init__(resolve())
 
     @property
@@ -271,6 +275,36 @@ class LiveModel(WrapperModel):
             replace(last, parts=[*last.parts, UserPromptPart(text)]),
         ]
 
+    def _request_content(
+        self,
+        wrapped: Model,
+        messages: list[ModelMessage],
+        parameters: ModelRequestParameters,
+    ) -> tuple[list[ModelMessage], ModelRequestParameters]:
+        outgoing = self._outgoing(messages)
+        if self._agents_instructions is not None and isinstance(
+            wrapped, OpenAIResponsesModel
+        ):
+            return (
+                [
+                    ModelRequest(
+                        parts=[
+                            SystemPromptPart(
+                                SYSTEM_PROMPT + "\n\n" + self._agents_instructions
+                            )
+                        ]
+                    ),
+                    *(
+                        replace(message, instructions=None)
+                        if isinstance(message, ModelRequest)
+                        else message
+                        for message in outgoing
+                    ),
+                ],
+                replace(parameters, instruction_parts=[]),
+            )
+        return outgoing, parameters
+
     def _caching(
         self, wrapped: Model, model_settings: ModelSettings | None
     ) -> ModelSettings | None:
@@ -289,10 +323,13 @@ class LiveModel(WrapperModel):
         model_request_parameters: ModelRequestParameters,
     ) -> ModelResponse:
         wrapped = self.wrapped
+        outgoing, parameters = self._request_content(
+            wrapped, messages, model_request_parameters
+        )
         return await wrapped.request(
-            self._outgoing(messages),
+            outgoing,
             self._caching(wrapped, model_settings),
-            model_request_parameters,
+            parameters,
         )
 
     @asynccontextmanager
@@ -304,10 +341,13 @@ class LiveModel(WrapperModel):
         run_context: RunContext[Any] | None = None,
     ) -> AsyncIterator[StreamedResponse]:
         wrapped = self.wrapped
+        outgoing, parameters = self._request_content(
+            wrapped, messages, model_request_parameters
+        )
         async with wrapped.request_stream(
-            self._outgoing(messages),
+            outgoing,
             self._caching(wrapped, model_settings),
-            model_request_parameters,
+            parameters,
             run_context,
         ) as response:
             yield response
@@ -562,13 +602,15 @@ class PydanticModelRunner:
                     previous.shutdown()
             observability = self._observability
         history = _settle_tool_calls(_decode_history(request.history_json))
-        if not history:
+        new_window = not history
+        if new_window:
             history.append(
                 ModelRequest(
                     parts=[UserPromptPart(request.resident)],
                     metadata={
                         "huddol": {
                             "block": "resident",
+                            "agents_instructions": request.agents_instructions,
                             "environment": request.environment() or "",
                             "cache_key": uuid.uuid4().hex,
                         }
@@ -576,6 +618,19 @@ class PydanticModelRunner:
                 )
             )
         cache_key = _cache_key(history)
+        agents_instructions = next(
+            (
+                message.metadata["huddol"].get("agents_instructions")
+                for message in history
+                if isinstance(message, ModelRequest)
+                and message.metadata is not None
+                and message.metadata.get("huddol", {}).get("block") == "resident"
+            ),
+            None,
+        )
+        if agents_instructions is not None and not isinstance(agents_instructions, str):
+            raise ValueError("Invalid AGENTS.md snapshot in resident history")
+        snapshot = ModelMessagesTypeAdapter.dump_json(history).decode("utf-8")
         hooks: Hooks[AgentTools] = Hooks()
 
         @hooks.on.tool_execute
@@ -597,6 +652,18 @@ class PydanticModelRunner:
         async def durable(
             ctx: RunContext[AgentTools], request_context: ModelRequestContext
         ) -> ModelRequestContext:
+            if agents_instructions is not None:
+                request_context = replace(
+                    request_context,
+                    model_request_parameters=replace(
+                        request_context.model_request_parameters,
+                        instruction_parts=[
+                            InstructionPart(
+                                content=SYSTEM_PROMPT + "\n\n" + agents_instructions
+                            )
+                        ],
+                    ),
+                )
             if ctx.run_step == 1:
                 request_context = replace(
                     request_context,
@@ -685,7 +752,9 @@ class PydanticModelRunner:
                     usage=counted,
                     deps=tools,
                     message_history=history,
-                    model=LiveModel(lambda: model, request.ephemeral, cache_key),
+                    model=LiveModel(
+                        lambda: model, request.ephemeral, cache_key, agents_instructions
+                    ),
                     capabilities=[
                         hooks,
                         *(
@@ -700,11 +769,13 @@ class PydanticModelRunner:
         history_length = len(history)
         error = None
         context_exceeded = False
+        if new_window:
+            request.persist(snapshot)
         with capture_run_messages() as captured, active_trace(trace):
             try:
                 result = asyncio.run(once())
             except Exception as failure:  # noqa: BLE001
-                messages = request.history_json
+                messages = snapshot
                 if captured:
                     messages = ModelMessagesTypeAdapter.dump_json(
                         _settle_tool_calls(captured)

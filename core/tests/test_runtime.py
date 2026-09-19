@@ -985,8 +985,8 @@ def test_second_model_call_failure_keeps_saved_response_and_completed_tool_retur
                     )
                 ]
             )
-        assert len(persisted) == 1
-        assert world.history.latest_messages(MAIN) == persisted[0]
+        assert len(persisted) == 2
+        assert world.history.latest_messages(MAIN) == persisted[1]
         raise RuntimeError("second call failed")
 
     monkeypatch.setattr(world.history, "save_progress", save_progress)
@@ -997,8 +997,8 @@ def test_second_model_call_failure_keeps_saved_response_and_completed_tool_retur
     record = scheduler.run_turn(MAIN)
     assert record is not None and record.status == "failed"
     assert record.error == "RuntimeError: second call failed"
-    assert calls == 2 and len(persisted) == 1
-    saved = ModelMessagesTypeAdapter.validate_json(persisted[0])
+    assert calls == 2 and len(persisted) == 2
+    saved = ModelMessagesTypeAdapter.validate_json(persisted[1])
     run = world.history.runs(MAIN)[0]
     captured = ModelMessagesTypeAdapter.validate_json(run.messages_json)
     assert captured[:-1] == saved[:-1]
@@ -1470,3 +1470,188 @@ def test_the_limit_is_per_agent_not_shared(world) -> None:
     scheduler = Scheduler(world, RecordingRunner())
     assert scheduler.over_token_limit(HELPER)
     assert scheduler.runnable_agents() == (MAIN,)
+
+
+@pytest.mark.parametrize(
+    "global_text,member_text",
+    [
+        (None, None),
+        (" \t\n", ""),
+        ("全局\n ", "\n 成员😀\t "),
+        (None, "member"),
+        ("global", None),
+    ],
+)
+def test_agents_instructions_are_read_only_at_window_creation(
+    world, tmp_path, global_text, member_text
+):
+    from pydantic_ai.messages import ModelResponse, TextPart
+    from pydantic_ai.models.function import FunctionModel
+
+    from huddol.adapters.model.prompt import SYSTEM_PROMPT
+    from huddol.adapters.model.runner import PydanticModelRunner
+
+    global_path = tmp_path / "library" / "AGENTS.md"
+    member_path = world.workspace_tree_for(MAIN).root / "AGENTS.md"
+    other_path = world.workspace_tree_for(HELPER).root / "AGENTS.md"
+    other_path.write_text("must not leak", encoding="utf-8")
+    for path, text in ((global_path, global_text), (member_path, member_text)):
+        if text is not None:
+            path.write_text(text, encoding="utf-8")
+    world.settings.set_settings(
+        "model",
+        {"base_url": "https://example.invalid", "api_key": "unused", "model": "local"},
+    )
+    seen = []
+
+    def respond(messages, info):
+        seen.append(info.model_request_parameters.instruction_parts[0].content)
+        return ModelResponse(parts=[TextPart("done")])
+
+    def scheduler():
+        return Scheduler(
+            world,
+            PydanticModelRunner(
+                world.settings, build_model=lambda config: FunctionModel(respond)
+            ),
+        )
+
+    room = mention(world)
+    assert scheduler().run_turn(MAIN).status == "completed"
+    parts = [
+        text for text in (global_text, member_text) if text is not None and text.strip()
+    ]
+    expected = SYSTEM_PROMPT + ("\n\n" + "\n\n".join(parts) if parts else "")
+    assert seen == [expected]
+    for path, text in ((global_path, global_text), (member_path, member_text)):
+        assert path.exists() == (text is not None)
+        if text is not None:
+            assert path.read_bytes() == text.encode("utf-8")
+        path.write_bytes(b"\xff")
+    world.store.append_message(room, HUMAN, "@Main next turn")
+    assert scheduler().run_turn(MAIN).status == "completed"
+    assert seen == [expected, expected]
+    global_path.write_text("new global", encoding="utf-8")
+    member_path.write_text("new member\n ", encoding="utf-8")
+    world.history.reset_window(MAIN, "prepared")
+    world.store.append_message(room, HUMAN, "@Main new window")
+    assert scheduler().run_turn(MAIN).status == "completed"
+    assert seen[-1] == SYSTEM_PROMPT + "\n\nnew global\n\nnew member\n "
+
+
+@pytest.mark.parametrize("bad_global", [False, True])
+def test_unreadable_agents_file_fails_and_safety_pauses_before_model(
+    world, tmp_path, bad_global
+):
+    target = (
+        tmp_path / "library" if bad_global else world.workspace_tree_for(MAIN).root
+    ) / "AGENTS.md"
+    target.write_bytes(b"\xff")
+    mention(world)
+    runner = RecordingRunner()
+    record = Scheduler(world, runner).run_turn(MAIN)
+    assert record.status == "failed"
+    assert str(target) in record.error
+    assert "UTF-8" in record.error
+    assert world.history.pause_reason(MAIN) == "runtime_error"
+    assert runner.requests == []
+    assert target.read_bytes() == b"\xff"
+
+
+def test_process_interruption_before_response_recovers_saved_window_snapshot(
+    world, tmp_path
+):
+    import subprocess
+    import textwrap
+
+    from pydantic_ai.messages import ModelResponse, TextPart
+    from pydantic_ai.models.function import FunctionModel
+
+    from huddol.adapters.model.prompt import SYSTEM_PROMPT
+    from huddol.adapters.model.runner import PydanticModelRunner
+
+    world.settings.set_settings(
+        "model",
+        {"base_url": "https://example.invalid", "api_key": "unused", "model": "local"},
+    )
+    child = textwrap.dedent("""
+        import os, sys
+        from huddol.adapters.sqlite.store import SqliteStore
+        from huddol.adapters.sqlite.agent import SqliteAgentStore
+        from huddol.adapters.model.runner import PydanticModelRunner
+        from huddol.runtime.reminder import TurnRequest
+        from pydantic_ai.models.function import FunctionModel
+        store = SqliteStore(sys.argv[1])
+        history = SqliteAgentStore(store._db)
+        run = history.start_run(2, reminded=[])
+        request = TurnRequest(agent_id=2, sequence=run.sequence, agent_name="Main", prompt="work", reminder=None,
+            history_json="[]", resident="resident", environment=lambda: None, ephemeral=lambda: "",
+            persist=lambda raw: history.save_progress(2, run.sequence, raw), agents_instructions="snapshot\\n ")
+        def interrupt(messages, info):
+            os._exit(77)
+        PydanticModelRunner(history, build_model=lambda config: FunctionModel(interrupt)).run(request, None)
+    """)
+    result = subprocess.run(
+        [sys.executable, "-c", child, str(tmp_path / "huddol.sqlite3")],
+        check=False,
+        timeout=30,
+        capture_output=True,
+    )
+    assert result.returncode == 77, result.stderr.decode()
+    world.history.mark_interrupted()
+    (tmp_path / "library" / "AGENTS.md").write_bytes(b"\xff")
+    seen = []
+
+    def respond(messages, info):
+        seen.append(info.model_request_parameters.instruction_parts[0].content)
+        return ModelResponse(parts=[TextPart("recovered")])
+
+    mention(world)
+    runner = PydanticModelRunner(
+        world.settings, build_model=lambda config: FunctionModel(respond)
+    )
+    record = Scheduler(world, runner).run_turn(MAIN)
+    assert record.status == "completed"
+    assert seen == [SYSTEM_PROMPT + "\n\nsnapshot\n "]
+
+
+def test_agents_file_changed_during_tool_call_waits_for_next_window(world, tmp_path):
+    from pydantic_ai.messages import ModelResponse, TextPart, ToolCallPart
+    from pydantic_ai.models.function import FunctionModel
+
+    from huddol.adapters.model.prompt import SYSTEM_PROMPT
+    from huddol.adapters.model.runner import PydanticModelRunner
+
+    path = tmp_path / "library" / "AGENTS.md"
+    path.write_text("before\n ", encoding="utf-8")
+    world.settings.set_settings(
+        "model",
+        {"base_url": "https://example.invalid", "api_key": "unused", "model": "local"},
+    )
+    room = mention(world)
+    seen = []
+
+    def respond(messages, info):
+        seen.append(info.model_request_parameters.instruction_parts[0].content)
+        if len(seen) == 1:
+            path.write_bytes(b"\xff")
+            return ModelResponse(
+                parts=[ToolCallPart("organization", {"action": "list_members"})]
+            )
+        return ModelResponse(parts=[TextPart("done")])
+
+    scheduler = Scheduler(
+        world,
+        PydanticModelRunner(
+            world.settings, build_model=lambda config: FunctionModel(respond)
+        ),
+    )
+    assert scheduler.run_turn(MAIN).status == "completed"
+    world.store.append_message(room, HUMAN, "@Main again")
+    assert scheduler.run_turn(MAIN).status == "completed"
+    assert seen == [SYSTEM_PROMPT + "\n\nbefore\n "] * 3
+    world.history.reset_window(MAIN, "prepared")
+    world.store.append_message(room, HUMAN, "@Main new window")
+    record = scheduler.run_turn(MAIN)
+    assert record.status == "failed" and str(path) in record.error
+    assert len(seen) == 3

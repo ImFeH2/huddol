@@ -18,6 +18,7 @@ from huddol.runtime.reminder import (
     TurnRequest,
     build_reminder,
     exchange_nudge,
+    read_agents_instructions,
     render_resident,
     reset_notice,
 )
@@ -265,7 +266,18 @@ class Scheduler:
         context_exceeded = False
         pause_reason: str | None = None
         try:
-            request = replace(request, resident=self.resident_block(agent_id))
+            request = replace(
+                request,
+                resident=self.resident_block(agent_id),
+                agents_instructions=(
+                    read_agents_instructions(
+                        self._deps.library_tree,
+                        self._deps.workspace_tree_for(agent_id),
+                    )
+                    if not json.loads(request.history_json)
+                    else None
+                ),
+            )
             outcome = self._runner.run(
                 request,
                 self.tools_for_actor(

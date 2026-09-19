@@ -23,6 +23,7 @@ from pydantic_ai.messages import (
     ModelRequest,
     ModelResponse,
     RetryPromptPart,
+    SystemPromptPart,
     TextPart,
     ToolCallPart,
     ToolReturnPart,
@@ -246,8 +247,8 @@ def test_exhausted_tool_retries_settle_failure_history_and_allow_next_turn(
         settings, build_model=lambda config: FunctionModel(respond)
     ).run(replace(request(), persist=persisted.append), Tools())
     assert outcome.error is not None and "exceeded max retries" in outcome.error
-    assert len(calls) == len(persisted) == 3
-    for raw, call in zip(persisted, calls, strict=True):
+    assert len(calls) == len(persisted) - 1 == 3
+    for raw, call in zip(persisted[1:], calls, strict=True):
         assert_settlement(ModelMessagesTypeAdapter.validate_json(raw)[-1], [call])
     saved = ModelMessagesTypeAdapter.validate_json(outcome.messages_json)
     assert saved[-2].parts == [calls[-1]]
@@ -294,7 +295,7 @@ def test_each_response_persists_the_complete_history_without_ephemeral(
     environment = "environment A"
 
     def respond(messages, info):
-        assert len(persisted) == len(responses)
+        assert len(persisted) - (not prior) == len(responses)
         response = ModelResponse(
             parts=[
                 ToolCallPart(
@@ -312,7 +313,7 @@ def test_each_response_persists_the_complete_history_without_ephemeral(
     class Tools:
         def list_members(self):
             nonlocal environment
-            assert len(persisted) == 1
+            assert len(persisted) == 1 + (not prior)
             environment = "environment B"
             return [{"id": 1, "title": "Work"}]
 
@@ -337,15 +338,17 @@ def test_each_response_persists_the_complete_history_without_ephemeral(
         Tools(),
     )
     assert outcome.error is None
-    assert len(persisted) == len(responses) == 2
-    first, second = [ModelMessagesTypeAdapter.validate_json(raw) for raw in persisted]
+    assert len(persisted) - (not prior) == len(responses) == 2
+    first, second = [
+        ModelMessagesTypeAdapter.validate_json(raw) for raw in persisted[not prior :]
+    ]
     assert (responses[0].usage.cost is not None) == priced
     assert_settlement(first[-1], responses[0].parts)
     assert first[-2] == responses[0]
     assert first[-3].parts[0].content == original.prompt
     assert second == ModelMessagesTypeAdapter.validate_json(outcome.messages_json)
     assert second[: len(first) - 1] == first[:-1]
-    assert "without a confirmed result" not in persisted[1]
+    assert "without a confirmed result" not in persisted[-1]
     assert second[-1] == responses[1]
     assert second[-2].metadata == {
         "huddol": {"block": "durable", "environment": "environment B"}
@@ -362,6 +365,7 @@ def test_each_response_persists_the_complete_history_without_ephemeral(
     assert first[0].metadata == {
         "huddol": {
             "block": "resident",
+            "agents_instructions": None,
             "environment": "environment A",
             "cache_key": cache_key(first),
         }
@@ -384,9 +388,12 @@ def test_persistence_errors_are_logged_without_failing_the_turn(
     def respond(messages, info):
         return ModelResponse(parts=[TextPart("Done")])
 
+    previous = PydanticModelRunner(settings, build_model=Builder()).run(request(), None)
     outcome = PydanticModelRunner(
         settings, build_model=lambda config: FunctionModel(respond)
-    ).run(replace(request(), persist=persist), None)
+    ).run(
+        replace(request(), persist=persist, history_json=previous.messages_json), None
+    )
     assert outcome.error is None
     assert calls == [outcome.messages_json]
     assert any(
@@ -399,7 +406,7 @@ def test_invalid_tool_responses_are_persisted_before_retry(settings) -> None:
     persisted = []
 
     def respond(messages, info):
-        if not persisted:
+        if len(persisted) == 1:
             return ModelResponse(
                 parts=[
                     ToolCallPart("discussion", {"action": "delete", "discussion_id": 1})
@@ -411,9 +418,9 @@ def test_invalid_tool_responses_are_persisted_before_retry(settings) -> None:
         settings, build_model=lambda config: FunctionModel(respond)
     ).run(replace(request(), persist=persisted.append), None)
     assert outcome.error is None
-    assert len(persisted) == 2
-    assert '"tool-call"' in persisted[0]
-    assert '"retry-prompt"' in persisted[1]
+    assert len(persisted) == 3
+    assert '"tool-call"' in persisted[1]
+    assert '"retry-prompt"' in persisted[2]
     assert persisted[-1] == outcome.messages_json
 
 
@@ -533,6 +540,7 @@ def test_resident_is_inserted_only_for_empty_history(settings) -> None:
     assert messages[0].metadata == {
         "huddol": {
             "block": "resident",
+            "agents_instructions": None,
             "environment": "environment A",
             "cache_key": cache_key(messages),
         }
@@ -605,6 +613,7 @@ def test_durable_changes_are_persisted_once_and_survive_runner_restarts(
     assert saved[0].metadata == {
         "huddol": {
             "block": "resident",
+            "agents_instructions": None,
             "environment": initial or "",
             "cache_key": cache_key(saved),
         }
@@ -1574,3 +1583,417 @@ def test_runner_does_not_convert_tool_cancellation_to_failure(settings):
     with pytest.raises(asyncio.CancelledError):
         runner.run(request(), Tools())
     assert module._tool_call.get(None) is None
+
+
+def test_initial_snapshot_persistence_failure_prevents_model_creation(settings):
+    built = []
+
+    def fail(raw):
+        snapshot = ModelMessagesTypeAdapter.validate_json(raw)[0]
+        assert snapshot.metadata["huddol"]["agents_instructions"] == "raw\n "
+        raise OSError("snapshot disk unavailable")
+
+    runner = PydanticModelRunner(
+        settings, build_model=lambda config: built.append(config)
+    )
+    with pytest.raises(OSError, match="snapshot disk unavailable"):
+        runner.run(replace(request(), agents_instructions="raw\n ", persist=fail), None)
+    assert built == []
+
+
+def test_failed_model_creation_keeps_snapshot_for_restart(settings):
+    persisted = []
+
+    def fail(config):
+        raise RuntimeError("build failed")
+
+    outcome = PydanticModelRunner(settings, build_model=fail).run(
+        replace(request(), agents_instructions="original\n ", persist=persisted.append),
+        None,
+    )
+    assert outcome.error == "RuntimeError: build failed"
+    assert outcome.messages_json == persisted[0]
+    seen = []
+
+    def respond(messages, info):
+        seen.append(info.model_request_parameters.instruction_parts[0].content)
+        return ModelResponse(parts=[TextPart("done")])
+
+    restarted = PydanticModelRunner(
+        settings, build_model=lambda config: FunctionModel(respond)
+    )
+    assert (
+        restarted.run(
+            replace(
+                request(),
+                history_json=outcome.messages_json,
+                agents_instructions="changed",
+            ),
+            None,
+        ).error
+        is None
+    )
+    assert seen == [SYSTEM_PROMPT + "\n\noriginal\n "]
+
+
+@pytest.mark.parametrize(
+    "kind,switch",
+    [
+        ("openai-chat", False),
+        ("openai-responses", False),
+        ("anthropic", False),
+        ("google", False),
+        ("openai-chat", True),
+        ("openai-responses", True),
+    ],
+)
+def test_provider_wire_preserves_raw_snapshot_across_tools_turns_and_restart(
+    settings, monkeypatch, kind, switch
+):
+    import httpx
+    import httpx2
+    from anthropic import AsyncAnthropic
+    from openai import AsyncOpenAI
+    from pydantic_ai.models.google import GoogleModel
+    from pydantic_ai.providers.google import GoogleProvider
+
+    monkeypatch.setattr(models, "ALLOW_MODEL_REQUESTS", True)
+    wire = []
+    wire_kinds = []
+    raw = "  全局😀\n\n\t member ${literal}\t \n"
+    settings.set_settings("model", {**model_values("gpt-4o"), "api_type": kind})
+
+    def respond(req):
+        kind = settings.get_settings("model")["api_type"]
+        wire_kinds.append(kind)
+        body = json.loads(req.content)
+        wire.append(body)
+        tool = len(wire) % 2 == 1
+        if kind == "openai-chat":
+            msg = {"role": "assistant", "content": "done"}
+            if tool:
+                msg = {
+                    "role": "assistant",
+                    "tool_calls": [
+                        {
+                            "id": "call",
+                            "type": "function",
+                            "function": {
+                                "name": "organization",
+                                "arguments": '{"action":"list_members"}',
+                            },
+                        }
+                    ],
+                }
+            return httpx.Response(
+                200,
+                json={
+                    "id": "chat",
+                    "object": "chat.completion",
+                    "created": 1,
+                    "model": "gpt-4o",
+                    "choices": [
+                        {
+                            "index": 0,
+                            "message": msg,
+                            "finish_reason": "tool_calls" if tool else "stop",
+                        }
+                    ],
+                },
+            )
+        if kind == "openai-responses":
+            output = (
+                [
+                    {
+                        "id": "fc",
+                        "type": "function_call",
+                        "call_id": "call",
+                        "name": "organization",
+                        "arguments": '{"action":"list_members"}',
+                        "status": "completed",
+                    }
+                ]
+                if tool
+                else [
+                    {
+                        "id": "msg",
+                        "type": "message",
+                        "role": "assistant",
+                        "status": "completed",
+                        "content": [
+                            {"type": "output_text", "text": "done", "annotations": []}
+                        ],
+                    }
+                ]
+            )
+            return httpx.Response(
+                200,
+                json={
+                    "id": f"resp{len(wire)}",
+                    "object": "response",
+                    "created_at": 1,
+                    "model": "gpt-4o",
+                    "status": "completed",
+                    "output": output,
+                    "parallel_tool_calls": True,
+                    "tools": [],
+                    "tool_choice": "auto",
+                },
+            )
+        if kind == "anthropic":
+            content = (
+                [
+                    {
+                        "type": "tool_use",
+                        "id": "call",
+                        "name": "organization",
+                        "input": {"action": "list_members"},
+                    }
+                ]
+                if tool
+                else [{"type": "text", "text": "done"}]
+            )
+            return httpx2.Response(
+                200,
+                json={
+                    "id": "msg",
+                    "type": "message",
+                    "role": "assistant",
+                    "model": "claude-sonnet-4-5",
+                    "content": content,
+                    "stop_reason": "tool_use" if tool else "end_turn",
+                    "usage": {"input_tokens": 10, "output_tokens": 5},
+                },
+            )
+        parts = (
+            [
+                {
+                    "functionCall": {
+                        "name": "organization",
+                        "args": {"action": "list_members"},
+                    }
+                }
+            ]
+            if tool
+            else [{"text": "done"}]
+        )
+        return httpx2.Response(
+            200,
+            json={
+                "candidates": [
+                    {
+                        "content": {"role": "model", "parts": parts},
+                        "finishReason": "STOP",
+                    }
+                ],
+                "usageMetadata": {"promptTokenCount": 10, "candidatesTokenCount": 5},
+            },
+        )
+
+    def build(config):
+        kind = config.api_type
+        if kind == "anthropic":
+            client = AsyncAnthropic(
+                api_key="unused",
+                max_retries=0,
+                http_client=httpx2.AsyncClient(transport=httpx2.MockTransport(respond)),
+            )
+            return AnthropicModel(
+                "claude-sonnet-4-5", provider=AnthropicProvider(anthropic_client=client)
+            )
+        if kind == "google":
+            return GoogleModel(
+                "gemini-2.5-flash",
+                provider=GoogleProvider(
+                    api_key="unused",
+                    http_client=httpx2.AsyncClient(
+                        transport=httpx2.MockTransport(respond)
+                    ),
+                ),
+            )
+        http = httpx.AsyncClient(transport=httpx.MockTransport(respond))
+        provider = OpenAIProvider(
+            openai_client=AsyncOpenAI(api_key="unused", max_retries=0, http_client=http)
+        )
+        return (
+            OpenAIResponsesModel if kind == "openai-responses" else OpenAIChatModel
+        )("gpt-4o", provider=provider)
+
+    class Tools:
+        def list_members(self):
+            if switch:
+                previous = settings.get_settings("model")
+                settings.set_settings(
+                    "model",
+                    {
+                        **previous,
+                        "api_type": "openai-responses"
+                        if previous["api_type"] == "openai-chat"
+                        else "openai-chat",
+                    },
+                )
+            return []
+
+    history = "[]"
+    for index in range(3):
+        if index == 2:
+            history = "[]"
+        runner = PydanticModelRunner(settings, build_model=build)
+        outcome = runner.run(
+            replace(
+                request(),
+                history_json=history,
+                agents_instructions=raw if index == 0 else "new\n ",
+                ephemeral=lambda: "EPHEMERAL",
+            ),
+            Tools(),
+        )
+        assert outcome.error is None
+        history = outcome.messages_json
+        assert not any(
+            isinstance(part, SystemPromptPart)
+            for msg in ModelMessagesTypeAdapter.validate_json(history)
+            for part in msg.parts
+        )
+        assert "EPHEMERAL" not in history
+    assert len(wire) == 6
+    for index, body in enumerate(wire):
+        kind = wire_kinds[index]
+        expected = SYSTEM_PROMPT + "\n\n" + (raw if index < 4 else "new\n ")
+        if kind == "openai-chat":
+            system = [
+                m["content"]
+                for m in body["messages"]
+                if m["role"] in ("system", "developer")
+            ]
+        elif kind == "openai-responses":
+            assert "instructions" not in body
+            system = [
+                m["content"]
+                for m in body["input"]
+                if m.get("role") in ("system", "developer")
+            ]
+        elif kind == "anthropic":
+            system = [part["text"] for part in body["system"]]
+        else:
+            system = [part["text"] for part in body["systemInstruction"]["parts"]]
+        if kind.startswith("openai"):
+            assert (
+                body["prompt_cache_key"] == wire[index - index % 4]["prompt_cache_key"]
+            )
+        assert system == [expected]
+        assert system[0].encode("utf-8") == expected.encode("utf-8")
+
+
+@pytest.mark.parametrize("streaming", [False, True])
+@pytest.mark.parametrize("snapshot", [None, "raw\t \n"])
+def test_responses_conversion_uses_copies_and_preserves_ephemeral_and_settings(
+    streaming, snapshot
+):
+    from contextlib import asynccontextmanager
+    from copy import deepcopy
+
+    from pydantic_ai.messages import InstructionPart
+
+    seen = []
+
+    class Recording(OpenAIResponsesModel):
+        async def request(self, messages, model_settings, model_request_parameters):
+            seen.append((messages, model_settings, model_request_parameters))
+            return ModelResponse(parts=[TextPart("ok")])
+
+        @asynccontextmanager
+        async def request_stream(
+            self, messages, model_settings, model_request_parameters, run_context=None
+        ):
+            seen.append((messages, model_settings, model_request_parameters))
+            yield None
+
+    provider = OpenAIProvider(api_key="unused", base_url="https://example.invalid")
+    wrapped = Recording("gpt-4o", provider=provider)
+    messages = [
+        ModelRequest(
+            parts=[UserPromptPart("resident")], instructions="old history instructions"
+        ),
+        ModelRequest(
+            parts=[UserPromptPart("reminder")], instructions="current instructions"
+        ),
+    ]
+    parameters = ModelRequestParameters(
+        instruction_parts=[InstructionPart(content="current instructions")]
+    )
+    given = {"temperature": 0.5}
+    original = deepcopy((messages, parameters, given))
+    live = LiveModel(lambda: wrapped, lambda: "EPHEMERAL", "key", snapshot)
+
+    async def call():
+        for _ in range(2):
+            if streaming:
+                async with live.request_stream(messages, given, parameters):
+                    pass
+            else:
+                await live.request(messages, given, parameters)
+
+    asyncio.run(call())
+    assert (messages, parameters, given) == original
+    for outgoing, sent_settings, sent_parameters in seen:
+        assert outgoing[-1].parts[-1].content == "EPHEMERAL"
+        assert sent_settings == {"temperature": 0.5, "openai_prompt_cache_key": "key"}
+        if snapshot is None:
+            assert sent_parameters is parameters
+            assert len(outgoing) == len(messages)
+            assert outgoing[0] is messages[0]
+        else:
+            assert len(outgoing) == len(messages) + 1
+            assert len(outgoing[0].parts) == 1
+            assert isinstance(outgoing[0].parts[0], SystemPromptPart)
+            assert outgoing[0].parts[0].content == SYSTEM_PROMPT + "\n\n" + snapshot
+            assert sent_parameters.instruction_parts == []
+            assert all(msg.instructions is None for msg in outgoing)
+
+
+@pytest.mark.parametrize(
+    "metadata",
+    [{"block": "resident"}, {"block": "resident", "agents_instructions": None}],
+)
+def test_old_or_null_window_snapshot_never_uses_new_turn_value(settings, metadata):
+    seen = []
+    history = [
+        ModelRequest(parts=[UserPromptPart("resident")], metadata={"huddol": metadata})
+    ]
+
+    def respond(messages, info):
+        seen.append(info.instructions)
+        return ModelResponse(parts=[TextPart("done")])
+
+    runner = PydanticModelRunner(
+        settings, build_model=lambda config: FunctionModel(respond)
+    )
+    outcome = runner.run(
+        replace(
+            request(),
+            history_json=ModelMessagesTypeAdapter.dump_json(history).decode(),
+            agents_instructions="must not leak",
+        ),
+        None,
+    )
+    assert outcome.error is None
+    assert seen == [SYSTEM_PROMPT]
+
+
+def test_first_model_request_failure_preserves_snapshot(settings):
+    persisted = []
+
+    def fail(messages, info):
+        assert persisted
+        raise RuntimeError("first request failed")
+
+    outcome = PydanticModelRunner(
+        settings, build_model=lambda config: FunctionModel(fail)
+    ).run(
+        replace(request(), agents_instructions="raw\n ", persist=persisted.append), None
+    )
+    assert outcome.error == "RuntimeError: first request failed"
+    resident = ModelMessagesTypeAdapter.validate_json(outcome.messages_json)[0]
+    assert resident.metadata["huddol"]["agents_instructions"] == "raw\n "
+    assert resident == ModelMessagesTypeAdapter.validate_json(persisted[0])[0]

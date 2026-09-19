@@ -4,8 +4,10 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from typing import Protocol
 
+from huddol.core.errors import DomainError
 from huddol.core.mention import Mention
 from huddol.ports.agent import HistoryStore, WindowState
+from huddol.ports.files import FileTree
 from huddol.ports.store import OrganizationStore
 from huddol.tools import AgentTools
 
@@ -155,6 +157,22 @@ def render_resident(
     return "\n\n".join(parts)
 
 
+def read_agents_instructions(*trees: FileTree) -> str | None:
+    parts = []
+    for tree in trees:
+        try:
+            content, _ = tree.read("AGENTS.md")
+        except DomainError as error:
+            if error.code == "not_found":
+                continue
+            raise DomainError(
+                error.code, f"{tree.root / 'AGENTS.md'}: {error}"
+            ) from error
+        if content.strip():
+            parts.append(content)
+    return "\n\n".join(parts) if parts else None
+
+
 @dataclass(frozen=True)
 class TurnRequest:
     agent_id: int
@@ -167,6 +185,7 @@ class TurnRequest:
     environment: Callable[[], str | None]
     ephemeral: Callable[[], str]
     persist: Callable[[str], None]
+    agents_instructions: str | None = None
 
 
 @dataclass(frozen=True)
