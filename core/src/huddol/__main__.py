@@ -248,6 +248,7 @@ def main(argv: list[str] | None = None) -> int:
     store = SqliteStore(directory / "huddol.sqlite3")
     agent_store = SqliteAgentStore(store._db)
     agent_store.mark_interrupted()
+    agent_store.mark_session_start()
 
     if store.get_member(HUMAN_ID) is None:
         store.create_member("human", "You")

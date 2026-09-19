@@ -64,6 +64,33 @@ def test_reminder_snapshot_survives_upgrade_restart_and_window_reset(tmp_path) -
         base.close()
 
 
+def test_a_new_session_reminds_the_same_keys_again(tmp_path) -> None:
+    path = tmp_path / "huddol.sqlite3"
+    base = SqliteStore(path)
+    store = SqliteAgentStore(base._db)
+    run = store.start_run(AGENT, reminded=[(1, 1)])
+    store.finish_run(AGENT, run.sequence, status="completed", messages_json="[]")
+    assert store.last_reminder(AGENT) == frozenset({(1, 1)})
+    assert store.mark_session_start() == 1
+    assert store.last_reminder(AGENT) == frozenset()
+    base.close()
+
+    base = SqliteStore(path)
+    store = SqliteAgentStore(base._db)
+    try:
+        assert store.last_reminder(AGENT) == frozenset()
+        assert store.mark_session_start() == 1
+        assert store.last_reminder(AGENT) == frozenset()
+        assert store.last_reminder(AGENT + 1) == frozenset()
+        store.start_run(AGENT, reminded=[(2, 3)])
+        assert store.last_reminder(AGENT) == frozenset({(2, 3)})
+        store.pause_for_safety(AGENT, "runtime_error")
+        store.reset_safety(AGENT)
+        assert store.last_reminder(AGENT) == frozenset()
+    finally:
+        base.close()
+
+
 def test_safety_pause_and_resume_boundary_survive_reopening(tmp_path) -> None:
     path = tmp_path / "huddol.sqlite3"
     base = SqliteStore(path)

@@ -607,7 +607,7 @@ def test_no_reminder_without_pending_mentions(world) -> None:
 
 
 @pytest.mark.parametrize("fail", [False, True])
-def test_unchanged_mentions_wait_across_restart_and_resume(world, fail) -> None:
+def test_unchanged_mentions_wait_inside_one_session(world, fail) -> None:
     mention(world)
     runner = RecordingRunner(
         lambda request, tools: TurnOutcome(
@@ -619,11 +619,90 @@ def test_unchanged_mentions_wait_across_restart_and_resume(world, fail) -> None:
     world.store.set_agent_state(MAIN, "paused")
     assert scheduler.run_turn(MAIN) is None
     world.store.set_agent_state(MAIN, "idle")
-    restarted = Scheduler(world, runner)
-    for current in (scheduler, restarted):
-        assert current.runnable_agents() == ()
-        assert current.run_turn(MAIN) is None
+    assert scheduler.runnable_agents() == ()
+    assert scheduler.run_turn(MAIN) is None
     assert len(runner.requests) == 1
+
+
+@pytest.mark.parametrize("fail", [False, True])
+def test_a_new_session_continues_unchanged_mentions_once(world, fail) -> None:
+    mention(world)
+    first = RecordingRunner(
+        lambda request, tools: TurnOutcome(
+            messages_json="[]", error="failure" if fail else None
+        )
+    )
+    scheduler = Scheduler(world, first)
+    assert scheduler.run_turn(MAIN) is not None
+    assert scheduler.run_turn(MAIN) is None
+
+    world.history.mark_interrupted()
+    assert world.history.mark_session_start() == 1
+
+    second = RecordingRunner()
+    restart = Scheduler(world, second)
+    assert restart.runnable_agents() == (MAIN,)
+    record = restart.run_turn(MAIN)
+    assert record is not None
+    assert record.status == "completed"
+    reminder = second.requests[0].reminder
+    assert reminder is not None
+    assert [(item.discussion_id, item.message_id) for item in reminder.items] == [
+        (1, 1)
+    ]
+    assert reminder.items[0].previously_reminded
+    assert "[previously reminded]" in second.requests[0].prompt
+    assert restart.runnable_agents() == ()
+    assert restart.run_turn(MAIN) is None
+    assert len(second.requests) == 1
+
+
+def test_a_new_session_reminds_only_the_unhandled_mentions(world) -> None:
+    runner = RecordingRunner(
+        lambda request, tools: TurnOutcome(messages_json="[]", error="no model")
+    )
+    scheduler = Scheduler(world, runner)
+    mention(world)
+    assert scheduler.run_turn(MAIN) is not None
+
+    reviewed = world.store.create_discussion("review", [HUMAN, HELPER])
+    world.store.append_message(reviewed.id, HUMAN, "@Helper please review")
+    assert scheduler.run_turn(HELPER) is not None
+    world.store.ack(reviewed.id, [1], HELPER)
+    assert world.store.pending(HELPER) == ()
+
+    assert world.history.mark_session_start() == 2
+    restarted = Scheduler(world, RecordingRunner())
+    assert restarted.runnable_agents() == (MAIN,)
+    assert restarted.run_turn(HELPER) is None
+
+
+def test_a_new_session_keeps_safety_pauses_and_token_limits(world) -> None:
+    mention(world)
+    runner = RecordingRunner(
+        lambda request, tools: TurnOutcome(messages_json="[]", error="no model")
+    )
+    scheduler = Scheduler(world, runner)
+    assert scheduler.run_turn(MAIN) is not None
+    world.history.mark_session_start()
+
+    world.history.pause_for_safety(MAIN, "runtime_error")
+    world.store.set_agent_state(MAIN, "paused")
+    restarted = Scheduler(world, runner)
+    assert restarted.runnable_agents() == ()
+    assert restarted.run_turn(MAIN) is None
+
+    world.store.set_agent_state(MAIN, "idle")
+    assert restarted.runnable_agents() == ()
+    assert restarted.run_turn(MAIN) is None
+
+    world.history.reset_safety(MAIN)
+    assert restarted.runnable_agents() == (MAIN,)
+
+    world.settings.set_settings("agent", {"token_limit": 10})
+    spend(world, MAIN, 100)
+    assert restarted.over_token_limit(MAIN)
+    assert restarted.runnable_agents() == ()
 
 
 @pytest.mark.parametrize("change", ["partial_ack", "all_ack", "new_mention"])

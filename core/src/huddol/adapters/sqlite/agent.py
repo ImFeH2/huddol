@@ -21,6 +21,10 @@ CREATE TABLE IF NOT EXISTS agent_windows (
     reset_at TEXT,
     reason TEXT
 );
+CREATE TABLE IF NOT EXISTS agent_sessions (
+    agent_id INTEGER PRIMARY KEY,
+    start_after INTEGER NOT NULL
+);
 CREATE TABLE IF NOT EXISTS settings (
     section TEXT PRIMARY KEY,
     values_json TEXT NOT NULL
@@ -92,8 +96,10 @@ class SqliteAgentStore:
                 "SELECT reminded_json FROM agent_runs WHERE agent_id = ?"
                 " AND sequence > COALESCE((SELECT resumed_after FROM agent_safety"
                 " WHERE agent_id = ?), 0)"
+                " AND sequence > COALESCE((SELECT start_after FROM agent_sessions"
+                " WHERE agent_id = ?), 0)"
                 " AND reminded_json != '[]' ORDER BY sequence DESC LIMIT 1",
-                (agent_id, agent_id),
+                (agent_id, agent_id, agent_id),
             )
         )
         return (
@@ -350,6 +356,18 @@ class SqliteAgentStore:
                 (self._now(),),
             )
         return cursor.rowcount
+
+    def mark_session_start(self) -> int:
+        rows = self._db.execute(
+            "SELECT agent_id, MAX(sequence) FROM agent_runs GROUP BY agent_id"
+        )
+        with self._db:
+            self._db.executemany(
+                "INSERT INTO agent_sessions (agent_id, start_after) VALUES (?, ?)"
+                " ON CONFLICT (agent_id) DO UPDATE SET start_after = excluded.start_after",
+                [(int(row[0]), int(row[1])) for row in rows],
+            )
+        return len(rows)
 
     def search_runs(
         self, agent_id: int, query: str, *, limit: int = 20
