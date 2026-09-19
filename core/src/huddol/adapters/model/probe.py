@@ -18,7 +18,7 @@ from huddol.core.errors import DomainError
 LIST_TIMEOUT = 15.0
 TEST_TIMEOUT = 60.0
 TEST_PROMPT = "Reply with the single word OK."
-TEST_MAX_TOKENS = 16
+TEST_MAX_TOKENS = 2048
 
 Lister = Callable[[ModelConfig], Awaitable[Iterable[str]]]
 Builder = Callable[[ModelConfig], Model]
