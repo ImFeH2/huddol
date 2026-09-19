@@ -197,7 +197,7 @@ mod tests {
         let launcher = launcher(true, Path::new("repo/core"), Path::new("resources"));
         assert_eq!(launcher.program, Path::new("uv"));
         assert_eq!(
-            launcher.args,
+            launcher.args[..7],
             [
                 "run",
                 "--project",
@@ -205,9 +205,12 @@ mod tests {
                 "python",
                 "-m",
                 "huddol",
-                "--webui-dir",
-                "repo/webui/dist"
+                "--webui-dir"
             ]
+        );
+        assert_eq!(
+            Path::new(&launcher.args[7]),
+            Path::new("repo").join("webui/dist")
         );
     }
 
