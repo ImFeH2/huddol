@@ -78,7 +78,12 @@ describe("Model settings", () => {
         <ModelPanel />
       </TooltipProvider>,
     );
-    for (const label of ["OpenAI", "OpenAI Responses", "Anthropic", "Google"]) {
+    for (const label of [
+      "OpenAI Chat",
+      "OpenAI Responses",
+      "Anthropic",
+      "Google",
+    ]) {
       expect(html).toMatch(
         new RegExp(`<button[^>]*aria-pressed="false"[^>]*>${label}</button>`),
       );
