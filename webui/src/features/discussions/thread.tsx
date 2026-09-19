@@ -92,10 +92,16 @@ function ThreadSession({ id }: { id: number }) {
       thread.view(visible, virtual.isAtEnd());
       if (document.visibilityState === "visible" && visible.length)
         void thread.markRead(Math.max(...visible)).catch(() => {});
-      if (paginate && !thread.failed) {
-        if (root.scrollTop < root.clientHeight && current.hasBefore)
+      if (!thread.failed && !thread.loading) {
+        if (
+          current.hasBefore &&
+          root.clientHeight > 0 &&
+          (virtual.getTotalSize() <= root.clientHeight ||
+            (paginate && root.scrollTop < root.clientHeight))
+        )
           void thread.request("before");
         else if (
+          paginate &&
           root.scrollHeight - root.scrollTop - root.clientHeight <
             root.clientHeight &&
           current.hasAfter
@@ -129,9 +135,12 @@ function ThreadSession({ id }: { id: number }) {
   useEffect(() => {
     const tick = requestAnimationFrame(() => sample());
     const changed = () => sample();
+    const observer = new ResizeObserver(changed);
+    if (scroll.current) observer.observe(scroll.current);
     document.addEventListener("visibilitychange", changed);
     return () => {
       cancelAnimationFrame(tick);
+      observer.disconnect();
       document.removeEventListener("visibilitychange", changed);
     };
   }, [sample, items]);

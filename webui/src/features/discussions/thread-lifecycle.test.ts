@@ -153,6 +153,56 @@ describe("thread request lifetimes with hook effects driven explicitly", () => {
     expect(backend.discussionPage).toHaveBeenCalledTimes(2);
   });
 
+  it("deduplicates backfill requests, preserves the divider and never reads prefetched history", async () => {
+    vi.mocked(backend.discussionPage).mockResolvedValueOnce({
+      ...result,
+      messages: [{ ...result.messages[0], id: 148 }],
+      first_unread_id: 148,
+      latest_id: 148,
+      read_through: 147,
+      has_before: true,
+    });
+    const hook = mount();
+    await settle();
+    const pending = deferred<DiscussionPage>();
+    vi.mocked(backend.discussionPage).mockReturnValueOnce(pending.promise);
+    const first = hook.request("before");
+    await hook.request("before");
+    expect(backend.discussionPage).toHaveBeenCalledTimes(2);
+    expect(backend.discussionPage).toHaveBeenLastCalledWith(1, {
+      before: 148,
+      limit: 50,
+    });
+    pending.resolve({ ...result, latest_id: 148, read_through: 147 });
+    await first;
+    expect(hook.current.current?.messages.map((message) => message.id)).toEqual(
+      [1, 148],
+    );
+    expect(hook.current.current?.divider).toBe(148);
+    expect(hook.current.current?.readThrough).toBe(147);
+    expect(backend.markRead).not.toHaveBeenCalled();
+    await hook.request("before");
+    expect(backend.discussionPage).toHaveBeenCalledTimes(2);
+  });
+
+  it("discards an in-flight backfill after leaving the thread", async () => {
+    vi.mocked(backend.discussionPage).mockResolvedValueOnce({
+      ...result,
+      has_before: true,
+    });
+    const hook = mount();
+    await settle();
+    const snapshot = hook.current.current;
+    const pending = deferred<DiscussionPage>();
+    vi.mocked(backend.discussionPage).mockReturnValueOnce(pending.promise);
+    const request = hook.request("before");
+    cleanups[0]();
+    pending.resolve({ ...result, messages: [] });
+    await request;
+    expect(hook.current.current).toBe(snapshot);
+    expect(backend.markRead).not.toHaveBeenCalled();
+  });
+
   it("keeps a failed reading submission unconfirmed until explicit retry", async () => {
     vi.mocked(backend.markRead).mockRejectedValueOnce(new Error("read failed"));
     const hook = mount();
