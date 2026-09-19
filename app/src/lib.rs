@@ -33,8 +33,8 @@ pub fn launcher(development: bool, project: &Path, resources: &Path) -> Launcher
                 "python".into(),
                 "-m".into(),
                 "huddol".into(),
-                "--web-dir".into(),
-                parent.join("web/dist").to_string_lossy().into_owned(),
+                "--webui-dir".into(),
+                parent.join("webui/dist").to_string_lossy().into_owned(),
             ],
             env,
         }
@@ -205,8 +205,8 @@ mod tests {
                 "python",
                 "-m",
                 "huddol",
-                "--web-dir",
-                "repo/web/dist"
+                "--webui-dir",
+                "repo/webui/dist"
             ]
         );
     }

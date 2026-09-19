@@ -1,5 +1,5 @@
 {
-  "name": "huddol-web",
+  "name": "huddol-webui",
   "version": "0.0.2",
   "description": "Run your own organization of agents.",
   "private": true,

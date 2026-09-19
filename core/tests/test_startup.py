@@ -29,7 +29,7 @@ def test_explicit_options_override_the_environment(tmp_path: Path) -> None:
         env={
             "HUDDOL_PORT": "0",
             "HUDDOL_TOKEN": "from-environment",
-            "HUDDOL_WEB_DIR": str(tmp_path / "environment-web"),
+            "HUDDOL_WEBUI_DIR": str(tmp_path / "environment-webui"),
         },
         arguments=[
             "--data-dir",
@@ -47,12 +47,12 @@ def test_explicit_options_override_the_environment(tmp_path: Path) -> None:
         assert kernel.shutdown() == 0, kernel.stderr
 
 
-def test_the_web_directory_option_replaces_the_environment(tmp_path: Path) -> None:
+def test_the_webui_directory_option_replaces_the_environment(tmp_path: Path) -> None:
     served = frontend(tmp_path / "served")
     with Kernel(
         tmp_path / "data",
-        env={"HUDDOL_WEB_DIR": str(tmp_path / "ignored")},
-        arguments=["--web-dir", str(served)],
+        env={"HUDDOL_WEBUI_DIR": str(tmp_path / "ignored")},
+        arguments=["--webui-dir", str(served)],
     ) as kernel:
         status, content_type, body = kernel.http("/")
         assert status == 200
@@ -64,7 +64,7 @@ def test_the_web_directory_option_replaces_the_environment(tmp_path: Path) -> No
 def test_core_without_a_frontend_serves_only_the_websocket_endpoint(
     tmp_path: Path,
 ) -> None:
-    with Kernel(tmp_path / "data", env={"HUDDOL_WEB_DIR": ""}) as kernel:
+    with Kernel(tmp_path / "data", env={"HUDDOL_WEBUI_DIR": ""}) as kernel:
         assert kernel.http("/")[0] == 404
         assert kernel.http("/assets/app.js")[0] == 404
         assert kernel.http("/ws")[0] == 401
@@ -111,7 +111,7 @@ def test_the_default_transport_is_websocket(
     tmp_path: Path, arguments: list[str]
 ) -> None:
     with Kernel(
-        tmp_path / "data", env={"HUDDOL_WEB_DIR": ""}, arguments=arguments
+        tmp_path / "data", env={"HUDDOL_WEBUI_DIR": ""}, arguments=arguments
     ) as kernel:
         assert kernel.ready["type"] == "ready"
         assert "port" in kernel.ready

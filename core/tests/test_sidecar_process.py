@@ -30,7 +30,7 @@ class Kernel:
         *,
         cwd: Path | None = None,
         env: dict[str, str] | None = None,
-        web_directory: Path | None = None,
+        webui_directory: Path | None = None,
         stdin: int = subprocess.PIPE,
         arguments: Sequence[str] = (),
     ) -> None:
@@ -41,7 +41,7 @@ class Kernel:
         self._env = {
             "HUDDOL_DATA_DIR": str(data_directory),
             "HUDDOL_PORT": "0",
-            "HUDDOL_WEB_DIR": str(web_directory or data_directory / "no-web"),
+            "HUDDOL_WEBUI_DIR": str(webui_directory or data_directory / "no-webui"),
             "PATH": os.environ["PATH"]
             if os.name == "nt"
             else "/usr/bin:/bin:/usr/local/bin",
@@ -885,7 +885,7 @@ def test_events_are_broadcast_to_every_connection(tmp_path: Path) -> None:
 
 
 def test_the_frontend_is_served_when_it_is_built(tmp_path: Path, dist: Path) -> None:
-    with Kernel(tmp_path / "data", web_directory=dist) as kernel:
+    with Kernel(tmp_path / "data", webui_directory=dist) as kernel:
         index = dist.joinpath("index.html").read_bytes()
         for path in ("/", "/settings", "/discussions/3?x=1"):
             status, content_type, body = kernel.http(path)

@@ -9,9 +9,9 @@ datas.extend(
     (f"src/{source}", str(PurePosixPath("execution", source).parent))
     for source in COMPONENT_SOURCES
 )
-web = Path(SPECPATH, "..", "web", "dist")
-if web.is_dir():
-    datas.append((str(web), "web"))
+webui = Path(SPECPATH, "..", "webui", "dist")
+if webui.is_dir():
+    datas.append((str(webui), "webui"))
 
 
 a = Analysis(

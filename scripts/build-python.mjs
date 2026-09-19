@@ -3,10 +3,10 @@ import { resolve } from "node:path";
 import { root, run } from "./process.mjs";
 
 const packages = resolve(root, "dist", "python");
-const frontend = resolve(root, "web", "dist");
+const frontend = resolve(root, "webui", "dist");
 const static_ = resolve(root, "web", "huddol_web", "static");
 
-run("pnpm", ["build:web"]);
+run("pnpm", ["build:webui"]);
 
 rmSync(static_, { force: true, recursive: true });
 mkdirSync(static_, { recursive: true });

@@ -6,7 +6,7 @@ pre-commit:
       run: pnpm format:config:check && pnpm check:config
 
     - name: web
-      run: pnpm format:web:check && pnpm check:web && pnpm test:web
+      run: pnpm format:webui:check && pnpm check:webui && pnpm test:webui
 
     - name: core
       run: pnpm format:core:check && pnpm check:core && pnpm test:core

@@ -39,12 +39,12 @@ CONTENT_TYPES = {
 log = logging.getLogger(__name__)
 
 
-def web_directory(override: str | None = None) -> Path | None:
+def webui_directory(override: str | None = None) -> Path | None:
     if override:
         return Path(override).expanduser().resolve()
     bundle = getattr(sys, "_MEIPASS", None)
     if bundle:
-        return Path(bundle) / "web"
+        return Path(bundle) / "webui"
     return None
 
 

@@ -1,6 +1,6 @@
 packages:
   - app
-  - web
+  - webui
 
 allowBuilds:
   edgedriver: false

@@ -23,7 +23,7 @@ if TYPE_CHECKING:
 DATA_DIRECTORY_ENV = "HUDDOL_DATA_DIR"
 PORT_ENV = "HUDDOL_PORT"
 TOKEN_ENV = "HUDDOL_TOKEN"
-WEB_DIRECTORY_ENV = "HUDDOL_WEB_DIR"
+WEBUI_DIRECTORY_ENV = "HUDDOL_WEBUI_DIR"
 DEVELOPMENT_PORT = 2461
 ALREADY_RUNNING = 2
 WEBSOCKET = "websocket"
@@ -65,9 +65,9 @@ def parse_arguments(argv: Sequence[str]) -> argparse.Namespace:
         help="websocket token (default: the data directory's token file)",
     )
     parser.add_argument(
-        "--web-dir",
-        default=os.environ.get(WEB_DIRECTORY_ENV) or None,
-        help="directory with a built frontend to serve beside the websocket endpoint",
+        "--webui-dir",
+        default=os.environ.get(WEBUI_DIRECTORY_ENV) or None,
+        help="directory with a built interface to serve beside the websocket endpoint",
     )
     return parser.parse_args(argv)
 
@@ -230,7 +230,7 @@ def main(argv: list[str] | None = None) -> int:
     from huddol.adapters.model.runner import PydanticModelRunner
     from huddol.adapters.sqlite.agent import SqliteAgentStore
     from huddol.adapters.sqlite.store import SqliteStore
-    from huddol.adapters.websocket.server import WebServer, web_directory
+    from huddol.adapters.websocket.server import WebServer, webui_directory
     from huddol.runtime.scheduler import Scheduler
     from huddol.tools import Dependencies
 
@@ -307,7 +307,7 @@ def main(argv: list[str] | None = None) -> int:
         server = WebServer(
             dispatcher,
             token,
-            web_directory(options.web_dir),
+            webui_directory(options.webui_dir),
             port=options.port,
         )
         server.start()

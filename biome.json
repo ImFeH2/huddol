@@ -17,7 +17,7 @@
             "patterns": [
               {
                 "group": ["@radix-ui/**"],
-                "message": "Radix primitives are wrapped in web/src/components/ui."
+                "message": "Radix primitives are wrapped in webui/src/components/ui."
               }
             ]
           }
@@ -27,7 +27,7 @@
   },
   "overrides": [
     {
-      "includes": ["web/src/components/ui/**"],
+      "includes": ["webui/src/components/ui/**"],
       "linter": {
         "rules": {
           "style": {
