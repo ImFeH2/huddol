@@ -430,7 +430,7 @@ def test_runs_are_unavailable_until_a_model_is_configured() -> None:
         assert builder.calls == []
 
 
-def test_the_next_turn_picks_up_settings_and_reuses_unchanged_models(settings) -> None:
+def test_the_next_turn_picks_up_settings_with_its_own_model(settings) -> None:
     builder = Builder()
     runner = PydanticModelRunner(settings, build_model=builder)
     agent = runner._agent
@@ -444,13 +444,13 @@ def test_the_next_turn_picks_up_settings_and_reuses_unchanged_models(settings) -
             .content
             == name
         )
-    assert [config.model for config in builder.calls] == ["first", "second"]
+    assert [config.model for config in builder.calls] == ["first", "first", "second"]
     assert runner._agent is agent
     settings.set_settings(
         "model", {**model_values("second"), "compaction_threshold": 9}
     )
     assert runner.run(request(), None).error is None
-    assert len(builder.calls) == 2
+    assert len(builder.calls) == 4
     settings.set_settings("model", {})
     assert runner.run(request(), None).error == UNAVAILABLE
 
@@ -681,7 +681,7 @@ def test_observability_is_reused_replaced_and_shutdown_per_turn(settings) -> Non
     settings.set_settings("observability", {**tracing, "enabled": False})
     assert runner.run(request(), None).error is None
     assert exporters[1].stopped
-    assert len(builder.calls) == 1
+    assert len(builder.calls) == 5
 
 
 def test_observability_changes_during_a_turn_apply_to_the_next_turn(settings) -> None:
@@ -731,7 +731,7 @@ def test_observability_changes_during_a_turn_apply_to_the_next_turn(settings) ->
     assert exporters[0].stopped
 
 
-def test_concurrent_turns_build_the_model_once(settings) -> None:
+def test_concurrent_turns_build_separate_models(settings) -> None:
     release = threading.Event()
     builder = Builder(delay=release)
     runner = PydanticModelRunner(settings, build_model=builder)
@@ -747,7 +747,7 @@ def test_concurrent_turns_build_the_model_once(settings) -> None:
     for thread in threads:
         thread.join(timeout=5)
         assert not thread.is_alive()
-    assert len(builder.calls) == 1
+    assert len(builder.calls) == 4
     assert len(seen) == 4
     assert all(outcome.error is None for outcome in seen)
 

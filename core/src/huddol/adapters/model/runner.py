@@ -7,7 +7,7 @@ import logging
 import threading
 import uuid
 from collections.abc import AsyncIterator, Awaitable, Callable, Iterator, Sequence
-from contextlib import asynccontextmanager, contextmanager
+from contextlib import AsyncExitStack, asynccontextmanager, contextmanager
 from contextvars import ContextVar
 from dataclasses import replace
 from functools import wraps
@@ -327,8 +327,6 @@ class PydanticModelRunner:
         self._build_model = build_model
         self._build_observability = build_observability
         self._lock = threading.Lock()
-        self._config: ModelConfig | None = None
-        self._model: Model | None = None
         self._tracing: ObservabilityConfig | None = None
         self._observability: Observability | None = None
         self._agent: Agent[AgentTools, str] = Agent(
@@ -340,17 +338,6 @@ class PydanticModelRunner:
             tools=[_web_search_tool()],
         )
         self._register()
-
-    def _resolve_model(self) -> Model:
-        with self._lock:
-            config = ModelConfig.restore(self._settings.get_settings("model"))
-            if config is None:
-                raise DomainError("model_unavailable", UNAVAILABLE)
-            if config != self._config:
-                self._model = self._build_model(config)
-                self._config = config
-            assert self._model is not None
-            return self._model
 
     def _register(self) -> None:
         agent = self._agent
@@ -672,21 +659,42 @@ class PydanticModelRunner:
         counted = RunUsage()
 
         async def once() -> Any:
-            return await self._agent.run(
-                request.prompt,
-                usage=counted,
-                deps=tools,
-                message_history=history,
-                model=LiveModel(self._resolve_model, request.ephemeral, cache_key),
-                capabilities=[
-                    hooks,
-                    *(
-                        [observability.instrumentation()]
-                        if observability is not None
-                        else []
-                    ),
-                ],
-            )
+            async with AsyncExitStack() as resources:
+                current_config = config
+                model = await resources.enter_async_context(
+                    self._build_model(current_config)
+                )
+
+                @hooks.on.before_model_request
+                async def refresh_model(
+                    ctx: RunContext[AgentTools], request_context: ModelRequestContext
+                ) -> ModelRequestContext:
+                    nonlocal current_config, model
+                    updated = ModelConfig.restore(self._settings.get_settings("model"))
+                    if updated is None:
+                        raise DomainError("model_unavailable", UNAVAILABLE)
+                    if updated != current_config:
+                        model = await resources.enter_async_context(
+                            self._build_model(updated)
+                        )
+                        current_config = updated
+                    return request_context
+
+                return await self._agent.run(
+                    request.prompt,
+                    usage=counted,
+                    deps=tools,
+                    message_history=history,
+                    model=LiveModel(lambda: model, request.ephemeral, cache_key),
+                    capabilities=[
+                        hooks,
+                        *(
+                            [observability.instrumentation()]
+                            if observability is not None
+                            else []
+                        ),
+                    ],
+                )
 
         trace = TurnTrace.of(request)
         history_length = len(history)
