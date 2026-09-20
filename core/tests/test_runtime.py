@@ -359,7 +359,7 @@ def test_lowering_the_window_budget_schedules_preparation(world, monkeypatch) ->
 @pytest.mark.parametrize(
     "preparation_status", ["completed", "failed", "exception", "overflow"]
 )
-def test_preparation_runs_without_pending_and_resets_after_any_outcome(
+def test_preparation_runs_without_pending_and_resets_after_completion(
     world, first_status, preparation_status
 ) -> None:
     room = mention(world)
@@ -404,6 +404,15 @@ def test_preparation_runs_without_pending_and_resets_after_any_outcome(
     assert runner.requests[-1].reminder is None
     assert runner.requests[-1].history_json == '[{"text":"saved"}]'
     state = world.history.window(MAIN)
+    if preparation_status != "completed":
+        assert state.number == 1 and state.since_sequence == 1
+        assert not any(name == "window.reset" for name, _ in events)
+        expected = "saved" if preparation_status == "exception" else "notes saved"
+        assert json.loads(world.history.latest_messages(MAIN)) == [{"text": expected}]
+        assert world.store.get_member(MAIN).state == (
+            "paused" if preparation_status == "exception" else "idle"
+        )
+        return
     assert state.number == 2 and state.since_sequence == 3
     assert state.reason == "prepared" and state.reset_at is not None
     assert world.history.latest_messages(MAIN) == "[]"
@@ -942,28 +951,60 @@ def test_resident_carries_workspace_and_environment(world, tmp_path: Path) -> No
     )
 
 
+@pytest.mark.parametrize("preparation", [False, True])
 @pytest.mark.parametrize("error_kind", ["os", "domain"])
-def test_resident_renders_when_workspace_index_creation_fails(
-    world, monkeypatch, error_kind
+def test_resident_creation_failure_preserves_window_and_other_agents(
+    world, monkeypatch, error_kind, preparation
 ) -> None:
     from huddol.core.errors import DomainError
 
+    room = mention(world)
+    world.settings.set_settings("agent", {"context_window_tokens": 100})
+
+    def respond(request, tools):
+        tools.read_discussion(room)
+        tools.ack(room, [1])
+        return TurnOutcome(
+            messages_json='[{"text":"saved"}]',
+            usage_json=json.dumps({"last_input_tokens": 100 if preparation else 1}),
+        )
+
+    runner = RecordingRunner(respond)
+    scheduler = Scheduler(world, runner)
+    assert scheduler.run_turn(MAIN).status == "completed"
+    previous = world.history.latest_messages(MAIN)
+    window = world.history.window(MAIN)
     tree = world.workspace_tree_for(MAIN)
+    (tree.root / "MEMORY.md").unlink()
 
     def fail(*args, **kwargs):
         if error_kind == "os":
             raise OSError("Read-only filesystem")
         raise DomainError("invalid_path", "Cannot create index")
 
+    original = world.workspace_tree_for
     monkeypatch.setattr(tree, "write", fail)
-    monkeypatch.setattr(world, "workspace_tree_for", lambda agent_id: tree)
-    mention(world)
-    runner = RecordingRunner()
-    record = Scheduler(world, runner).run_turn(MAIN)
-    assert record.status == "completed"
-    assert runner.requests[0].resident.startswith("Your MEMORY.md is empty.")
-    assert "(your workspace, private)" in runner.requests[0].resident
+    monkeypatch.setattr(
+        world,
+        "workspace_tree_for",
+        lambda agent_id: tree if agent_id == MAIN else original(agent_id),
+    )
+    if not preparation:
+        mention(world)
+    record = scheduler.run_turn(MAIN)
+    assert record.status == "failed"
+    assert len(runner.requests) == 1
+    assert world.history.latest_messages(MAIN) == previous
+    assert world.history.window(MAIN) == window
+    assert world.store.get_member(MAIN).state == "paused"
+    assert world.history.pause_reason(MAIN) == "runtime_error"
     assert not (tree.root / "MEMORY.md").exists()
+
+    helper_room = world.store.create_discussion("helper", [HUMAN, HELPER])
+    world.store.append_message(helper_room.id, HUMAN, "@Helper continue")
+    helper_runner = RecordingRunner()
+    assert Scheduler(world, helper_runner).run_turn(HELPER).status == "completed"
+    assert len(helper_runner.requests) == 1
 
 
 @pytest.mark.parametrize("environment", [None, "environment facts"])

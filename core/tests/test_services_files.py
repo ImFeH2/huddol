@@ -191,22 +191,19 @@ def test_library_snapshot_reads_metadata_only_including_hidden_files(
     assert Library.changes(before, library.snapshot()) == (".hidden/note.txt",)
 
 
-@pytest.mark.parametrize(
-    "error",
-    [
-        OSError("Read-only filesystem"),
-        DomainError("invalid_path", "Cannot create index"),
-    ],
-)
-def test_workspace_index_is_empty_when_creation_fails(
-    workspace, monkeypatch, error
-) -> None:
-    def fail(*args, **kwargs):
-        raise error
+def test_workspace_index_creation_failure_is_visible(tmp_path: Path) -> None:
+    tree = DirectoryTree(tmp_path / "workspace")
+    index = tree.root / "MEMORY.md"
+    index.mkdir()
+    retained = index / "retained.txt"
+    retained.write_text("preserve", encoding="utf-8")
 
-    monkeypatch.setattr(workspace._tree, "write", fail)
-    assert workspace.index(100) == ""
-    assert not (workspace._tree.root / "MEMORY.md").exists()
+    with pytest.raises(DomainError) as error:
+        Workspace(tree).index(100)
+
+    assert error.value.code == "invalid_path"
+    assert retained.read_text(encoding="utf-8") == "preserve"
+    assert Workspace(DirectoryTree(tmp_path / "other")).index(100) == ""
 
 
 def test_unreadable_workspace_index_does_not_hide_the_tree(tmp_path: Path) -> None:

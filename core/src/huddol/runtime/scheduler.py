@@ -321,10 +321,11 @@ class Scheduler:
                 self.store.set_agent_state(agent_id, "paused")
                 self.emit("organization.changed", {"id": agent_id, "state": "paused"})
             reason = None
-            if reminder is None:
+            if reminder is None and status == "completed":
                 reason = "prepared"
             elif (
-                context_exceeded
+                reminder is not None
+                and context_exceeded
                 and run.sequence != self.history.window(agent_id).since_sequence
             ):
                 reason = "overflow"

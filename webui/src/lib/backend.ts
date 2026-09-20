@@ -258,30 +258,56 @@ function recall(): string | null {
   try {
     return sessionStorage.getItem(STORAGE_KEY);
   } catch {
-    return null;
+    throw new BackendError(
+      "storage_read_failed",
+      "Could not read browser session storage. Allow session storage, then reopen Huddol from its original launch entry.",
+      true,
+    );
   }
 }
 
 function remember(url: string): void {
   try {
     sessionStorage.setItem(STORAGE_KEY, url);
-  } catch {}
+  } catch {
+    throw new BackendError(
+      "storage_write_failed",
+      "Could not save the connection in browser session storage. Allow session storage, then reopen Huddol from its original launch entry.",
+      true,
+    );
+  }
 }
 
 function pageConnection(): Connection {
-  const resolved = resolveConnection(
-    location.search,
-    location.origin,
-    recall(),
-  );
-  if (resolved.remember) remember(resolved.remember);
-  if (resolved.scrub) {
-    history.replaceState(
-      history.state,
-      "",
-      withoutConnectionParams(location.href),
+  const search = location.search;
+  const params = new URLSearchParams(search);
+  if (params.has("token") || params.has("ws")) {
+    try {
+      history.replaceState(
+        history.state,
+        "",
+        withoutConnectionParams(location.href),
+      );
+    } catch {
+      throw new BackendError(
+        "url_cleanup_failed",
+        "Could not clear connection parameters from the address. Close this page and reopen Huddol from its original launch entry.",
+        true,
+      );
+    }
+  }
+  const remembered = recall();
+  let resolved: Resolved;
+  try {
+    resolved = resolveConnection(search, location.origin, remembered);
+  } catch {
+    throw new BackendError(
+      "invalid_connection",
+      "The connection address is invalid. Reopen Huddol from its original launch entry.",
+      true,
     );
   }
+  if (resolved.remember) remember(resolved.remember);
   return resolved.connection;
 }
 
@@ -359,6 +385,13 @@ export class Backend {
         try {
           frame = JSON.parse(String(event.data));
         } catch {
+          this.#disconnect(
+            new BackendError(
+              "protocol_error",
+              "Huddol received an invalid WebSocket message. Reopen Huddol to reconnect. Check pending operations before trying them again.",
+              true,
+            ),
+          );
           return;
         }
         this.#receive(frame);

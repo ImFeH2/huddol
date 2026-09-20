@@ -10,19 +10,15 @@ class Workspace:
     def __init__(self, tree: FileTree) -> None:
         self._tree = tree
 
-    def _ensure_index(self) -> bool:
+    def _ensure_index(self) -> None:
         try:
             self._tree.read(INDEX)
         except DomainError as error:
             if error.code == "not_readable":
-                return True
+                return
             if error.code != "not_found":
                 raise
-            try:
-                self._tree.write(INDEX, "")
-            except (OSError, DomainError):
-                return False
-        return True
+            self._tree.write(INDEX, "")
 
     def list(self, path: str | None = None) -> tuple[TreeEntry, ...]:
         self._ensure_index()
@@ -57,8 +53,7 @@ class Workspace:
         self._tree.delete(path)
 
     def index(self, limit_bytes: int) -> str:
-        if not self._ensure_index():
-            return ""
+        self._ensure_index()
         content, _ = self._tree.read(INDEX)
         encoded = content.encode("utf-8")
         if len(encoded) <= limit_bytes:

@@ -187,6 +187,48 @@ describe("withoutConnectionParams", () => {
   });
 });
 
+describe("browser connection preparation", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it.each([
+    ["read", "?token=private-token"],
+    ["read", "?token=private-token&error=startup"],
+    ["write", "?token=private-token"],
+  ])(
+    "cleans the URL before a %s storage failure (%s)",
+    async (operation, search) => {
+      const location = new globalThis.URL(`http://localhost:4321/${search}`);
+      const replaceState = vi.fn((_state, _title, url: string) => {
+        location.href = url;
+      });
+      const storage = {
+        getItem: vi.fn(() => {
+          expect(location.search).not.toContain("token");
+          if (operation === "read") throw new Error("private-storage-detail");
+          return null;
+        }),
+        setItem: vi.fn(() => {
+          expect(location.search).not.toContain("token");
+          throw new Error("private-storage-detail");
+        }),
+      };
+      vi.stubGlobal("location", location);
+      vi.stubGlobal("history", { state: null, replaceState });
+      vi.stubGlobal("sessionStorage", storage);
+      const factory = vi.fn((url: string) => new FakeSocket(url));
+      const backend = new Backend(undefined, factory);
+      const failure = await backend.connect().catch((error) => error);
+      expect(failure).toMatchObject({
+        code: `storage_${operation}_failed`,
+        transport: true,
+      });
+      expect(failure.message).not.toContain("private-");
+      expect(replaceState).toHaveBeenCalledTimes(1);
+      expect(factory).not.toHaveBeenCalled();
+    },
+  );
+});
+
 describe("Backend", () => {
   afterEach(() => vi.useRealTimers());
 
@@ -383,15 +425,48 @@ describe("Backend", () => {
     expect(seen).toHaveLength(0);
   });
 
-  it("ignores a response for an unknown id and unreadable frames", async () => {
-    const { connected } = harness();
+  it("ignores a response for an unknown id", async () => {
+    const { backend, connected } = harness();
     const socket = await connected();
-    expect(() =>
-      socket.reply({ type: "response", id: 999, result: null }),
-    ).not.toThrow();
-    expect(() =>
-      socket.onmessage?.(new MessageEvent("message", { data: "{" })),
-    ).not.toThrow();
+    socket.reply({ type: "response", id: 999, result: null });
+    expect(backend.disconnected).toBe(false);
+  });
+
+  it("ends invalid JSON requests and isolates the recovered connection", async () => {
+    const { backend, connected, socket } = harness();
+    const old = await connected();
+    const failures = vi.fn();
+    backend.onFailure(failures);
+    const first = backend.organization().catch((error) => error);
+    const second = backend.discussions().catch((error) => error);
+    const write = backend.createAgent("Example").catch((error) => error);
+    await vi.waitFor(() => expect(old.sent).toHaveLength(3));
+    const invalid = new MessageEvent("message", { data: "{private-frame" });
+    old.onmessage?.(invalid);
+    expect(await first).toMatchObject({ code: "protocol_error" });
+    expect(await second).toMatchObject({ code: "protocol_error" });
+    expect(await write).toMatchObject({ code: "unconfirmed" });
+    expect(old.closed).toBe(true);
+    expect(failures).toHaveBeenCalledTimes(2);
+    expect(JSON.stringify(failures.mock.calls)).not.toContain("private-frame");
+
+    const restored = backend.reconnect();
+    await vi.waitFor(() => expect(socket()).not.toBe(old));
+    socket().open();
+    await restored;
+    old.onmessage?.(invalid);
+    old.onclose?.(new CloseEvent("close"));
+    expect(backend.disconnected).toBe(false);
+    expect(socket().sent).toHaveLength(0);
+    const next = backend.organization();
+    await vi.waitFor(() => expect(socket().sent).toHaveLength(1));
+    socket().reply({
+      type: "response",
+      id: socket().sent[0].id,
+      result: { members: [] },
+    });
+    await expect(next).resolves.toEqual({ members: [] });
+    expect(failures).toHaveBeenCalledTimes(2);
   });
 
   it("preserves recorded mentions in Discussion reads", async () => {
