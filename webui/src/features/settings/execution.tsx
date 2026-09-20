@@ -47,12 +47,22 @@ export function ExecutionForm({
   const [info, setInfo] = useState(initial);
   const [draft, setDraft] = useState(() => directoryDraft(initial));
   const [busy, setBusy] = useState(false);
+  const previous = useRef(initial);
+  useEffect(() => {
+    const old = previous.current;
+    previous.current = initial;
+    setDraft((current) =>
+      current === directoryDraft(old) ? directoryDraft(initial) : current,
+    );
+    setInfo(initial);
+  }, [initial]);
   const changed = executionChanged(info, draft);
   const save = async () => {
     if (busy || !changed) return;
     setBusy(true);
     try {
       const result = await onSave(executionUpdate(draft));
+      previous.current = result;
       setInfo(result);
       setDraft(directoryDraft(result));
       toast({ tone: "success", title: "Saved" });
@@ -133,6 +143,9 @@ export function ExecutionPanel() {
   }, []);
   useEffect(() => {
     void load();
+    return backend.onEvent((event) => {
+      if (event.type === "connection.restored") void load();
+    });
   }, [load]);
   if (!info) return null;
   return (

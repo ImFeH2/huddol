@@ -105,7 +105,11 @@ function AgentPage({
 
   useEffect(() => {
     return backend.onEvent((event) => {
-      if (event.type.startsWith("turn.")) void load();
+      if (
+        event.type.startsWith("turn.") ||
+        event.type === "connection.restored"
+      )
+        void load();
     });
   }, [load]);
 
@@ -301,8 +305,12 @@ export function WorkspaceSection({
       }
     };
     void load();
+    const off = backend.onEvent((event) => {
+      if (event.type === "connection.restored") void load();
+    });
     return () => {
       active = false;
+      off();
       dismissToast(toastId);
     };
   }, [agentId, path]);

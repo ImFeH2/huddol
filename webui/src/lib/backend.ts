@@ -147,6 +147,7 @@ export class BackendError extends Error {
 }
 
 type Pending = {
+  method: string;
   resolve: (value: unknown) => void;
   reject: (reason: unknown) => void;
 };
@@ -170,6 +171,30 @@ export type Socket = {
 };
 
 const REQUEST_TIMEOUT = 60_000;
+const READ_METHODS = new Set([
+  "ping",
+  "organization.get",
+  "discussion.list",
+  "discussion.page",
+  "discussion.search",
+  "agent.detail",
+  "library.list",
+  "library.read",
+  "workspace.list",
+  "workspace.read",
+  "settings.get",
+  "settings.list_models",
+]);
+
+function unconfirmed(method: string): BackendError {
+  return new BackendError(
+    "unconfirmed",
+    method === "discussion.send"
+      ? "Your message may have been sent. Check the discussion before sending it again."
+      : "The operation may have completed. Check the current state before trying again.",
+    true,
+  );
+}
 
 export function connectionFrom(search: string, origin: string): Connection {
   const params = new URLSearchParams(search);
@@ -271,6 +296,10 @@ export class Backend {
   #pending = new Map<number, Pending>();
   #listeners = new Set<(event: BackendEvent) => void>();
   #ready: Promise<Socket> | null = null;
+  #activeSocket: Socket | null = null;
+  #generation = 0;
+  #reconnecting: Promise<void> | null = null;
+  #automaticAttempted = false;
   #closed: BackendError | null = null;
   #rejectConnection: ((error: BackendError) => void) | null = null;
   #failures = new Set<(error: BackendError) => void>();
@@ -287,18 +316,45 @@ export class Backend {
     await this.#open();
   }
 
+  reconnect(automatic = false): Promise<void> {
+    if (this.#reconnecting) return this.#reconnecting;
+    if (!this.#closed || (automatic && this.#automaticAttempted))
+      return Promise.resolve();
+    this.#automaticAttempted = true;
+    this.#closed = null;
+    this.#ready = null;
+    this.#reconnecting = this.#open()
+      .then(() => {
+        this.#automaticAttempted = false;
+        this.#emit({ type: "connection.restored" });
+      })
+      .finally(() => {
+        this.#reconnecting = null;
+      });
+    if (!this.#closed) this.#emit({ type: "connection.reconnecting" });
+    return this.#reconnecting;
+  }
+
+  #emit(event: BackendEvent): void {
+    for (const listener of this.#listeners) listener(event);
+  }
+
   #attach(): Promise<Socket> {
     const connection = this.#locate();
     if ("error" in connection)
       throw new BackendError("startup_failed", connection.error, true);
     return new Promise<Socket>((resolve, reject) => {
       const socket = this.#socket(connection.url);
+      const generation = this.#generation;
+      this.#activeSocket = socket;
       let opened = false;
       socket.onopen = () => {
+        if (generation !== this.#generation) return;
         opened = true;
         resolve(socket);
       };
       socket.onmessage = (event) => {
+        if (generation !== this.#generation) return;
         let frame: Frame;
         try {
           frame = JSON.parse(String(event.data));
@@ -308,12 +364,21 @@ export class Backend {
         this.#receive(frame);
       };
       socket.onerror = () => {};
-      socket.onclose = () => {
+      socket.onclose = (event) => {
+        if (generation !== this.#generation) return;
+        console.info("WebSocket closed", {
+          code: event.code,
+          reason:
+            event.reason === "keepalive ping timeout" || event.reason === ""
+              ? event.reason
+              : "[redacted]",
+          wasClean: event.wasClean,
+        });
         if (opened) {
           this.#disconnect(
             new BackendError(
               "disconnected",
-              "Connection lost. Restart Huddol.",
+              "Connection lost. Reconnect to continue.",
               true,
             ),
           );
@@ -322,7 +387,7 @@ export class Backend {
         reject(
           new BackendError(
             "connection_failed",
-            "Could not connect to Huddol. Restart Huddol.",
+            "Could not connect to Huddol. Check that it is running and reopen its link if authentication changed.",
             true,
           ),
         );
@@ -333,12 +398,13 @@ export class Backend {
   async #open(): Promise<Socket> {
     if (this.#closed) throw this.#closed;
     if (this.#ready) return this.#ready;
+    const generation = this.#generation;
     this.#ready = new Promise<Socket>((resolve, reject) => {
       const timer = setTimeout(() => {
         this.#disconnect(
           new BackendError(
             "connection_timeout",
-            "Connection timed out. Restart Huddol.",
+            "Connection timed out. Reconnect to try again.",
             true,
           ),
         );
@@ -352,16 +418,36 @@ export class Backend {
       try {
         attached = this.#attach();
       } catch (error) {
-        this.#disconnect(error as BackendError);
+        this.#disconnect(
+          error instanceof BackendError
+            ? error
+            : new BackendError(
+                "connection_failed",
+                "Could not open the connection. Reopen the Huddol link.",
+                true,
+              ),
+        );
         return;
       }
       attached.then(
         (socket) => {
+          if (generation !== this.#generation) return;
           clearTimeout(timer);
           this.#rejectConnection = null;
           resolve(socket);
         },
-        (error: BackendError) => this.#disconnect(error),
+        (error: unknown) => {
+          if (generation === this.#generation)
+            this.#disconnect(
+              error instanceof BackendError
+                ? error
+                : new BackendError(
+                    "connection_failed",
+                    "Could not open the connection. Reopen the Huddol link.",
+                    true,
+                  ),
+            );
+        },
       );
     });
     return this.#ready;
@@ -397,8 +483,18 @@ export class Backend {
   #disconnect(error: BackendError): void {
     if (this.#closed) return;
     this.#closed = error;
+    this.#generation += 1;
     this.#rejectConnection?.(error);
-    for (const pending of this.#pending.values()) pending.reject(error);
+    const socket = this.#activeSocket;
+    this.#activeSocket = null;
+    socket?.close();
+    for (const pending of this.#pending.values()) {
+      const failure = READ_METHODS.has(pending.method)
+        ? error
+        : unconfirmed(pending.method);
+      pending.reject(failure);
+      if (failure !== error) this.#notify(failure);
+    }
     this.#pending.clear();
     this.#notify(error);
   }
@@ -429,14 +525,22 @@ export class Backend {
   ): Promise<T> {
     const socket = await this.#open();
     if (this.#closed) throw this.#closed;
+    if (socket !== this.#activeSocket)
+      throw new BackendError(
+        "connection_changed",
+        "Connection changed. Request was not sent.",
+        true,
+      );
     const id = this.#nextId++;
     return new Promise<T>((resolve, reject) => {
       const timer = setTimeout(() => {
-        const error = new BackendError(
-          "timeout",
-          "Request timed out. Check before retrying.",
-          true,
-        );
+        const error = READ_METHODS.has(method)
+          ? new BackendError(
+              "timeout",
+              "Request timed out. Try reading again.",
+              true,
+            )
+          : unconfirmed(method);
         const pending = this.#pending.get(id);
         if (!pending) return;
         pending.reject(error);
@@ -447,6 +551,7 @@ export class Backend {
         this.#pending.delete(id);
       };
       this.#pending.set(id, {
+        method,
         resolve: (value) => {
           finish();
           resolve(value as T);

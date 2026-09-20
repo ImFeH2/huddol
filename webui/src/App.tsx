@@ -29,6 +29,8 @@ import {
 } from "@/components/layout/shell";
 import {
   Badge,
+  Button,
+  dismissToast,
   IconButton,
   Spinner,
   StateDot,
@@ -80,14 +82,27 @@ function View({ route, tokenLimit }: { route: Route; tokenLimit: number }) {
 
 const CONNECTION_TOAST = "connection";
 
+function reconnect() {
+  void backend.reconnect().catch(backend.reportFailure);
+}
+
 function reportBackendFailure(error: BackendError) {
+  const uncertain = error.code === "unconfirmed";
+  const disconnected = backend.disconnected && !uncertain;
   toast({
-    id: error.transport ? CONNECTION_TOAST : undefined,
+    id: uncertain ? undefined : error.transport ? CONNECTION_TOAST : undefined,
     tone: "danger",
-    title: error.transport ? "Connection lost" : "Request failed",
+    title: uncertain
+      ? "Check operation result"
+      : error.transport
+        ? "Connection lost"
+        : "Request failed",
     description: error.message,
-    duration: backend.disconnected ? null : undefined,
-    closable: !backend.disconnected,
+    duration: disconnected || uncertain ? null : undefined,
+    closable: !disconnected,
+    action: disconnected
+      ? { label: "Reconnect", onClick: reconnect }
+      : undefined,
   });
 }
 
@@ -222,8 +237,8 @@ export default function App() {
   useEffect(
     () =>
       backend.onFailure((error) => {
-        if (booted.current) reportBackendFailure(error);
-        else setFailure(error.message);
+        reportBackendFailure(error);
+        if (!booted.current) setFailure(error.message);
       }),
     [],
   );
@@ -239,7 +254,21 @@ export default function App() {
 
   useEffect(() => {
     return backend.onEvent((event) => {
+      if (event.type === "connection.reconnecting") {
+        toast({
+          id: CONNECTION_TOAST,
+          tone: "info",
+          title: "Reconnecting…",
+          duration: null,
+          closable: false,
+        });
+      }
+      if (event.type === "connection.restored") {
+        dismissToast(CONNECTION_TOAST);
+        setFailure(null);
+      }
       if (
+        event.type === "connection.restored" ||
         event.type.startsWith("member.") ||
         event.type.startsWith("turn.") ||
         event.type === "message.created" ||
@@ -254,6 +283,21 @@ export default function App() {
     });
   }, [refresh]);
 
+  useEffect(() => {
+    const online = () => {
+      void backend.reconnect(true).catch(backend.reportFailure);
+    };
+    const visible = () => {
+      if (document.visibilityState === "visible") online();
+    };
+    window.addEventListener("online", online);
+    document.addEventListener("visibilitychange", visible);
+    return () => {
+      window.removeEventListener("online", online);
+      document.removeEventListener("visibilitychange", visible);
+    };
+  }, []);
+
   let body: ReactNode;
   if (failure && !loaded) {
     body = (
@@ -261,6 +305,7 @@ export default function App() {
         <PageHeader title="Unable to start Huddol" />
         <PageBody>
           <p>{failure}</p>
+          <Button onClick={reconnect}>Reconnect</Button>
         </PageBody>
       </Page>
     );

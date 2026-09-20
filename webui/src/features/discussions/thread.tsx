@@ -90,7 +90,12 @@ function ThreadSession({ id }: { id: number }) {
       }
       setLastVisible(visible.length ? Math.max(...visible) : 0);
       thread.view(visible, virtual.isAtEnd());
-      if (document.visibilityState === "visible" && visible.length)
+      if (
+        document.visibilityState === "visible" &&
+        visible.length &&
+        !backend.disconnected &&
+        !thread.loading
+      )
         void thread.markRead(Math.max(...visible)).catch(() => {});
       if (!thread.failed && !thread.loading) {
         if (
@@ -153,12 +158,18 @@ function ThreadSession({ id }: { id: number }) {
 
   const send = async (body: string) => {
     setBusy(true);
+    let sent = false;
     try {
       await backend.sendVisible(id, body);
+      sent = true;
       if (!thread.live.current) return true;
       await thread.request("after");
       return true;
     } catch (failure) {
+      if (sent) {
+        if (thread.live.current) backend.reportFailure(failure);
+        return true;
+      }
       if (
         thread.live.current &&
         !(failure instanceof BackendError && failure.transport)
@@ -224,21 +235,6 @@ function ThreadSession({ id }: { id: number }) {
     }
   };
 
-  if (missing) {
-    return (
-      <Page>
-        <PageHeader
-          title="Discussion not found"
-          actions={
-            <Button onClick={() => navigate({ name: "discussions" })}>
-              Back to Discussions
-            </Button>
-          }
-        />
-      </Page>
-    );
-  }
-
   const names = (detail?.members ?? []).map((member) => member.name);
   const topic =
     discussions.find((item) => item.id === id)?.topic ?? detail?.topic ?? "";
@@ -246,10 +242,18 @@ function ThreadSession({ id }: { id: number }) {
   return (
     <Page>
       <PageHeader
-        title={topic || (loadFailed ? "Unavailable" : "")}
+        title={
+          missing
+            ? "Discussion not found"
+            : topic || (loadFailed ? "Unavailable" : "")
+        }
         status={detail?.archived ? <Chip>Archived</Chip> : undefined}
         actions={
-          detail ? (
+          missing ? (
+            <Button onClick={() => navigate({ name: "discussions" })}>
+              Back to Discussions
+            </Button>
+          ) : detail ? (
             <>
               <Tooltip label={names.join("\n")}>
                 <Button

@@ -277,8 +277,27 @@ export function useThreadData(id: number, memberId: number) {
 
   useEffect(() => {
     live.current = true;
-    const epoch = ++generation.current;
+    generation.current += 1;
     const off = backend.onEvent((event) => {
+      if (event.type === "connection.restored") {
+        generation.current += 1;
+        inFlight.current = false;
+        reading.current = null;
+        readingTarget.current = current.current?.readThrough ?? 0;
+        readingFailed.current = false;
+        blocked.current = false;
+        dirty.current = false;
+        fresh.current.clear();
+        dismissToast(`thread-${id}-read`);
+        void requestRef.current(
+          current.current
+            ? following.current
+              ? "latest"
+              : "refresh"
+            : "entry",
+        );
+        return;
+      }
       if (eventDiscussion(event) !== id) return;
       if (event.type === "message.created" && typeof event.id === "number") {
         latest.current = Math.max(latest.current, event.id);
@@ -322,7 +341,7 @@ export function useThreadData(id: number, memberId: number) {
     void requestRef.current("entry");
     return () => {
       live.current = false;
-      generation.current = epoch + 1;
+      generation.current += 1;
       inFlight.current = false;
       off();
       dismissToast(`thread-${id}-page`);

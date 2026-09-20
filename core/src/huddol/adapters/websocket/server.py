@@ -79,6 +79,10 @@ def static_response(directory: Path, path: str) -> Response:
     return _response(http.HTTPStatus.OK, content_type, target.read_bytes())
 
 
+def _close_reason(reason: str | None) -> str | None:
+    return reason if reason in (None, "", "keepalive ping timeout") else "[redacted]"
+
+
 class WebServer:
     def __init__(
         self,
@@ -150,6 +154,18 @@ class WebServer:
         except ConnectionClosed:
             pass
         finally:
+            sent = connection.protocol.close_sent
+            received = connection.protocol.close_rcvd
+            log.info(
+                "WebSocket closed connection=%s code=%s sent_code=%s sent_reason=%r "
+                "received_code=%s received_reason=%r",
+                connection.id,
+                connection.close_code,
+                sent.code if sent else None,
+                _close_reason(sent.reason if sent else None),
+                received.code if received else None,
+                _close_reason(received.reason if received else None),
+            )
             self._dispatcher.detach(sink)
             with self._lock:
                 self._connections.discard(connection)

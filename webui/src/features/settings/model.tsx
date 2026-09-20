@@ -66,15 +66,23 @@ export function ModelPanel() {
   const [listing, setListing] = useState(false);
   const [testing, setTesting] = useState(false);
 
-  const load = useCallback(async () => {
+  const editing = useRef(values);
+  editing.current = values;
+  const saved = useRef(values);
+
+  const load = useCallback(async (preserve = false) => {
     setLoading(true);
     try {
-      setValues(await backend.settings("model"));
+      const next = await backend.settings("model");
+      if (!preserve || editing.current === saved.current) {
+        saved.current = next;
+        setValues(next);
+      }
       setLoaded(true);
       setLoadFailed(false);
     } catch (error) {
       setLoadFailed(true);
-      reportLoadFailure("settings-model", error, () => void load());
+      reportLoadFailure("settings-model", error, () => void load(preserve));
     } finally {
       setLoading(false);
     }
@@ -82,7 +90,11 @@ export function ModelPanel() {
 
   useEffect(() => {
     void load();
+    const off = backend.onEvent((event) => {
+      if (event.type === "connection.restored") void load(true);
+    });
     return () => {
+      off();
       listRequest.current += 1;
     };
   }, [load]);

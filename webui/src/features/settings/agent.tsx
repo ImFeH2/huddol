@@ -119,19 +119,25 @@ export function AgentPanel() {
   const [loading, setLoading] = useState(true);
   const [loadFailed, setLoadFailed] = useState(false);
 
-  const load = useCallback(async () => {
+  const editing = useRef(drafts);
+  editing.current = drafts;
+  const saved = useRef(drafts);
+
+  const load = useCallback(async (preserve = false) => {
     setLoading(true);
     try {
       const values = await backend.settings("agent");
-      setDrafts(
-        Object.fromEntries(
+      if (!preserve || editing.current === saved.current) {
+        const next = Object.fromEntries(
           FIELDS.map(({ key }) => [key, String(values[key] ?? "")]),
-        ),
-      );
+        );
+        saved.current = next;
+        setDrafts(next);
+      }
       setLoadFailed(false);
     } catch (error) {
       setLoadFailed(true);
-      reportLoadFailure("settings-agent", error, () => void load());
+      reportLoadFailure("settings-agent", error, () => void load(preserve));
     } finally {
       setLoading(false);
     }
@@ -139,6 +145,9 @@ export function AgentPanel() {
 
   useEffect(() => {
     void load();
+    return backend.onEvent((event) => {
+      if (event.type === "connection.restored") void load(true);
+    });
   }, [load]);
 
   const { saving, save } = useSaver(load, first);

@@ -1,6 +1,6 @@
 import { clsx } from "clsx";
 import { Check, Save, SquarePen, Trash2 } from "lucide-react";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { type Route, useNavigate } from "@/app/router";
 import {
   type Crumb,
@@ -80,31 +80,70 @@ export function DocumentPage({ path }: { path: string }) {
   const [renaming, setRenaming] = useState(false);
   const [doomed, setDoomed] = useState(false);
 
-  const load = useCallback(async () => {
-    try {
-      const document = await backend.readLibrary(path);
-      setLoaded({ content: document.content, hash: document.hash });
-      setDraft(document.content);
-      setUnavailable(null);
-      setFailed(false);
-      dismissToast(`document-load:${path}`);
-      dismissToast(conflictToastId(path));
-    } catch (failure) {
-      setFailed(true);
-      if (
-        failure instanceof BackendError &&
-        (failure.code === "not_found" || failure.code === "not_readable")
-      ) {
-        setUnavailable(failure.code);
-      } else {
-        reportLoadFailure(`document-load:${path}`, failure, () => void load());
+  const editing = useRef({ loaded, draft });
+  editing.current = { loaded, draft };
+  const loadRevision = useRef(0);
+
+  const load = useCallback(
+    async (preserve = false) => {
+      const revision = ++loadRevision.current;
+      try {
+        const document = await backend.readLibrary(path);
+        if (revision !== loadRevision.current) return;
+        const current = editing.current;
+        if (
+          preserve &&
+          current.loaded &&
+          current.draft !== current.loaded.content
+        ) {
+          if (document.hash !== current.loaded.hash)
+            toast({
+              id: conflictToastId(path),
+              tone: "danger",
+              title: "Saved elsewhere",
+              description:
+                "Your unsaved changes are preserved. Reopen to read the current document.",
+              duration: null,
+              action: { label: "Reopen", onClick: () => void load() },
+            });
+        } else {
+          setLoaded({ content: document.content, hash: document.hash });
+          setDraft(document.content);
+          dismissToast(conflictToastId(path));
+        }
+        setUnavailable(null);
+        setFailed(false);
+        dismissToast(`document-load:${path}`);
+      } catch (failure) {
+        if (revision !== loadRevision.current) return;
+        setFailed(true);
+        if (
+          failure instanceof BackendError &&
+          (failure.code === "not_found" || failure.code === "not_readable")
+        ) {
+          setUnavailable(failure.code);
+        } else {
+          reportLoadFailure(
+            `document-load:${path}`,
+            failure,
+            () => void load(preserve),
+          );
+        }
       }
-    }
-  }, [path]);
+    },
+    [path],
+  );
 
   useEffect(() => {
     void load();
-    return () => dismissToast(`document-load:${path}`);
+    const off = backend.onEvent((event) => {
+      if (event.type === "connection.restored") void load(true);
+    });
+    return () => {
+      loadRevision.current += 1;
+      off();
+      dismissToast(`document-load:${path}`);
+    };
   }, [load, path]);
 
   useEffect(() => () => dismissToast(conflictToastId(path)), [path]);
@@ -144,7 +183,7 @@ export function DocumentPage({ path }: { path: string }) {
     }
   };
 
-  if (unavailable) {
+  if (unavailable && loaded === null) {
     return (
       <Page>
         <PageHeader title={path} crumb={crumb} />
@@ -213,10 +252,12 @@ export function DocumentPage({ path }: { path: string }) {
       </Toolbar>
       <PageBody variant="flush">
         <div className="flex flex-1 min-h-0 flex-col gap-4 px-8 pb-6">
+          {unavailable ? <DocumentUnavailable code={unavailable} /> : null}
           <div className="grid flex-1 min-h-0 grid-rows-[minmax(0,1fr)] items-stretch font-mono tracking-[0]">
             <Textarea
               aria-label="Document"
-              disabled={loaded === null || failed}
+              disabled={loaded === null}
+              readOnly={failed}
               value={draft}
               spellCheck={false}
               onChange={(event) => {

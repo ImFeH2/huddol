@@ -90,6 +90,7 @@ export function DiscussionsPage() {
   const [results, setResults] = useState<FoundMessage[] | null>(null);
   const [archived, setArchived] = useState(false);
   const [creating, setCreating] = useState(false);
+  const [connectionRevision, setConnectionRevision] = useState(0);
 
   const load = useCallback(async () => {
     try {
@@ -105,7 +106,10 @@ export function DiscussionsPage() {
 
   useEffect(() => {
     return backend.onEvent((event) => {
+      if (event.type === "connection.restored")
+        setConnectionRevision((value) => value + 1);
       if (
+        event.type === "connection.restored" ||
         event.type === "message.created" ||
         event.type === "mention.acked" ||
         event.type === "mention.revoked" ||
@@ -136,7 +140,7 @@ export function DiscussionsPage() {
       live = false;
       clearTimeout(timer);
     };
-  }, [query]);
+  }, [query, connectionRevision]);
 
   const byId = useMemo(
     () => new Map(members.map((member) => [member.id, member] as const)),

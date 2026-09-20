@@ -210,7 +210,11 @@ export function LibraryPage({ path }: { path?: string }) {
   useEffect(
     () =>
       backend.onEvent((event) => {
-        if (event.type === "library.updated") void load();
+        if (
+          event.type === "library.updated" ||
+          event.type === "connection.restored"
+        )
+          void load();
       }),
     [load],
   );
