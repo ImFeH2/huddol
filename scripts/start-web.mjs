@@ -1,11 +1,9 @@
 import { readdirSync } from "node:fs";
 import { resolve } from "node:path";
-import { root, run } from "./process.mjs";
+import { root, run, venvExecutable } from "./process.mjs";
 
 const packages = resolve(root, "dist", "python");
 const environment = resolve(root, "dist", "web-environment");
-const scripts = process.platform === "win32" ? "Scripts" : "bin";
-const extension = process.platform === "win32" ? ".exe" : "";
 
 run("pnpm", ["build:python"]);
 
@@ -18,11 +16,8 @@ run("uv", [
   "pip",
   "install",
   "--python",
-  resolve(environment, scripts, `python${extension}`),
+  venvExecutable(environment, "python"),
   "--reinstall",
   ...wheels,
 ]);
-run(
-  resolve(environment, scripts, `huddol-web${extension}`),
-  process.argv.slice(2),
-);
+run(venvExecutable(environment, "huddol-web"), process.argv.slice(2));

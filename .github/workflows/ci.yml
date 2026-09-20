@@ -19,20 +19,15 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  platforms:
+    uses: ./.github/workflows/platforms.yml
+
   ci:
     name: CI (${{ matrix.name }})
+    needs: platforms
     strategy:
       fail-fast: false
-      matrix:
-        include:
-          - name: Linux x64
-            os: ubuntu-latest
-          - name: Windows x64
-            os: windows-latest
-          - name: macOS arm64
-            os: macos-15
-          - name: macOS x64
-            os: macos-15-intel
+      matrix: ${{ fromJSON(needs.platforms.outputs.matrix) }}
     runs-on: ${{ matrix.os }}
     env:
       TAURI_CONFIG: '{"bundle":{"externalBin":[]}}'
@@ -43,15 +38,7 @@ jobs:
 
       - name: Install Linux dependencies
         if: runner.os == 'Linux'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            bubblewrap \
-            libappindicator3-dev \
-            librsvg2-dev \
-            libwebkit2gtk-4.1-dev \
-            patchelf \
-            xdg-utils
+        uses: ./.github/actions/setup-linux
 
       - name: Enable sandbox support
         if: runner.os == 'Linux'
