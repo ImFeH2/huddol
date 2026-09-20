@@ -20,6 +20,7 @@ def test_parameters_fill_defaults_and_ignore_unknown_keys(values) -> None:
         "no_tool_turns_before_pause": 3,
         "memory_index_bytes": 16_384,
         "token_limit": 0,
+        "request_limit": 0,
     }
 
 
@@ -40,15 +41,15 @@ def test_invalid_parameters_are_ignored_on_read_and_rejected_on_write(
     with pytest.raises(DomainError) as error:
         validate_parameters(values)
     assert error.value.code == "invalid_parameter"
-    kind = "non-negative" if key == "token_limit" else "positive"
+    kind = "non-negative" if key in ("token_limit", "request_limit") else "positive"
     assert str(error.value) == f"{key} must be a {kind} integer"
 
 
 @pytest.mark.parametrize("key", [field.name for field in fields(AgentParameters)])
-def test_only_token_limit_accepts_zero(key) -> None:
+def test_limits_accept_zero(key) -> None:
     values = {key: 0}
     assert agent_parameters(values) == AgentParameters()
-    if key == "token_limit":
+    if key in ("token_limit", "request_limit"):
         assert validate_parameters(values) == values
     else:
         with pytest.raises(DomainError) as error:

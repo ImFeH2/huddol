@@ -19,6 +19,7 @@ const FIELDS = [
   { key: "no_tool_turns_before_pause", label: "Pause after tool-free Turns" },
   { key: "max_concurrent_turns", label: "Concurrent Turns" },
   { key: "token_limit", label: "Tokens per Agent" },
+  { key: "request_limit", label: "Model requests per Turn" },
 ];
 
 function agentInteger(key: string, draft: string): number | null {
@@ -26,7 +27,7 @@ function agentInteger(key: string, draft: string): number | null {
   if (!/^\d+$/.test(value)) return null;
   const number = Number(value);
   return Number.isSafeInteger(number) &&
-    number >= (key === "token_limit" ? 0 : 1)
+    number >= (key === "token_limit" || key === "request_limit" ? 0 : 1)
     ? number
     : null;
 }
@@ -77,14 +78,20 @@ export function AgentForm({
             key={key}
             label={label}
             htmlFor={`${id}-${key}`}
-            hint={key === "token_limit" ? "0 means no ceiling." : undefined}
+            hint={
+              key === "request_limit"
+                ? "0 means unlimited. Changes apply to new Turns."
+                : key === "token_limit"
+                  ? "0 means no ceiling."
+                  : undefined
+            }
           >
             <Input
               ref={index === 0 ? first : undefined}
               id={`${id}-${key}`}
               type="number"
               inputMode="numeric"
-              min={key === "token_limit" ? 0 : 1}
+              min={key === "token_limit" || key === "request_limit" ? 0 : 1}
               step={1}
               max={Number.MAX_SAFE_INTEGER}
               required

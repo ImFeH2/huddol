@@ -63,7 +63,7 @@ from pydantic_ai.providers.google import GoogleProvider
 from pydantic_ai.providers.openai import OpenAIProvider
 from pydantic_ai.settings import ModelSettings
 from pydantic_ai.tools import ToolDefinition
-from pydantic_ai.usage import RunUsage
+from pydantic_ai.usage import RunUsage, UsageLimits
 
 from huddol.adapters.model.config import ModelConfig
 from huddol.adapters.model.observability import (
@@ -74,6 +74,7 @@ from huddol.adapters.model.observability import (
 )
 from huddol.adapters.model.prompt import SYSTEM_PROMPT
 from huddol.core.errors import DomainError
+from huddol.core.parameters import agent_parameters
 from huddol.ports.agent import SettingsStore
 from huddol.runtime.reminder import TurnOutcome, TurnRequest
 from huddol.tools import AgentTools
@@ -584,6 +585,8 @@ class PydanticModelRunner:
             _result(tool)
 
     def run(self, request: TurnRequest, tools: AgentTools) -> TurnOutcome:
+        parameters = agent_parameters(self._settings.get_settings("agent"))
+        usage_limits = UsageLimits(request_limit=parameters.request_limit or None)
         config = ModelConfig.restore(self._settings.get_settings("model"))
         if config is None:
             return TurnOutcome(messages_json=request.history_json, error=UNAVAILABLE)
@@ -750,6 +753,7 @@ class PydanticModelRunner:
                 return await self._agent.run(
                     request.prompt,
                     usage=counted,
+                    usage_limits=usage_limits,
                     deps=tools,
                     message_history=history,
                     model=LiveModel(

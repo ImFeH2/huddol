@@ -23,6 +23,9 @@ describe("Settings page", () => {
         html.matchAll(/<p\b[^>]*>([\s\S]*?)<\/p>/g),
         ([, text]) => text,
       ),
-    ).toEqual(["0 means no ceiling."]);
+    ).toEqual([
+      "0 means no ceiling.",
+      "0 means unlimited. Changes apply to new Turns.",
+    ]);
   });
 });

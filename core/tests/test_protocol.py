@@ -353,6 +353,7 @@ def test_agent_settings_fill_defaults_merge_and_emit_events(server) -> None:
         "no_tool_turns_before_pause": 2,
         "memory_index_bytes": 256,
         "token_limit": 1000,
+        "request_limit": 75,
     }
     updated = call(
         dispatcher,

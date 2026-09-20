@@ -13,6 +13,7 @@ class AgentParameters:
     no_tool_turns_before_pause: int = 3
     memory_index_bytes: int = 16_384
     token_limit: int = 0
+    request_limit: int = 0
 
 
 def agent_parameters(values: Mapping[str, object] | None) -> AgentParameters:
@@ -22,7 +23,7 @@ def agent_parameters(values: Mapping[str, object] | None) -> AgentParameters:
             field.name: value
             for field in fields(AgentParameters)
             if type(value := stored.get(field.name)) is int
-            and value >= (0 if field.name == "token_limit" else 1)
+            and value >= (0 if field.name in ("token_limit", "request_limit") else 1)
         }
     )
 
@@ -33,7 +34,7 @@ def validate_parameters(values: Mapping[str, object]) -> dict[str, int]:
     for key, value in values.items():
         if key not in names:
             raise DomainError("invalid_setting", f"Unknown Agent parameter: {key}")
-        minimum = 0 if key == "token_limit" else 1
+        minimum = 0 if key in ("token_limit", "request_limit") else 1
         if type(value) is not int or value < minimum:
             kind = "non-negative" if minimum == 0 else "positive"
             raise DomainError("invalid_parameter", f"{key} must be a {kind} integer")

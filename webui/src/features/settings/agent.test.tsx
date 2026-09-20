@@ -10,6 +10,7 @@ const drafts = {
   no_tool_turns_before_pause: "3",
   max_concurrent_turns: "4",
   token_limit: "0",
+  request_limit: "0",
 };
 
 function renderForm(values = drafts) {
@@ -28,19 +29,30 @@ describe("Agent settings", () => {
       no_tool_turns_before_pause: 3,
       max_concurrent_turns: 4,
       token_limit: 0,
+      request_limit: 0,
     });
     expect(
       agentUpdate({ ...drafts, token_limit: " 250000 " })?.token_limit,
     ).toBe(250000);
   });
 
-  it.each(Object.keys(drafts).filter((key) => key !== "token_limit"))(
-    "requires a positive %s",
-    (key) => {
-      expect(agentUpdate({ ...drafts, [key]: "0" })).toBeNull();
-      expect(agentUpdate({ ...drafts, [key]: " 1 " })?.[key]).toBe(1);
+  it.each(["0", "1", "50", "100", " 75 "])(
+    "accepts request limit %s",
+    (request_limit) => {
+      expect(agentUpdate({ ...drafts, request_limit })?.request_limit).toBe(
+        Number(request_limit),
+      );
     },
   );
+
+  it.each(
+    Object.keys(drafts).filter(
+      (key) => key !== "token_limit" && key !== "request_limit",
+    ),
+  )("requires a positive %s", (key) => {
+    expect(agentUpdate({ ...drafts, [key]: "0" })).toBeNull();
+    expect(agentUpdate({ ...drafts, [key]: " 1 " })?.[key]).toBe(1);
+  });
 
   it.each(["", " ", "-1", "1.5", "1e3", "abc", "Infinity", "9007199254740992"])(
     "rejects invalid draft %s in every field",
@@ -70,14 +82,16 @@ describe("Agent settings", () => {
       "Pause after tool-free Turns",
       "Concurrent Turns",
       "Tokens per Agent",
+      "Model requests per Turn",
     ])
       expect(html).toContain(label);
     for (const value of Object.values(drafts))
       expect(html).toContain(`value="${value}"`);
-    expect(html.match(/type="number"/g)).toHaveLength(7);
-    expect(html.match(/inputMode="numeric"/g)).toHaveLength(7);
+    expect(html.match(/type="number"/g)).toHaveLength(8);
+    expect(html.match(/inputMode="numeric"/g)).toHaveLength(8);
     expect(html.match(/min="1"/g)).toHaveLength(6);
-    expect(html.match(/min="0"/g)).toHaveLength(1);
+    expect(html.match(/min="0"/g)).toHaveLength(2);
+    expect(html).toContain("0 means unlimited. Changes apply to new Turns.");
     expect(html.match(/type="submit"/g)).toHaveLength(1);
     expect(html).toContain("0 means no ceiling.");
     expect(html).not.toContain('disabled=""');
@@ -99,7 +113,7 @@ describe("Agent settings", () => {
     expect(html).toMatch(
       /<fieldset[^>]*aria-label="Agent settings"[^>]*disabled=""/,
     );
-    expect(html.match(/value=""/g)).toHaveLength(7);
+    expect(html.match(/value=""/g)).toHaveLength(8);
     expect(html).not.toContain('value="0"');
   });
 });
