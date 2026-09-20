@@ -1,35 +1,18 @@
 from __future__ import annotations
 
-import os
-import signal
 import subprocess
-import sys
 import threading
 from collections.abc import Sequence
-from pathlib import Path
-from typing import TYPE_CHECKING
-
-if TYPE_CHECKING:
-    from huddol.adapters.sandbox.windows import WindowsWriteAccess
+from pathlib import Path, PurePosixPath, PureWindowsPath
 
 from huddol.adapters.execution.editing import edit_file
-from huddol.adapters.sandbox.commands import (
-    linux_command,
-    macos_command,
-    windows_command,
-)
+from huddol.adapters.execution.platforms import create_backend
 from huddol.adapters.sandbox.paths import normalize_directories, normalize_tolerantly
 from huddol.core.errors import DomainError
 from huddol.ports.execution import EditResult, RunResult
 
 MAX_OUTPUT = 200_000
 DEFAULT_TIMEOUT = 120
-
-
-def entrypoint() -> list[str]:
-    if getattr(sys, "frozen", False):
-        return [sys.executable]
-    return [sys.executable, "-I", "-m", "huddol"]
 
 
 class LocalExecution:
@@ -40,8 +23,7 @@ class LocalExecution:
         enforce: bool = True,
         tolerant: bool = False,
     ) -> None:
-        self._enforce = enforce
-        self._windows: dict[tuple[Path, ...], WindowsWriteAccess] = {}
+        self._backend = create_backend(enforce)
         self._lock = threading.RLock()
         self._processes: set[subprocess.Popen[bytes]] = set()
         self._closed = False
@@ -62,52 +44,24 @@ class LocalExecution:
             self._roots = candidate._roots
             self.skipped = candidate.skipped
 
-    @staticmethod
-    def _terminate(process: subprocess.Popen[bytes]) -> None:
-        if sys.platform != "win32":
-            try:
-                os.killpg(process.pid, signal.SIGKILL)
-            except ProcessLookupError:
-                pass
-        else:
-            process.kill()
+    def resolve_path(self, value: str, *, base: str) -> str:
+        if PurePosixPath(value).is_absolute() or PureWindowsPath(value).is_absolute():
+            return value
+        return str(Path(base) / value)
 
     def close(self) -> None:
         with self._lock:
             self._closed = True
             for process in self._processes:
                 if process.poll() is None:
-                    self._terminate(process)
-            for access in self._windows.values():
-                access.close()
-            self._windows.clear()
+                    self._backend.terminate(process)
+            self._backend.close()
 
     def describe_environment(self, labeled: Sequence[tuple[str, str]] = ()) -> str:
         entries = [f"- {path} ({label})" for path, label in labeled]
         entries.extend(f"- {item}" for item in self.write_directories)
         listing = "\n".join(entries) or "- none"
-        return f"Commands run on {sys.platform}\nWritable directories:\n{listing}"
-
-    def _wrap(
-        self, argv: Sequence[str], cwd: Path, roots: tuple[Path, ...]
-    ) -> list[str]:
-        if not self._enforce:
-            return list(argv)
-        existing = tuple(root for root in roots if root.is_dir())
-        if sys.platform.startswith("linux"):
-            return linux_command(argv, cwd, existing)
-        if sys.platform == "darwin":
-            return macos_command(argv, existing)
-        if os.name == "nt":
-            from huddol.adapters.sandbox.windows import WindowsWriteAccess
-
-            if existing not in self._windows:
-                self._windows[existing] = WindowsWriteAccess(existing)
-            return windows_command(self._windows[existing].sid, argv, entrypoint())
-        raise DomainError(
-            "sandbox_unavailable",
-            "Filesystem write protection is unavailable on this platform",
-        )
+        return f"Commands run on {self._backend.name}\nWritable directories:\n{listing}"
 
     def _resolve_cwd(self, cwd: str | None) -> Path:
         if cwd is None or not Path(cwd).is_absolute():
@@ -146,14 +100,8 @@ class LocalExecution:
                     if write_directories is None
                     else normalize_directories(write_directories)
                 )
-                command = self._wrap(argv, directory, roots)
-                process = subprocess.Popen(
-                    command,
-                    cwd=directory,
-                    stdin=subprocess.PIPE if data is not None else subprocess.DEVNULL,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE,
-                    start_new_session=os.name != "nt",
+                process = self._backend.spawn(
+                    argv, directory, roots, piped_input=data is not None
                 )
                 self._processes.add(process)
         except FileNotFoundError as error:
@@ -164,7 +112,7 @@ class LocalExecution:
             )
             return process.returncode, stdout, stderr
         except subprocess.TimeoutExpired as error:
-            self._terminate(process)
+            self._backend.terminate(process)
             process.communicate()
             raise DomainError(
                 "timeout", f"Command exceeded {timeout or DEFAULT_TIMEOUT} seconds"

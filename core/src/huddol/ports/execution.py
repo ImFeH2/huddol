@@ -29,6 +29,8 @@ class ExecutionEnvironment(Protocol):
 
     def describe_environment(self, labeled: Sequence[tuple[str, str]] = ()) -> str: ...
 
+    def resolve_path(self, value: str, *, base: str) -> str: ...
+
     def run(
         self,
         argv: Sequence[str],

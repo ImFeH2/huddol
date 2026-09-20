@@ -34,6 +34,9 @@ class BoundExecution:
     def describe_environment(self, labeled: Sequence[tuple[str, str]] = ()) -> str:
         return self._lookup().describe_environment(labeled)
 
+    def resolve_path(self, value: str, *, base: str) -> str:
+        return self._lookup().resolve_path(value, base=base)
+
     def run(
         self,
         argv: Sequence[str],

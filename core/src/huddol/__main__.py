@@ -5,15 +5,19 @@ import json
 import logging
 import os
 import secrets
-import signal
-import stat
 import sys
 import threading
-from io import TextIOWrapper
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any
 from urllib.parse import quote
+
+from huddol.adapters.host import (
+    configure_stdio,
+    install_signal_handlers,
+    stdin_is_piped,
+    write_private,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -72,13 +76,6 @@ def parse_arguments(argv: Sequence[str]) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
-def write_private(path: Path, payload: str) -> None:
-    descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
-        handle.write(payload)
-    os.chmod(path, 0o600)
-
-
 def load_token(directory: Path, override: str | None) -> str:
     if override:
         return override
@@ -103,14 +100,6 @@ def running_instance(run_file: Path) -> dict[str, Any] | None:
     return payload if psutil.pid_exists(pid) else None
 
 
-def stdin_is_piped() -> bool:
-    try:
-        mode = os.fstat(0).st_mode
-    except OSError:
-        return False
-    return stat.S_ISFIFO(mode) or stat.S_ISSOCK(mode)
-
-
 class Stop:
     def __init__(self) -> None:
         self._stopped = threading.Event()
@@ -129,13 +118,6 @@ class Stop:
         while not self._stopped.wait(0.5):
             pass
         return self._reason[0]
-
-
-def install_signal_handlers(stop: Stop) -> None:
-    for name in ("sigint", "sigterm"):
-        number = getattr(signal, name.upper(), None)
-        if number is not None:
-            signal.signal(number, lambda *_, why=name: stop.stop(why))
 
 
 def configure_logging(directory: Path) -> list[logging.Handler]:
@@ -209,19 +191,16 @@ def wait_for_stdin_shutdown(stop: Stop) -> None:
 def main(argv: list[str] | None = None) -> int:
     raw = list(sys.argv[1:] if argv is None else argv)
 
-    if raw and raw[0] == "--windows-write-sandbox" and os.name == "nt":
-        from huddol.adapters.sandbox.windows import run_restricted_command
+    from huddol.adapters.execution.platforms import dispatch_helper
 
-        separator = raw.index("--")
-        return run_restricted_command(raw[1], raw[separator + 1 :], os.getcwd())
+    helper_result = dispatch_helper(raw)
+    if helper_result is not None:
+        return helper_result
 
     options = parse_arguments(raw)
     stdio = options.transport == STDIO
 
-    cast(TextIOWrapper, sys.stdin).reconfigure(encoding="utf-8", errors="strict")
-    cast(TextIOWrapper, sys.stdout).reconfigure(
-        encoding="utf-8", errors="strict", newline="\n"
-    )
+    configure_stdio()
 
     from huddol.adapters.execution.manager import ExecutionManager
     from huddol.adapters.files.tree import DirectoryTree
@@ -288,7 +267,7 @@ def main(argv: list[str] | None = None) -> int:
     stop = Stop()
     dispatch_lock = threading.Lock()
     server: WebServer | None = None
-    install_signal_handlers(stop)
+    install_signal_handlers(stop.stop)
     scheduler.start()
 
     if stdio:

@@ -4,12 +4,12 @@ import subprocess
 import sys
 import time
 from pathlib import Path
-from types import SimpleNamespace
 
 import pytest
 
-from huddol.adapters.execution.local import LocalExecution, entrypoint
+from huddol.adapters.execution.local import LocalExecution
 from huddol.adapters.execution.manager import ExecutionManager
+from huddol.adapters.execution.platforms import WindowsBackend, entrypoint
 from huddol.core.errors import DomainError
 
 
@@ -230,38 +230,32 @@ def test_linux_execution_preserves_windows_host_interop(tmp_path: Path) -> None:
 
 @pytest.mark.skipif(not sys.platform.startswith("linux"), reason="Linux execution")
 def test_local_run_override_replaces_roots_without_changing_configuration(
-    tmp_path, monkeypatch
+    tmp_path,
 ) -> None:
     configured = tmp_path / "configured"
     library = tmp_path / "library"
     configured.mkdir()
     library.mkdir()
     environment = LocalExecution([str(configured)])
-    commands = []
-    original = environment._wrap
-
-    def wrap(argv, cwd, roots):
-        command = original(argv, cwd, roots)
-        commands.append(command)
-        return command
-
-    monkeypatch.setattr(environment, "_wrap", wrap)
     try:
-        for override, expected in (
-            ([str(library), str(library) + "/"], [str(library)]),
-            ([], []),
-            (None, [str(configured)]),
-        ):
-            result = environment.run(
-                ["/bin/true"], cwd=str(tmp_path), write_directories=override
+        for index, (override, expected) in enumerate(
+            (
+                ([str(library), str(library) + "/"], library),
+                ([], None),
+                (None, configured),
             )
-            assert result.exit_code == 0, result.stderr
-            command = commands[-1]
-            assert [
-                command[index + 1 : index + 3]
-                for index, value in enumerate(command)
-                if value == "--bind"
-            ] == [[root, root] for root in expected]
+        ):
+            for root in (configured, library):
+                target = root / f"write-{index}"
+                result = environment.run(
+                    ["sh", "-c", 'printf allowed > "$1"', "sh", str(target)],
+                    cwd=str(tmp_path),
+                    write_directories=override,
+                )
+                assert (result.exit_code == 0) == (root == expected), result.stderr
+                assert target.exists() == (root == expected)
+                if root == expected:
+                    assert target.read_bytes() == b"allowed"
             assert environment.write_directories == (str(configured),)
         denied = environment.run(
             ["sh", "-c", 'echo denied > "$1"', "sh", str(configured / "denied")],
@@ -310,44 +304,38 @@ def test_local_edit_override_does_not_change_configuration(tmp_path, override) -
         environment.close()
 
 
-def test_windows_write_access_is_cached_separately_for_each_root_set(
-    tmp_path, monkeypatch
-) -> None:
-    from huddol.adapters.execution import local
-
-    accesses = []
-
-    class Access:
-        def __init__(self, roots):
-            self.roots = roots
-            self.sid = f"sid-{len(accesses)}"
-            self.closed = False
-            accesses.append(self)
-
-        def close(self):
-            self.closed = True
-
-    monkeypatch.setitem(
-        sys.modules,
-        "huddol.adapters.sandbox.windows",
-        SimpleNamespace(WindowsWriteAccess=Access),
-    )
-    monkeypatch.setattr(
-        local, "sys", SimpleNamespace(platform="win32", executable=sys.executable)
-    )
-    monkeypatch.setattr(local, "os", SimpleNamespace(name="nt"))
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows execution")
+def test_windows_write_access_is_cached_separately_for_each_root_set(tmp_path) -> None:
     library = tmp_path / "library"
     library.mkdir()
     environment = LocalExecution([str(tmp_path)])
-    for roots, sid in (
-        ((tmp_path,), "sid-0"),
-        ((library,), "sid-1"),
-        ((tmp_path,), "sid-0"),
-    ):
-        command = environment._wrap(["command"], tmp_path, roots)
-        assert command[command.index("--windows-write-sandbox") + 1] == sid
-    assert [access.roots for access in accesses] == [(tmp_path,), (library,)]
-    assert not any(access.closed for access in accesses)
-    environment.close()
-    assert all(access.closed for access in accesses)
-    assert environment._windows == {}
+    backend = environment._backend
+    assert isinstance(backend, WindowsBackend)
+    try:
+        for roots in ((tmp_path,), (library,), (tmp_path,)):
+            result = environment.run(
+                [sys.executable, "-c", "print('ready')"],
+                cwd=str(tmp_path),
+                write_directories=[str(root) for root in roots],
+            )
+            assert result.exit_code == 0, result.stderr
+            assert result.stdout.strip() == "ready"
+            assert roots in backend._windows
+        assert set(backend._windows) == {(tmp_path,), (library,)}
+        assert len({access.sid for access in backend._windows.values()}) == 2
+    finally:
+        environment.close()
+    assert backend._windows == {}
+
+
+@pytest.mark.parametrize(
+    "value", ["relative/成员", "/absolute", "C:\\absolute", "\\\\host\\share\\file"]
+)
+def test_bound_execution_resolves_path_syntax(tmp_path, value) -> None:
+    manager = ExecutionManager(enforce=False)
+    try:
+        bound = manager.snapshot()
+        expected = str(tmp_path / value) if value.startswith("relative") else value
+        assert bound.resolve_path(value, base=str(tmp_path)) == expected
+    finally:
+        manager.close()

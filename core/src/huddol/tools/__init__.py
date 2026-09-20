@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections.abc import Callable, Iterator, Sequence
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass
-from pathlib import Path, PurePosixPath, PureWindowsPath
+from pathlib import Path
 from typing import Any
 
 from huddol.core.context import advance_watermark, context_window
@@ -570,13 +570,9 @@ class AgentTools:
         timeout: int | None = None,
     ) -> dict[str, Any]:
         self._check("run")
-        if cwd is None:
-            cwd = str(self._deps.agent_directory_for(self._actor.member_id))
-        elif not (
-            PurePosixPath(cwd).is_absolute() or PureWindowsPath(cwd).is_absolute()
-        ):
-            cwd = str(self._deps.agent_directory_for(self._actor.member_id) / cwd)
         execution = self._deps.execution.snapshot()
+        base = str(self._deps.agent_directory_for(self._actor.member_id))
+        cwd = base if cwd is None else execution.resolve_path(cwd, base=base)
         directories = self._write_directories(execution)
         with self._library_updates():
             result = execution.run(
@@ -598,11 +594,10 @@ class AgentTools:
         replace_all: bool = False,
     ) -> dict[str, Any]:
         self._check("edit", path)
-        if not (
-            PurePosixPath(path).is_absolute() or PureWindowsPath(path).is_absolute()
-        ):
-            path = str(self._deps.agent_directory_for(self._actor.member_id) / path)
         execution = self._deps.execution.snapshot()
+        path = execution.resolve_path(
+            path, base=str(self._deps.agent_directory_for(self._actor.member_id))
+        )
         directories = self._write_directories(execution)
         with self._library_updates():
             result = execution.edit(
