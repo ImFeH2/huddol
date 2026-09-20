@@ -1561,8 +1561,9 @@ def test_the_limit_is_per_agent_not_shared(world) -> None:
         ("global", None),
     ],
 )
+@pytest.mark.parametrize("newline", ["\n", "\r\n"], ids=["lf", "crlf"])
 def test_agents_instructions_are_read_only_at_window_creation(
-    world, tmp_path, global_text, member_text
+    world, tmp_path, global_text, member_text, newline
 ):
     from pydantic_ai.messages import ModelResponse, TextPart
     from pydantic_ai.models.function import FunctionModel
@@ -1573,10 +1574,16 @@ def test_agents_instructions_are_read_only_at_window_creation(
     global_path = tmp_path / "library" / "AGENTS.md"
     member_path = world.workspace_tree_for(MAIN).root / "AGENTS.md"
     other_path = world.workspace_tree_for(HELPER).root / "AGENTS.md"
-    other_path.write_text("must not leak", encoding="utf-8")
+    other_path.write_bytes(b"must not leak")
+    global_text = (
+        global_text.replace("\n", newline) if global_text is not None else None
+    )
+    member_text = (
+        member_text.replace("\n", newline) if member_text is not None else None
+    )
     for path, text in ((global_path, global_text), (member_path, member_text)):
         if text is not None:
-            path.write_text(text, encoding="utf-8")
+            path.write_bytes(text.encode("utf-8"))
     world.settings.set_settings(
         "model",
         {"base_url": "https://example.invalid", "api_key": "unused", "model": "local"},
@@ -1610,12 +1617,13 @@ def test_agents_instructions_are_read_only_at_window_creation(
     world.store.append_message(room, HUMAN, "@Main next turn")
     assert scheduler().run_turn(MAIN).status == "completed"
     assert seen == [expected, expected]
-    global_path.write_text("new global", encoding="utf-8")
-    member_path.write_text("new member\n ", encoding="utf-8")
+    global_path.write_bytes(b"new global")
+    new_member_text = f"new member{newline} "
+    member_path.write_bytes(new_member_text.encode("utf-8"))
     world.history.reset_window(MAIN, "prepared")
     world.store.append_message(room, HUMAN, "@Main new window")
     assert scheduler().run_turn(MAIN).status == "completed"
-    assert seen[-1] == SYSTEM_PROMPT + "\n\nnew global\n\nnew member\n "
+    assert seen[-1] == SYSTEM_PROMPT + "\n\nnew global\n\n" + new_member_text
 
 
 @pytest.mark.parametrize("bad_global", [False, True])
@@ -1694,7 +1702,10 @@ def test_process_interruption_before_response_recovers_saved_window_snapshot(
     assert seen == [SYSTEM_PROMPT + "\n\nsnapshot\n "]
 
 
-def test_agents_file_changed_during_tool_call_waits_for_next_window(world, tmp_path):
+@pytest.mark.parametrize("newline", ["\n", "\r\n"], ids=["lf", "crlf"])
+def test_agents_file_changed_during_tool_call_waits_for_next_window(
+    world, tmp_path, newline
+):
     from pydantic_ai.messages import ModelResponse, TextPart, ToolCallPart
     from pydantic_ai.models.function import FunctionModel
 
@@ -1702,7 +1713,8 @@ def test_agents_file_changed_during_tool_call_waits_for_next_window(world, tmp_p
     from huddol.adapters.model.runner import PydanticModelRunner
 
     path = tmp_path / "library" / "AGENTS.md"
-    path.write_text("before\n ", encoding="utf-8")
+    content = f"before{newline} "
+    path.write_bytes(content.encode("utf-8"))
     world.settings.set_settings(
         "model",
         {"base_url": "https://example.invalid", "api_key": "unused", "model": "local"},
@@ -1728,7 +1740,7 @@ def test_agents_file_changed_during_tool_call_waits_for_next_window(world, tmp_p
     assert scheduler.run_turn(MAIN).status == "completed"
     world.store.append_message(room, HUMAN, "@Main again")
     assert scheduler.run_turn(MAIN).status == "completed"
-    assert seen == [SYSTEM_PROMPT + "\n\nbefore\n "] * 3
+    assert seen == [SYSTEM_PROMPT + "\n\n" + content] * 3
     world.history.reset_window(MAIN, "prepared")
     world.store.append_message(room, HUMAN, "@Main new window")
     record = scheduler.run_turn(MAIN)
