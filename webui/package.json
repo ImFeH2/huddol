@@ -1,6 +1,6 @@
 {
   "name": "huddol-webui",
-  "version": "0.0.3",
+  "version": "0.0.4",
   "description": "Run your own organization of agents.",
   "private": true,
   "type": "module",
