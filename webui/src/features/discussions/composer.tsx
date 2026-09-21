@@ -97,49 +97,6 @@ function PlusIcon() {
   );
 }
 
-function EffortIcon() {
-  return (
-    <svg
-      width="14"
-      height="14"
-      viewBox="0 0 14 14"
-      fill="none"
-      aria-hidden="true"
-    >
-      <rect
-        x="1.5"
-        y="8"
-        width="2.5"
-        height="4.5"
-        rx="1"
-        fill="currentColor"
-        className="transition-opacity duration-300"
-        opacity={1}
-      />
-      <rect
-        x="5.75"
-        y="5"
-        width="2.5"
-        height="7.5"
-        rx="1"
-        fill="currentColor"
-        className="transition-opacity duration-300"
-        opacity={1}
-      />
-      <rect
-        x="10"
-        y="2"
-        width="2.5"
-        height="10.5"
-        rx="1"
-        fill="currentColor"
-        className="transition-opacity duration-300"
-        opacity={0.3}
-      />
-    </svg>
-  );
-}
-
 export function composerFades(top: number, height: number, viewport: number) {
   return {
     top: Math.min(top / 20, 1),
@@ -535,29 +492,6 @@ export function Composer({
               : "opacity-0 blur-sm translate-y-2 pointer-events-none",
           )}
         >
-          <button
-            type="button"
-            disabled
-            aria-label="Model selection · Coming soon"
-            title="Model selection · Coming soon"
-            className="group flex min-w-0 items-center gap-1 rounded-full px-2 py-1 text-(--composer-foreground)/50 outline-none cursor-default"
-          >
-            <span className="truncate px-1 text-xs font-semibold select-none">
-              Model
-            </span>
-          </button>
-          <button
-            type="button"
-            disabled
-            aria-label="Thinking effort · Coming soon"
-            title="Thinking effort · Coming soon"
-            className="group flex min-w-0 items-center gap-1 rounded-full px-2 py-1 text-(--composer-foreground)/50 outline-none cursor-default"
-          >
-            <EffortIcon />
-            <span className="truncate px-1 text-xs font-semibold select-none">
-              Effort
-            </span>
-          </button>
           <button
             type="button"
             disabled

@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from pathlib import Path
 
 import pytest
 
+from huddol.adapters.model.config import ModelCatalog
 from huddol.adapters.sqlite.agent import SqliteAgentStore
 from huddol.adapters.sqlite.store import SqliteStore
 from huddol.ports.agent import WindowState
@@ -224,6 +226,61 @@ def test_history_search_finds_runs_by_content(agent_store: SqliteAgentStore) -> 
     history = History(agent_store, AGENT)
     assert len(history.search("bubblewrap")) == 1
     assert history.search("nothing") == ()
+
+
+def test_model_catalog_migration_preserves_identity_across_restarts(tmp_path) -> None:
+    path = tmp_path / "migration.sqlite3"
+    base = SqliteStore(path)
+    store = SqliteAgentStore(base._db)
+    store.set_settings(
+        "model",
+        {
+            "api_type": "google",
+            "base_url": "https://example.invalid",
+            "api_key": "test-only-key",
+            "model": "gemini-2.5-pro",
+        },
+    )
+    base.close()
+    base = SqliteStore(path)
+    store = SqliteAgentStore(base._db)
+    converted = store.get_settings("model")
+    catalog = ModelCatalog.restore(converted)
+    assert catalog.resolve(2).model == "gemini-2.5-pro"
+    assert catalog.resolve(3).api_key == "test-only-key"
+    assert catalog.default_model_id == catalog.models[0].id
+    base.close()
+    base = SqliteStore(path)
+    try:
+        store = SqliteAgentStore(base._db)
+        assert store.get_settings("model") == converted
+        assert "test-only-key" not in str(ModelCatalog.restore(converted).redacted())
+    finally:
+        base.close()
+
+
+def test_settings_updates_preserve_concurrent_changes(agent_store) -> None:
+    def increment(_: int) -> None:
+        def update(values):
+            return {"count": (values or {}).get("count", 0) + 1}
+
+        agent_store.update_settings("counter", update)
+
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        list(pool.map(increment, range(100)))
+    assert agent_store.get_settings("counter") == {"count": 100}
+
+
+def test_rejected_settings_update_preserves_stored_value(agent_store) -> None:
+    agent_store.set_settings("counter", {"count": 1})
+
+    def reject(values):
+        values["count"] = 2
+        raise ValueError("Rejected update")
+
+    with pytest.raises(ValueError, match="Rejected update"):
+        agent_store.update_settings("counter", reject)
+    assert agent_store.get_settings("counter") == {"count": 1}
 
 
 def test_settings_round_trip_without_a_directory_table(

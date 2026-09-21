@@ -1,6 +1,7 @@
 import { Save } from "lucide-react";
 import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { Combobox } from "@/components/ui/combobox";
+import { Modal } from "@/components/ui/dialog";
 import {
   Button,
   Chip,
@@ -10,8 +11,15 @@ import {
   toast,
 } from "@/components/ui/index";
 import { Segmented } from "@/components/ui/segmented";
-import { reportLoadFailure, useSaver } from "@/features/settings/saver";
-import { backend } from "@/lib/backend";
+import { reportLoadFailure } from "@/features/settings/saver";
+import {
+  type AgentModelConfig,
+  backend,
+  type ModelCatalog,
+  type ProviderConfig,
+  type RegisteredModel,
+  type Thinking,
+} from "@/lib/backend";
 
 const PROVIDERS = [
   { value: "openai-chat", label: "OpenAI Chat" },
@@ -20,110 +28,597 @@ const PROVIDERS = [
   { value: "google", label: "Google" },
 ];
 
-export function modelUpdate(
-  values: Record<string, unknown>,
-  apiKey: string,
-): Record<string, unknown> {
-  const next: Record<string, unknown> = {
-    api_type: values.api_type,
-    base_url: values.base_url,
-    model: values.model,
-  };
-  if (apiKey.trim()) next.api_key = apiKey.trim();
-  return next;
-}
-
-export function modelTestEnabled(
-  values: Record<string, unknown>,
-  testing: boolean,
-): boolean {
-  return (
-    !testing &&
-    PROVIDERS.some(({ value }) => value === values.api_type) &&
-    typeof values.base_url === "string" &&
-    !!values.base_url.trim() &&
-    typeof values.model === "string" &&
-    !!values.model.trim()
-  );
-}
-
 export function modelTestDescription(latency: number, reply: string): string {
   return `${latency.toLocaleString("en-US")} ms · ${reply.trim().replace(/\s+/g, " ").slice(0, 80)}`;
 }
 
-export function ModelPanel() {
-  const baseUrlId = useId();
-  const modelId = useId();
-  const keyId = useId();
-  const first = useRef<HTMLInputElement>(null);
-  const listRequest = useRef(0);
-  const [values, setValues] = useState<Record<string, unknown>>({});
-  const [apiKey, setApiKey] = useState("");
-  const [loading, setLoading] = useState(true);
-  const [loaded, setLoaded] = useState(false);
-  const [loadFailed, setLoadFailed] = useState(false);
-  const [models, setModels] = useState<string[]>([]);
-  const [listing, setListing] = useState(false);
-  const [testing, setTesting] = useState(false);
+const selectClass =
+  "w-full rounded-md border border-line bg-surface px-3 py-2 text-sm text-fg";
 
-  const editing = useRef(values);
-  editing.current = values;
-  const saved = useRef(values);
+export function ModelSelection({
+  catalog,
+  value,
+  onChange,
+  inherit = true,
+}: {
+  catalog: ModelCatalog;
+  value: AgentModelConfig;
+  onChange: (value: AgentModelConfig) => void;
+  inherit?: boolean;
+}) {
+  const id = useId();
+  const selected = catalog.models.find(
+    (model) =>
+      model.id ===
+      (value.model_id ?? (inherit ? catalog.default_model_id : null)),
+  );
+  const options = selected?.thinking_options ?? ["default"];
+  return (
+    <div className="flex flex-col gap-4">
+      <Field label="Model" htmlFor={`${id}-model`}>
+        <select
+          id={`${id}-model`}
+          className={selectClass}
+          value={value.model_id ?? ""}
+          onChange={(event) =>
+            onChange({ ...value, model_id: event.target.value || null })
+          }
+        >
+          <option value="">
+            {inherit ? "Use global default" : "Not configured"}
+          </option>
+          {catalog.providers.map((provider) => (
+            <optgroup
+              key={provider.id}
+              label={provider.name}
+              disabled={!provider.enabled}
+            >
+              {catalog.models
+                .filter((model) => model.provider_id === provider.id)
+                .map((model) => (
+                  <option
+                    key={model.id}
+                    value={model.id}
+                    disabled={!model.enabled}
+                  >
+                    {model.name}
+                  </option>
+                ))}
+            </optgroup>
+          ))}
+        </select>
+      </Field>
+      <Field label="Thinking effort" htmlFor={`${id}-thinking`}>
+        <select
+          id={`${id}-thinking`}
+          className={selectClass}
+          value={value.thinking ?? ""}
+          onChange={(event) =>
+            onChange({
+              ...value,
+              thinking: (event.target.value || null) as Thinking | null,
+            })
+          }
+        >
+          {inherit ? (
+            <option value="">
+              Use global default ({catalog.default_thinking})
+            </option>
+          ) : null}
+          {value.thinking && !options.includes(value.thinking) ? (
+            <option value={value.thinking} disabled>
+              {value.thinking} · unavailable for this model
+            </option>
+          ) : null}
+          {options.map((option) => (
+            <option key={option} value={option}>
+              {option === "default" ? "Model default" : option}
+            </option>
+          ))}
+        </select>
+      </Field>
+      <p className="text-sm text-fg-muted">
+        {selected
+          ? `Effective model: ${catalog.providers.find((provider) => provider.id === selected.provider_id)?.name} / ${selected.name}. Changes apply to the next Turn.`
+          : "No model selected. Configure a provider and model before this Agent runs."}
+      </p>
+    </div>
+  );
+}
 
-  const load = useCallback(async (preserve = false) => {
-    setLoading(true);
+export function AgentCreateDialog({
+  onClose,
+  onCreated,
+}: {
+  onClose: () => void;
+  onCreated: () => Promise<void>;
+}) {
+  const id = useId();
+  const [catalog, setCatalog] = useState<ModelCatalog | null>(null);
+  const [name, setName] = useState("");
+  const [value, setValue] = useState<AgentModelConfig>({
+    model_id: null,
+    thinking: null,
+  });
+  const [busy, setBusy] = useState(false);
+  const load = useCallback(async () => {
     try {
-      const next = await backend.settings("model");
-      if (!preserve || editing.current === saved.current) {
-        saved.current = next;
-        setValues(next);
-      }
-      setLoaded(true);
-      setLoadFailed(false);
+      setCatalog(await backend.modelCatalog());
     } catch (error) {
-      setLoadFailed(true);
-      reportLoadFailure("settings-model", error, () => void load(preserve));
-    } finally {
-      setLoading(false);
+      reportLoadFailure("create-agent-models", error, () => void load());
     }
   }, []);
-
   useEffect(() => {
     void load();
-    const off = backend.onEvent((event) => {
-      if (event.type === "connection.restored") void load(true);
+    return backend.onEvent((event) => {
+      if (event.type === "connection.restored") void load();
     });
+  }, [load]);
+  const create = async () => {
+    if (!catalog || !name.trim() || busy) return;
+    setBusy(true);
+    try {
+      await backend.createAgent(name.trim(), value);
+      await onCreated();
+      onClose();
+    } catch (error) {
+      toast({
+        tone: "danger",
+        title: "Could not create Agent",
+        description: error instanceof Error ? error.message : String(error),
+      });
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <Modal
+      open
+      onOpenChange={(open) => {
+        if (!open && !busy) onClose();
+      }}
+      title="New Agent"
+      footer={
+        <>
+          <Button disabled={busy} onClick={onClose}>
+            Cancel
+          </Button>
+          <Button
+            variant="primary"
+            disabled={!catalog || !name.trim() || busy}
+            onClick={() => void create()}
+          >
+            Create Agent
+          </Button>
+        </>
+      }
+    >
+      <fieldset
+        className="flex flex-col gap-4 border-0 p-0"
+        disabled={busy || !catalog}
+      >
+        <Field label="Name" htmlFor={id}>
+          <Input
+            id={id}
+            value={name}
+            onChange={(event) => setName(event.target.value)}
+          />
+        </Field>
+        {catalog ? (
+          <ModelSelection catalog={catalog} value={value} onChange={setValue} />
+        ) : (
+          <Spinner label="Loading models" />
+        )}
+      </fieldset>
+    </Modal>
+  );
+}
+
+export function AgentModelPanel({ agentId }: { agentId: number }) {
+  const [catalog, setCatalog] = useState<ModelCatalog | null>(null);
+  const [value, setValue] = useState<AgentModelConfig>({
+    model_id: null,
+    thinking: null,
+  });
+  const [busy, setBusy] = useState(false);
+  const dirty = useRef(false);
+  const load = useCallback(async () => {
+    try {
+      const loaded = await backend.modelCatalog();
+      setCatalog(loaded);
+      if (!dirty.current) {
+        setValue(
+          loaded.agent_configs[String(agentId)] ?? {
+            model_id: null,
+            thinking: null,
+          },
+        );
+      }
+    } catch (error) {
+      reportLoadFailure(`agent-model:${agentId}`, error, () => void load());
+    }
+  }, [agentId]);
+  useEffect(() => {
+    void load();
+    return backend.onEvent((event) => {
+      if (event.type === "connection.restored") void load();
+    });
+  }, [load]);
+  return (
+    <form
+      className="flex max-w-[560px] flex-col gap-4"
+      onChangeCapture={() => {
+        dirty.current = true;
+      }}
+      onSubmit={async (event) => {
+        event.preventDefault();
+        if (!catalog || busy) return;
+        setBusy(true);
+        try {
+          setCatalog(await backend.configureModel("set_agent", agentId, value));
+          dirty.current = false;
+          toast({ tone: "success", title: "Agent model settings saved" });
+        } catch (error) {
+          toast({
+            tone: "danger",
+            title: "Could not save Agent model settings",
+            description: error instanceof Error ? error.message : String(error),
+          });
+        } finally {
+          setBusy(false);
+        }
+      }}
+    >
+      <h2 className="text-base font-medium">Model settings</h2>
+      <fieldset
+        className="flex flex-col gap-4 border-0 p-0"
+        disabled={!catalog || busy}
+      >
+        {catalog ? (
+          <ModelSelection catalog={catalog} value={value} onChange={setValue} />
+        ) : (
+          <Spinner label="Loading models" />
+        )}
+        <Button type="submit" variant="primary">
+          Save model settings
+        </Button>
+      </fieldset>
+    </form>
+  );
+}
+
+type SaveModel = (
+  action: string,
+  id: string | number | null,
+  values?: Record<string, unknown>,
+) => Promise<boolean>;
+
+export function ModelPanel() {
+  const [catalog, setCatalog] = useState<ModelCatalog | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [failed, setFailed] = useState(false);
+  const [providerId, setProviderId] = useState<string | null>(null);
+  const load = useCallback(async () => {
+    try {
+      setCatalog(await backend.modelCatalog());
+      setFailed(false);
+    } catch (error) {
+      setFailed(true);
+      reportLoadFailure("settings-model", error, () => void load());
+    }
+  }, []);
+  useEffect(() => {
+    void load();
+    return backend.onEvent((event) => {
+      if (event.type === "connection.restored") void load();
+    });
+  }, [load]);
+  const save: SaveModel = async (action, id, values = {}) => {
+    setBusy(true);
+    try {
+      const updated = await backend.configureModel(action, id, values);
+      setCatalog(updated);
+      if (action === "save_provider" && id === null) {
+        const created = updated.providers[updated.providers.length - 1];
+        if (!created) throw new Error("Saved provider is missing");
+        setProviderId(created.id);
+      }
+      toast({ tone: "success", title: "Model settings saved" });
+      return true;
+    } catch (error) {
+      toast({
+        tone: "danger",
+        title: "Could not save model settings",
+        description: error instanceof Error ? error.message : String(error),
+      });
+      return false;
+    } finally {
+      setBusy(false);
+    }
+  };
+  const provider = catalog?.providers.find((item) => item.id === providerId);
+  return (
+    <fieldset
+      className="m-0 flex min-w-0 max-w-[720px] flex-col gap-6 border-0 p-0"
+      aria-label="Model settings"
+      disabled={!catalog || busy || failed}
+    >
+      {!catalog ? (
+        <Spinner label="Loading model settings" />
+      ) : (
+        <>
+          <DefaultModelForm catalog={catalog} save={save} />
+          <section className="flex flex-col gap-4">
+            <h2 className="text-base font-medium">Providers</h2>
+            <div className="flex flex-wrap gap-2">
+              {catalog.providers.map((item) => (
+                <Button
+                  key={item.id}
+                  variant={providerId === item.id ? "primary" : undefined}
+                  onClick={() => setProviderId(item.id)}
+                >
+                  {item.name}
+                  {item.enabled ? "" : " · disabled"}
+                </Button>
+              ))}
+              <Button onClick={() => setProviderId(null)}>Add provider</Button>
+            </div>
+            <ProviderForm
+              key={provider?.id ?? "new"}
+              provider={provider}
+              save={save}
+              onDeleted={() => setProviderId(null)}
+            />
+          </section>
+          {provider ? (
+            <section className="flex flex-col gap-4">
+              <h2 className="text-base font-medium">
+                Models · {provider.name}
+              </h2>
+              {catalog.models
+                .filter((model) => model.provider_id === provider.id)
+                .map((model) => (
+                  <ModelForm
+                    key={model.id}
+                    provider={provider}
+                    model={model}
+                    save={save}
+                  />
+                ))}
+              <ModelForm
+                key={`new-${provider.id}`}
+                provider={provider}
+                save={save}
+              />
+            </section>
+          ) : null}
+        </>
+      )}
+    </fieldset>
+  );
+}
+
+function DefaultModelForm({
+  catalog,
+  save,
+}: {
+  catalog: ModelCatalog;
+  save: SaveModel;
+}) {
+  const [value, setValue] = useState<AgentModelConfig>({
+    model_id: catalog.default_model_id,
+    thinking: catalog.default_thinking,
+  });
+  const dirty = useRef(false);
+  useEffect(() => {
+    if (!dirty.current) {
+      setValue({
+        model_id: catalog.default_model_id,
+        thinking: catalog.default_thinking,
+      });
+    }
+  }, [catalog.default_model_id, catalog.default_thinking]);
+  return (
+    <form
+      className="flex flex-col gap-4"
+      onChangeCapture={() => {
+        dirty.current = true;
+      }}
+      onSubmit={async (event) => {
+        event.preventDefault();
+        if (await save("set_defaults", null, value)) dirty.current = false;
+      }}
+    >
+      <h2 className="text-base font-medium">Global defaults</h2>
+      <ModelSelection
+        catalog={catalog}
+        value={value}
+        onChange={setValue}
+        inherit={false}
+      />
+      <Button type="submit" variant="primary">
+        <Save size={16} />
+        Save defaults
+      </Button>
+    </form>
+  );
+}
+
+function ProviderForm({
+  provider,
+  save,
+  onDeleted,
+}: {
+  provider?: ProviderConfig;
+  save: SaveModel;
+  onDeleted: () => void;
+}) {
+  const id = useId();
+  const [name, setName] = useState(provider?.name ?? "");
+  const [apiType, setApiType] = useState(provider?.api_type ?? "openai-chat");
+  const [baseUrl, setBaseUrl] = useState(provider?.base_url ?? "");
+  const [apiKey, setApiKey] = useState("");
+  const [enabled, setEnabled] = useState(provider?.enabled ?? true);
+  const [clearKey, setClearKey] = useState(false);
+  const dirty = useRef(false);
+  useEffect(() => {
+    if (!dirty.current) {
+      setName(provider?.name ?? "");
+      setApiType(provider?.api_type ?? "openai-chat");
+      setBaseUrl(provider?.base_url ?? "");
+      setEnabled(provider?.enabled ?? true);
+    }
+  }, [provider]);
+  return (
+    <form
+      className="flex flex-col gap-4 rounded-md border border-line p-4"
+      onChangeCapture={() => {
+        dirty.current = true;
+      }}
+      onSubmit={async (event) => {
+        event.preventDefault();
+        if (
+          await save("save_provider", provider?.id ?? null, {
+            name: name.trim(),
+            api_type: apiType,
+            base_url: baseUrl.trim(),
+            api_key: apiKey.trim(),
+            enabled,
+            ...(provider ? { clear_key: clearKey } : {}),
+          })
+        ) {
+          dirty.current = false;
+          setApiKey("");
+          setClearKey(false);
+        }
+      }}
+    >
+      <Field label="Provider name" htmlFor={`${id}-name`}>
+        <Input
+          id={`${id}-name`}
+          value={name}
+          required
+          onChange={(event) => setName(event.target.value)}
+        />
+      </Field>
+      <Field label="API type">
+        <Segmented
+          label="API type"
+          value={apiType}
+          options={PROVIDERS}
+          onChange={(value) => {
+            dirty.current = true;
+            setApiType(value);
+          }}
+        />
+      </Field>
+      <Field label="Base URL" htmlFor={`${id}-url`}>
+        <Input
+          id={`${id}-url`}
+          value={baseUrl}
+          placeholder="https://api.example.com/v1"
+          onChange={(event) => setBaseUrl(event.target.value)}
+        />
+      </Field>
+      <Field
+        label="API key"
+        htmlFor={`${id}-key`}
+        hint={
+          provider?.api_key_set
+            ? "Leave blank to keep the stored key."
+            : undefined
+        }
+      >
+        <Input
+          id={`${id}-key`}
+          type="password"
+          autoComplete="off"
+          value={apiKey}
+          onChange={(event) => setApiKey(event.target.value)}
+        />
+      </Field>
+      {provider?.api_key_set ? (
+        <>
+          <Chip tone="success">Key stored</Chip>
+          <label className="flex items-center gap-2 text-sm">
+            <input
+              type="checkbox"
+              checked={clearKey}
+              onChange={(event) => setClearKey(event.target.checked)}
+            />
+            Clear stored key
+          </label>
+        </>
+      ) : null}
+      <label className="flex items-center gap-2 text-sm">
+        <input
+          type="checkbox"
+          checked={enabled}
+          onChange={(event) => setEnabled(event.target.checked)}
+        />
+        Enabled
+      </label>
+      <div className="flex gap-2">
+        <Button type="submit" variant="primary">
+          {provider ? "Save provider" : "Create provider"}
+        </Button>
+        {provider ? (
+          <Button
+            onClick={async () => {
+              if (await save("delete_provider", provider.id)) onDeleted();
+            }}
+          >
+            Delete provider
+          </Button>
+        ) : null}
+      </div>
+    </form>
+  );
+}
+
+function ModelForm({
+  provider,
+  model,
+  save,
+}: {
+  provider: ProviderConfig;
+  model?: RegisteredModel;
+  save: SaveModel;
+}) {
+  const id = useId();
+  const [name, setName] = useState(model?.name ?? "");
+  const [remote, setRemote] = useState(model?.model ?? "");
+  const [enabled, setEnabled] = useState(model?.enabled ?? true);
+  const [options, setOptions] = useState<string[]>([]);
+  const [listing, setListing] = useState(false);
+  const [testing, setTesting] = useState(false);
+  const [thinking, setThinking] = useState<Thinking>("default");
+  const dirty = useRef(false);
+  const listRequest = useRef(0);
+  useEffect(() => {
+    if (!dirty.current) {
+      setName(model?.name ?? "");
+      setRemote(model?.model ?? "");
+      setEnabled(model?.enabled ?? true);
+    }
+  }, [model]);
+  useEffect(() => {
+    listRequest.current += 1;
+    setOptions([]);
+    setListing(false);
     return () => {
-      off();
       listRequest.current += 1;
     };
-  }, [load]);
-
-  const { saving, save } = useSaver(load, first);
-  const configured = values.api_key_set === true;
-  const update = modelUpdate(values, apiKey);
-  const disabled = loading || saving || !loaded || loadFailed;
-
-  const clearModels = () => {
-    listRequest.current += 1;
-    setModels([]);
-    setListing(false);
-  };
-
+  }, [provider]);
   const listModels = async () => {
-    if (listing || disabled) return;
     const request = ++listRequest.current;
     setListing(true);
     try {
       const result = await backend.call<{ models: string[] }>(
         "settings.list_models",
-        {
-          api_type: values.api_type,
-          base_url: values.base_url,
-          api_key: apiKey.trim(),
-        },
+        { provider_id: provider.id },
       );
-      if (request === listRequest.current) setModels(result.models);
+      if (request === listRequest.current) setOptions(result.models);
     } catch (error) {
       if (request === listRequest.current) {
         toast({
@@ -136,20 +631,14 @@ export function ModelPanel() {
       if (request === listRequest.current) setListing(false);
     }
   };
-
   const testModel = async () => {
-    if (disabled || !modelTestEnabled(values, testing)) return;
-    first.current?.focus();
+    if (!model) return;
     setTesting(true);
     try {
-      const result = await backend.call<{
-        ok: true;
-        latency_ms: number;
-        reply: string;
-      }>("settings.test_model", {
-        ...update,
-        api_key: apiKey.trim(),
-      });
+      const result = await backend.call<{ latency_ms: number; reply: string }>(
+        "settings.test_model",
+        { model_id: model.id, thinking },
+      );
       toast({
         tone: "success",
         title: "Model responded",
@@ -165,91 +654,97 @@ export function ModelPanel() {
       setTesting(false);
     }
   };
-
   return (
     <form
-      noValidate
+      className="flex flex-col gap-4 rounded-md border border-line p-4"
+      onChangeCapture={() => {
+        dirty.current = true;
+      }}
       onSubmit={async (event) => {
         event.preventDefault();
-        if (disabled) return;
-        clearModels();
-        if (await save("model", update)) setApiKey("");
+        if (
+          await save("save_model", model?.id ?? null, {
+            name: name.trim() || remote.trim(),
+            model: remote.trim(),
+            provider_id: provider.id,
+            enabled,
+          })
+        ) {
+          dirty.current = false;
+          if (!model) {
+            setName("");
+            setRemote("");
+          }
+        }
       }}
     >
-      <fieldset
-        className="m-0 flex min-w-0 max-w-[560px] flex-col gap-4 border-0 p-0"
-        aria-label="Model settings"
-        disabled={disabled}
-      >
-        <Field label="Provider">
-          <Segmented
-            label="Provider"
-            value={String(values.api_type ?? "")}
-            options={PROVIDERS}
-            onChange={(api_type) => {
-              clearModels();
-              setValues({ ...values, api_type });
-            }}
-          />
-        </Field>
-        <Field label="Base URL" htmlFor={baseUrlId}>
-          <Input
-            ref={first}
-            id={baseUrlId}
-            value={String(values.base_url ?? "")}
-            placeholder="https://api.example.com/v1"
-            onChange={(event) => {
-              clearModels();
-              setValues({ ...values, base_url: event.target.value });
-            }}
-          />
-        </Field>
-        <Field label="Model" htmlFor={modelId}>
-          <Combobox
-            id={modelId}
-            label="Model"
-            value={String(values.model ?? "")}
-            onChange={(model) => setValues({ ...values, model })}
-            options={models}
-            chooseLabel="Choose model"
-            loadLabel="Load models"
-            onLoad={() => void listModels()}
-            loading={listing}
-            disabled={disabled}
-          />
-        </Field>
-        <Field
-          label="API key"
-          htmlFor={keyId}
-          hint={configured ? "Leave blank to keep the stored key." : undefined}
-        >
-          <Input
-            id={keyId}
-            type="password"
-            autoComplete="off"
-            value={apiKey}
-            placeholder={configured ? "Unchanged" : "Required"}
-            onChange={(event) => {
-              clearModels();
-              setApiKey(event.target.value);
-            }}
-          />
-        </Field>
-        <div className="flex items-center gap-3 pt-1">
-          <Button variant="primary" type="submit" disabled={disabled}>
-            <Save size={16} />
-            Save
-          </Button>
-          <Button
-            disabled={disabled || !modelTestEnabled(values, testing)}
-            onClick={() => void testModel()}
+      <Field label="Model name" htmlFor={`${id}-name`}>
+        <Input
+          id={`${id}-name`}
+          value={name}
+          onChange={(event) => setName(event.target.value)}
+        />
+      </Field>
+      <Field label="Remote model ID" htmlFor={`${id}-remote`}>
+        <Combobox
+          id={`${id}-remote`}
+          label="Remote model ID"
+          value={remote}
+          onChange={(value) => {
+            dirty.current = true;
+            setRemote(value);
+          }}
+          options={options}
+          chooseLabel="Choose model"
+          loadLabel="Load models"
+          onLoad={() => void listModels()}
+          loading={listing}
+        />
+      </Field>
+      <label className="flex items-center gap-2 text-sm">
+        <input
+          type="checkbox"
+          checked={enabled}
+          onChange={(event) => setEnabled(event.target.checked)}
+        />
+        Enabled
+      </label>
+      {model ? (
+        <Field label="Test thinking effort" htmlFor={`${id}-thinking`}>
+          <select
+            id={`${id}-thinking`}
+            className={selectClass}
+            value={thinking}
+            onChange={(event) => setThinking(event.target.value as Thinking)}
           >
-            {testing ? <Spinner label="Testing" /> : null}
-            {testing ? "Testing" : "Test"}
-          </Button>
-          {configured ? <Chip tone="success">Key stored</Chip> : null}
-        </div>
-      </fieldset>
+            {model.thinking_options.map((option) => (
+              <option key={option} value={option}>
+                {option === "default" ? "Model default" : option}
+              </option>
+            ))}
+          </select>
+        </Field>
+      ) : null}
+      <div className="flex flex-wrap gap-2">
+        <Button type="submit" variant="primary">
+          {model ? "Save model" : "Add model"}
+        </Button>
+        {model ? (
+          <>
+            <Button
+              disabled={
+                testing || !provider.api_key_set || remote !== model.model
+              }
+              onClick={() => void testModel()}
+            >
+              {testing ? <Spinner label="Testing" /> : null}Test
+            </Button>
+            <Button onClick={() => void save("delete_model", model.id)}>
+              Delete model
+            </Button>
+          </>
+        ) : null}
+      </div>
     </form>
   );
 }

@@ -3,64 +3,74 @@ import { describe, expect, it } from "vitest";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import {
   ModelPanel,
+  ModelSelection,
   modelTestDescription,
-  modelTestEnabled,
-  modelUpdate,
 } from "@/features/settings/model";
 
-const values = {
-  api_type: "openai-chat",
-  base_url: "https://example.invalid/v1",
-  model: "local",
-  api_key_set: true,
+import type { ModelCatalog } from "@/lib/backend";
+
+const catalog: ModelCatalog = {
+  version: 1,
+  providers: [
+    {
+      id: "p",
+      name: "Provider",
+      api_type: "google",
+      base_url: "https://example.invalid",
+      api_key_set: true,
+      enabled: true,
+    },
+  ],
+  models: [
+    {
+      id: "m",
+      provider_id: "p",
+      name: "Model",
+      model: "gemini-3-pro-preview",
+      enabled: true,
+      thinking_options: ["default", "low", "high"],
+    },
+  ],
+  default_model_id: "m",
+  default_thinking: "high",
+  agent_configs: {},
 };
 
 describe("Model settings", () => {
-  it("sends only model settings and omits unchanged credentials", () => {
-    expect(
-      modelUpdate({ ...values, compaction_threshold: 320000 }, " "),
-    ).toEqual({
-      api_type: "openai-chat",
-      base_url: "https://example.invalid/v1",
-      model: "local",
-    });
+  it("shows inherited model and supported thinking choices", () => {
+    const html = renderToStaticMarkup(
+      <ModelSelection
+        catalog={catalog}
+        value={{ model_id: null, thinking: null }}
+        onChange={() => {}}
+      />,
+    );
+    expect(html).toContain("Use global default (high)");
+    expect(html).toContain("Provider / Model");
+    expect(html).toContain("Model default");
+    expect(html).not.toContain('value="medium"');
   });
 
-  it("includes only an explicitly entered key", () => {
-    expect(
-      modelUpdate({ ...values, api_key: "stored" }, " replacement "),
-    ).toEqual({
-      api_type: "openai-chat",
-      base_url: "https://example.invalid/v1",
-      model: "local",
-      api_key: "replacement",
-    });
+  it("keeps an incompatible explicit choice visible for correction", () => {
+    const html = renderToStaticMarkup(
+      <ModelSelection
+        catalog={catalog}
+        value={{ model_id: "m", thinking: "medium" }}
+        onChange={() => {}}
+      />,
+    );
+    expect(html).toContain("medium · unavailable for this model");
   });
 
-  it.each(["openai-chat", "openai-responses", "anthropic", "google"])(
-    "enables Test for configured %s without requiring a typed key",
-    (api_type) => {
-      expect(
-        modelTestEnabled({ ...values, api_type, api_key_set: false }, false),
-      ).toBe(true);
-      expect(modelUpdate({ ...values, api_type }, "").api_type).toBe(api_type);
-    },
-  );
-
-  it.each([
-    { api_type: "" },
-    { api_type: "unsupported" },
-    { base_url: "" },
-    { base_url: "   " },
-    { model: "" },
-    { model: " \n " },
-    { model: null },
-  ])("disables Test for incomplete settings %o", (draft) => {
-    expect(modelTestEnabled({ ...values, ...draft }, false)).toBe(false);
-  });
-
-  it("disables Test while a test is pending", () => {
-    expect(modelTestEnabled(values, true)).toBe(false);
+  it("explains missing configuration", () => {
+    const html = renderToStaticMarkup(
+      <ModelSelection
+        catalog={{ ...catalog, default_model_id: null }}
+        value={{ model_id: null, thinking: null }}
+        onChange={() => {}}
+      />,
+    );
+    expect(html).toContain("No model selected");
   });
 
   it("formats the reply as one line capped at 80 characters", () => {
@@ -72,34 +82,15 @@ describe("Model settings", () => {
     );
   });
 
-  it("renders provider segments, a model combobox and disabled actions before loading", () => {
+  it("disables configuration before loading", () => {
     const html = renderToStaticMarkup(
       <TooltipProvider>
         <ModelPanel />
       </TooltipProvider>,
     );
-    for (const label of [
-      "OpenAI Chat",
-      "OpenAI Responses",
-      "Anthropic",
-      "Google",
-    ]) {
-      expect(html).toMatch(
-        new RegExp(`<button[^>]*aria-pressed="false"[^>]*>${label}</button>`),
-      );
-    }
-    expect(html).toContain('role="combobox"');
-    expect(html).toContain('aria-label="Choose model"');
-    expect(html).toContain('type="password"');
     expect(html).toMatch(
       /<fieldset[^>]*aria-label="Model settings"[^>]*disabled=""/,
     );
-    expect(html).toMatch(/<button(?=[^>]*type="submit")[^>]*disabled=""/);
-    expect(html).toMatch(
-      /<button(?=[^>]*type="button")(?=[^>]*disabled="")[^>]*>Test<\/button>/,
-    );
-    expect(html).not.toContain("Compaction");
-    expect(html).not.toContain('type="number"');
-    expect(html).not.toContain("Restart Huddol");
+    expect(html).toContain("Loading model settings");
   });
 });

@@ -35,6 +35,7 @@ import {
 import { type MenuAction, OverflowMenu } from "@/components/ui/menu";
 import { Segmented } from "@/components/ui/segmented";
 import { agentStateLabel } from "@/features/members/state";
+import { AgentCreateDialog } from "@/features/settings/model";
 import { backend, type Member } from "@/lib/backend";
 import { plural } from "@/lib/format";
 
@@ -161,17 +162,12 @@ export function MembersPage({ tokenLimit }: { tokenLimit: number }) {
         )}
       </PageBody>
 
-      <PromptDialog
-        open={creating}
-        onOpenChange={setCreating}
-        title="New Agent"
-        label="Name"
-        submitLabel="Create Agent"
-        onSubmit={async (name) => {
-          await backend.createAgent(name);
-          await refresh();
-        }}
-      />
+      {creating ? (
+        <AgentCreateDialog
+          onClose={() => setCreating(false)}
+          onCreated={refresh}
+        />
+      ) : null}
       <PromptDialog
         open={renaming !== null}
         onOpenChange={(next) => !next && setRenaming(null)}

@@ -143,6 +143,16 @@ class AgentTools:
                 "Pause the Agent and let its Turn finish before deleting",
             )
         self._deps.store.delete_member(agent_id)
+
+        def remove_selection(values: dict[str, object] | None) -> dict[str, object]:
+            if values is None:
+                return {}
+            selections = values.get("agent_configs")
+            if isinstance(selections, dict):
+                selections.pop(str(agent_id), None)
+            return values
+
+        self._deps.settings.update_settings("model", remove_selection)
         return {"id": agent_id, "deleted": True}
 
     def create_discussion(

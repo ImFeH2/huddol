@@ -1,3 +1,45 @@
+export type Thinking =
+  | "default"
+  | "none"
+  | "minimal"
+  | "low"
+  | "medium"
+  | "high"
+  | "xhigh"
+  | "max";
+
+export type AgentModelConfig = {
+  model_id: string | null;
+  thinking: Thinking | null;
+};
+
+export type ProviderConfig = {
+  id: string;
+  name: string;
+  api_type: string;
+  base_url: string;
+  api_key_set: boolean;
+  enabled: boolean;
+};
+
+export type RegisteredModel = {
+  id: string;
+  provider_id: string;
+  name: string;
+  model: string;
+  enabled: boolean;
+  thinking_options: Thinking[];
+};
+
+export type ModelCatalog = {
+  version: 1;
+  providers: ProviderConfig[];
+  models: RegisteredModel[];
+  default_model_id: string | null;
+  default_thinking: Thinking;
+  agent_configs: Record<string, AgentModelConfig>;
+};
+
 export type Member = {
   id: number;
   type: "human" | "agent";
@@ -651,8 +693,22 @@ export class Backend {
     }>("organization.get");
   }
 
-  createAgent(name: string) {
-    return this.call<Member>("organization.create_agent", { name });
+  modelCatalog() {
+    return this.call<ModelCatalog>("settings.get", { section: "model" });
+  }
+
+  configureModel(action: string, id: string | number | null, values = {}) {
+    return this.call<ModelCatalog>("settings.update", {
+      section: "model",
+      values: { action, id, values },
+    });
+  }
+
+  createAgent(name: string, model_config?: AgentModelConfig) {
+    return this.call<Member>("organization.create_agent", {
+      name,
+      model_config,
+    });
   }
 
   renameMember(member_id: number, name: string) {

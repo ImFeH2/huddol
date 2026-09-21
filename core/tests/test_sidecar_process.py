@@ -554,7 +554,9 @@ def test_idle_threshold_changes_over_the_pipe_and_survives_restart(
     assert response(frames, 1)["result"]["idle"] is False
 
 
-def test_obsolete_model_settings_are_not_validated_or_returned(tmp_path: Path) -> None:
+def test_incomplete_model_configuration_is_migrated_over_the_pipe(
+    tmp_path: Path,
+) -> None:
     from huddol.adapters.sqlite.agent import SqliteAgentStore
     from huddol.adapters.sqlite.store import SqliteStore
 
@@ -576,7 +578,10 @@ def test_obsolete_model_settings_are_not_validated_or_returned(tmp_path: Path) -
                 "method": "settings.update",
                 "params": {
                     "section": "model",
-                    "values": {"compaction_threshold": False},
+                    "values": {
+                        "action": "set_defaults",
+                        "values": {"model_id": None, "thinking": "default"},
+                    },
                 },
             },
         ],
@@ -587,10 +592,11 @@ def test_obsolete_model_settings_are_not_validated_or_returned(tmp_path: Path) -
     assert "retained-test-key" not in json.dumps(frames) + stderr
     store = SqliteStore(data / "huddol.sqlite3")
     try:
-        assert SqliteAgentStore(store._db).get_settings("model") == {
-            **original,
-            "compaction_threshold": False,
-        }
+        migrated = SqliteAgentStore(store._db).get_settings("model")
+        assert migrated["version"] == 1
+        assert migrated["models"] == []
+        assert migrated["providers"][0]["api_key"] == original["api_key"]
+        assert migrated["providers"][0]["base_url"] == original["base_url"]
     finally:
         store.close()
 
@@ -609,31 +615,38 @@ def test_model_api_type_round_trips_and_is_validated_over_the_pipe(
                 "params": {
                     "section": "model",
                     "values": {
-                        "api_type": "google",
-                        "base_url": "https://generativelanguage.googleapis.invalid",
-                        "api_key": "SECRET-GOOGLE-KEY",
-                        "model": "gemini-test",
+                        "action": "save_provider",
+                        "values": {
+                            "name": "Google",
+                            "api_type": "google",
+                            "base_url": "https://generativelanguage.googleapis.invalid",
+                            "api_key": "SECRET-GOOGLE-KEY",
+                        },
                     },
                 },
             },
             {
                 "id": 3,
                 "method": "settings.update",
-                "params": {"section": "model", "values": {"api_type": "made-up"}},
+                "params": {
+                    "section": "model",
+                    "values": {
+                        "action": "save_provider",
+                        "values": {"name": "Invalid", "api_type": "made-up"},
+                    },
+                },
             },
             {"id": 4, "method": "settings.get", "params": {"section": "model"}},
         ],
     )
     assert code == 0, stderr
-    assert response(frames, 1)["result"]["api_key_set"] is False
-    assert response(frames, 2)["result"]["api_type"] == "google"
-    assert response(frames, 3)["error"]["code"] == "invalid_api_type"
-    assert response(frames, 4)["result"] == {
-        "api_type": "google",
-        "base_url": "https://generativelanguage.googleapis.invalid",
-        "model": "gemini-test",
-        "api_key_set": True,
-    }
+    assert response(frames, 1)["result"]["providers"] == []
+    assert response(frames, 2)["result"]["providers"][0]["api_type"] == "google"
+    assert response(frames, 3)["error"]["code"] == "invalid_model_config"
+    provider = response(frames, 4)["result"]["providers"][0]
+    assert provider["api_type"] == "google"
+    assert provider["api_key_set"] is True
+    assert provider["base_url"] == "https://generativelanguage.googleapis.invalid"
     assert len(events(frames, "settings.updated")) == 1
     assert "SECRET-GOOGLE-KEY" not in json.dumps(frames) + stderr
 
@@ -641,7 +654,7 @@ def test_model_api_type_round_trips_and_is_validated_over_the_pipe(
         data, [{"id": 1, "method": "settings.get", "params": {"section": "model"}}]
     )
     assert code == 0, stderr
-    assert response(frames, 1)["result"]["api_type"] == "google"
+    assert response(frames, 1)["result"]["providers"][0] == provider
     assert "SECRET-GOOGLE-KEY" not in json.dumps(frames) + stderr
 
 

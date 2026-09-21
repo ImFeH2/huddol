@@ -287,6 +287,73 @@ def test_archiving_stops_pending_and_unarchiving_restores_it(server) -> None:
     assert len(deps.store.pending(agent["id"])) == 1
 
 
+def test_concurrent_creation_and_model_updates_preserve_every_selection(server) -> None:
+    from concurrent.futures import ThreadPoolExecutor
+
+    dispatcher, _, deps = server
+
+    def change(index):
+        output = Capture()
+        method = "organization.create_agent" if index % 2 == 0 else "settings.update"
+        params = (
+            {"name": f"Agent {index}", "model_config": {"thinking": "default"}}
+            if index % 2 == 0
+            else {
+                "section": "model",
+                "values": {
+                    "action": "set_defaults",
+                    "values": {"model_id": None, "thinking": "default"},
+                },
+            }
+        )
+        request = parse(json.dumps({"id": index, "method": method, "params": params}))
+        dispatcher.handle(request, output)
+        result = next(
+            frame for frame in output.frames() if frame.get("type") == "response"
+        )
+        assert "error" not in result
+        return result["result"]["id"] if index % 2 == 0 else None
+
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        created = {
+            str(agent_id)
+            for agent_id in pool.map(change, range(40))
+            if agent_id is not None
+        }
+    selections = deps.settings.get_settings("model")["agent_configs"]
+    assert set(selections) == created
+    assert len(created) == 20
+    assert all(selection["thinking"] == "default" for selection in selections.values())
+
+
+def test_agent_creation_and_model_configuration_are_atomic(server) -> None:
+    dispatcher, output, deps = server
+    db = deps.store._db
+    before = deps.store.list_members()
+    db.executescript(
+        "CREATE TRIGGER reject_model_config BEFORE UPDATE ON settings "
+        "WHEN NEW.section = 'model' BEGIN "
+        "SELECT RAISE(ABORT, 'model configuration rejected'); END;"
+    )
+    rejected = call(dispatcher, output, "organization.create_agent", name="Rejected")
+    assert "error" in rejected
+    assert deps.store.list_members() == before
+    assert not deps.settings.get_settings("model")["agent_configs"]
+    assert not any(frame.get("type") == "member.created" for frame in output.frames())
+    db.execute("DROP TRIGGER reject_model_config")
+    created = call(dispatcher, output, "organization.create_agent", name="Created")[
+        "result"
+    ]
+    assert deps.settings.get_settings("model")["agent_configs"][str(created["id"])] == {
+        "model_id": None,
+        "thinking": None,
+    }
+    created_events = [
+        frame for frame in output.frames() if frame.get("type") == "member.created"
+    ]
+    assert len(created_events) == 1
+
+
 def test_settings_never_return_the_api_key(server) -> None:
     dispatcher, output, _ = server
     call(
@@ -295,16 +362,19 @@ def test_settings_never_return_the_api_key(server) -> None:
         "settings.update",
         section="model",
         values={
-            "api_type": "openai-chat",
-            "base_url": "https://example.test/v1",
-            "api_key": "super-secret-value",
-            "model": "some-model",
+            "action": "save_provider",
+            "values": {
+                "name": "Provider",
+                "api_type": "openai-chat",
+                "base_url": "https://example.test/v1",
+                "api_key": "super-secret-value",
+            },
         },
     )
     result = call(dispatcher, output, "settings.get", section="model")["result"]
     assert "super-secret-value" not in json.dumps(result)
-    assert result["api_key_set"] is True
-    assert result["model"] == "some-model"
+    assert result["providers"][0]["api_key_set"] is True
+    assert result["providers"][0]["name"] == "Provider"
 
 
 def test_model_settings_reject_unknown_api_types_and_keep_the_stored_ones(
@@ -316,20 +386,30 @@ def test_model_settings_reject_unknown_api_types_and_keep_the_stored_ones(
         output,
         "settings.update",
         section="model",
-        values={"api_type": "google", "base_url": "https://g.invalid", "model": "g"},
+        values={
+            "action": "save_provider",
+            "values": {
+                "name": "Google",
+                "api_type": "google",
+                "base_url": "https://g.invalid",
+            },
+        },
     )
     rejected = call(
         dispatcher,
         output,
         "settings.update",
         section="model",
-        values={"api_type": "azure", "model": "other"},
+        values={
+            "action": "save_provider",
+            "values": {"name": "Other", "api_type": "azure"},
+        },
     )
-    assert rejected["error"]["code"] == "invalid_api_type"
+    assert rejected["error"]["code"] == "invalid_model_config"
     result = call(dispatcher, output, "settings.get", section="model")["result"]
-    assert result["api_type"] == "google"
-    assert result["model"] == "g"
-    assert deps.settings.get_settings("model")["api_type"] == "google"
+    assert result["providers"][0]["api_type"] == "google"
+    assert len(result["providers"]) == 1
+    assert deps.settings.get_settings("model")["providers"][0]["api_type"] == "google"
     assert [
         frame for frame in output.frames() if frame.get("type") == "settings.updated"
     ] == [{"type": "settings.updated", "section": "model"}]
@@ -410,34 +490,43 @@ def test_agent_settings_validation_is_atomic(server, values, code) -> None:
 
 
 @pytest.mark.parametrize("configured", [False, True])
-def test_model_settings_ignore_the_obsolete_byte_threshold(server, configured) -> None:
+def test_model_settings_reject_unknown_operations(server, configured) -> None:
     dispatcher, output, deps = server
     if configured:
         deps.settings.set_settings(
             "model",
             {"model": "m", "api_key": "unused", "base_url": "https://example.invalid"},
         )
-    initial = call(dispatcher, output, "settings.get", section="model")["result"]
-    assert "compaction_threshold" not in initial
+    initial = deps.settings.get_settings("model")
     result = call(
         dispatcher,
         output,
         "settings.update",
         section="model",
-        values={"compaction_threshold": "obsolete"},
-    )["result"]
-    assert result == initial
+        values={"action": "unknown"},
+    )
+    assert result["error"]["code"] == "invalid_model_action"
+    assert deps.settings.get_settings("model") == initial
 
 
 def test_model_listing_and_testing_reach_the_injected_probe(server) -> None:
     dispatcher, output, deps = server
-    stored = {
-        "api_type": "openai-chat",
-        "base_url": "https://stored.invalid/v1",
-        "api_key": "stored-key",
-        "model": "m",
-    }
-    call(dispatcher, output, "settings.update", section="model", values=stored)
+    call(
+        dispatcher,
+        output,
+        "settings.update",
+        section="model",
+        values={
+            "action": "save_provider",
+            "values": {
+                "name": "Provider",
+                "api_type": "openai-chat",
+                "base_url": "https://stored.invalid/v1",
+                "api_key": "stored-key",
+            },
+        },
+    )
+    stored = deps.settings.get_settings("model")
     listed = call(
         dispatcher,
         output,

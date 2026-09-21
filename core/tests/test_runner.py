@@ -462,10 +462,46 @@ def test_the_next_turn_picks_up_settings_with_its_own_model(settings) -> None:
     assert runner.run(request(), None).error == UNAVAILABLE
 
 
+def test_model_and_request_limit_changes_apply_together_on_next_turn(settings) -> None:
+    settings.set_settings("agent", {"request_limit": 1})
+    settings.set_settings("model", model_values("first"))
+    built = []
+    calls = []
+
+    def build(config):
+        built.append(config.model)
+        requests = 0
+
+        def respond(messages, info):
+            nonlocal requests
+            requests += 1
+            calls.append(config.model)
+            if requests == 1:
+                return ModelResponse(
+                    parts=[ToolCallPart("organization", {"action": "list_members"})]
+                )
+            return ModelResponse(parts=[TextPart("Done")])
+
+        return FunctionModel(respond)
+
+    class Tools:
+        def list_members(self):
+            settings.set_settings("agent", {"request_limit": 2})
+            settings.set_settings("model", model_values("second"))
+            return []
+
+    runner = PydanticModelRunner(settings, build_model=build)
+    first = runner.run(request(), Tools())
+    assert "request_limit of 1" in first.error
+    assert calls == ["first"]
+    second = runner.run(replace(request(), history_json=first.messages_json), Tools())
+    assert second.error is None
+    assert built == ["first", "second"]
+    assert calls == ["first", "second", "second"]
+
+
 @pytest.mark.parametrize("remove", [False, True])
-def test_model_settings_are_resolved_after_a_tool_call_in_the_same_turn(
-    settings, remove
-) -> None:
+def test_model_settings_are_fixed_for_the_turn(settings, remove) -> None:
     received = []
     built = []
 
@@ -474,7 +510,7 @@ def test_model_settings_are_resolved_after_a_tool_call_in_the_same_turn(
 
         def respond(messages, info):
             received.append(config.model)
-            if config.model == "first":
+            if len(received) == 1:
                 return ModelResponse(
                     parts=[ToolCallPart("organization", {"action": "list_members"})]
                 )
@@ -487,16 +523,21 @@ def test_model_settings_are_resolved_after_a_tool_call_in_the_same_turn(
             settings.set_settings("model", {} if remove else model_values("second"))
             return []
 
-    outcome = PydanticModelRunner(settings, build_model=build).run(request(), Tools())
-    assert received == (["first"] if remove else ["first", "second"])
-    assert built == received
+    runner = PydanticModelRunner(settings, build_model=build)
+    outcome = runner.run(request(), Tools())
+    assert received == ["first", "first"]
+    assert built == ["first"]
+    assert outcome.error is None
+    assert json.loads(outcome.usage_json)["requests"] == 2
+    assert json.loads(outcome.usage_json)["tool_calls"] == 1
+    following = runner.run(request(), Tools())
     if remove:
-        assert UNAVAILABLE in outcome.error
-        assert "tool-return" in outcome.messages_json
+        assert following.error == UNAVAILABLE
+        assert received == ["first", "first"]
     else:
-        assert outcome.error is None
-        assert json.loads(outcome.usage_json)["requests"] == 2
-        assert json.loads(outcome.usage_json)["tool_calls"] == 1
+        assert following.error is None
+        assert received == ["first", "first", "second"]
+        assert built == ["first", "second"]
 
 
 @pytest.mark.parametrize("fail", [False, True])
@@ -1664,7 +1705,11 @@ def test_provider_wire_preserves_raw_snapshot_across_tools_turns_and_restart(
     settings.set_settings("model", {**model_values("gpt-4o"), "api_type": kind})
 
     def respond(req):
-        kind = settings.get_settings("model")["api_type"]
+        kind = {
+            "/v1/chat/completions": "openai-chat",
+            "/v1/responses": "openai-responses",
+            "/v1/messages": "anthropic",
+        }.get(req.url.path, "google")
         wire_kinds.append(kind)
         body = json.loads(req.content)
         wire.append(body)

@@ -65,7 +65,7 @@ from pydantic_ai.settings import ModelSettings
 from pydantic_ai.tools import ToolDefinition
 from pydantic_ai.usage import RunUsage, UsageLimits
 
-from huddol.adapters.model.config import ModelConfig
+from huddol.adapters.model.config import ModelCatalog, ModelConfig, thinking_settings
 from huddol.adapters.model.observability import (
     Observability,
     ObservabilityConfig,
@@ -114,9 +114,13 @@ def _last_input_tokens(messages: Sequence[ModelMessage]) -> int | None:
 
 
 def build_model(config: ModelConfig) -> Model:
+    settings = cast(
+        ModelSettings, thinking_settings(config.api_type, config.model, config.thinking)
+    )
     if config.api_type == "anthropic":
         return AnthropicModel(
             cast(AnthropicModelName, config.model),
+            settings=settings,
             provider=AnthropicProvider(
                 base_url=config.base_url, api_key=config.api_key
             ),
@@ -124,14 +128,17 @@ def build_model(config: ModelConfig) -> Model:
     if config.api_type == "google":
         return GoogleModel(
             cast(GoogleModelName, config.model),
+            settings=settings,
             provider=GoogleProvider(api_key=config.api_key, base_url=config.base_url),
         )
     provider = OpenAIProvider(base_url=config.base_url, api_key=config.api_key)
     if config.api_type == "openai-responses":
         return OpenAIResponsesModel(
-            cast(OpenAIModelName, config.model), provider=provider
+            cast(OpenAIModelName, config.model), provider=provider, settings=settings
         )
-    return OpenAIChatModel(cast(OpenAIModelName, config.model), provider=provider)
+    return OpenAIChatModel(
+        cast(OpenAIModelName, config.model), provider=provider, settings=settings
+    )
 
 
 def _web_search_tool() -> Any:
@@ -587,9 +594,12 @@ class PydanticModelRunner:
     def run(self, request: TurnRequest, tools: AgentTools) -> TurnOutcome:
         parameters = agent_parameters(self._settings.get_settings("agent"))
         usage_limits = UsageLimits(request_limit=parameters.request_limit or None)
-        config = ModelConfig.restore(self._settings.get_settings("model"))
-        if config is None:
-            return TurnOutcome(messages_json=request.history_json, error=UNAVAILABLE)
+        try:
+            config = ModelCatalog.restore(self._settings.get_settings("model")).resolve(
+                request.agent_id
+            )
+        except DomainError as failure:
+            return TurnOutcome(messages_json=request.history_json, error=str(failure))
         with self._lock:
             tracing = ObservabilityConfig.restore(
                 self._settings.get_settings("observability")
@@ -730,25 +740,7 @@ class PydanticModelRunner:
 
         async def once() -> Any:
             async with AsyncExitStack() as resources:
-                current_config = config
-                model = await resources.enter_async_context(
-                    self._build_model(current_config)
-                )
-
-                @hooks.on.before_model_request
-                async def refresh_model(
-                    ctx: RunContext[AgentTools], request_context: ModelRequestContext
-                ) -> ModelRequestContext:
-                    nonlocal current_config, model
-                    updated = ModelConfig.restore(self._settings.get_settings("model"))
-                    if updated is None:
-                        raise DomainError("model_unavailable", UNAVAILABLE)
-                    if updated != current_config:
-                        model = await resources.enter_async_context(
-                            self._build_model(updated)
-                        )
-                        current_config = updated
-                    return request_context
+                model = await resources.enter_async_context(self._build_model(config))
 
                 return await self._agent.run(
                     request.prompt,

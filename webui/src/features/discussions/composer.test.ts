@@ -122,7 +122,6 @@ describe("composer layout", () => {
     expect(html).toContain("M7 2.5V11.5M2.5 7H11.5");
     expect(html).toContain("opacity-0 scale-50 rotate-45 blur-[1px]");
     expect(html).toContain("opacity-0 blur-sm translate-y-2");
-    expect(html).toContain('aria-label="Model selection · Coming soon"');
     expect(html).toContain("from-(--composer-card)");
     expect(html).not.toContain("lucide");
     expect(html).toContain(

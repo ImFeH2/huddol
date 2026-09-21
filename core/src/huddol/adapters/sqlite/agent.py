@@ -3,8 +3,9 @@ from __future__ import annotations
 import json
 import sqlite3
 import uuid
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 
+from huddol.adapters.model.config import ModelCatalog
 from huddol.adapters.sqlite.store import LockedConnection, first
 from huddol.ports.agent import AgentRun, TurnEffect, WindowState
 
@@ -53,6 +54,9 @@ class SqliteAgentStore:
         self._db = db
         self._db.executescript(SCHEMA)
         self._db.commit()
+        self.update_settings(
+            "model", lambda values: ModelCatalog.restore(values).model_dump()
+        )
 
     def _now(self) -> str:
         from huddol.adapters.sqlite.store import now
@@ -390,6 +394,20 @@ class SqliteAgentStore:
             return None
         loaded = json.loads(str(row["values_json"]))
         return loaded if isinstance(loaded, dict) else None
+
+    def update_settings(
+        self,
+        section: str,
+        update: Callable[[dict[str, object] | None], dict[str, object]],
+    ) -> dict[str, object]:
+        with self._db:
+            values = update(self.get_settings(section))
+            self._db.execute(
+                "INSERT INTO settings (section, values_json) VALUES (?, ?)"
+                " ON CONFLICT (section) DO UPDATE SET values_json = excluded.values_json",
+                (section, json.dumps(values, ensure_ascii=False, sort_keys=True)),
+            )
+            return values
 
     def set_settings(self, section: str, values: dict[str, object]) -> None:
         with self._db:

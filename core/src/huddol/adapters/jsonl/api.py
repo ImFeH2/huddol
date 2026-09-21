@@ -4,8 +4,10 @@ from collections.abc import Callable
 from dataclasses import asdict
 from typing import Any
 
+from pydantic import ValidationError
+
 from huddol.adapters.jsonl.protocol import Dispatcher
-from huddol.adapters.model.config import API_TYPES, ModelConfig
+from huddol.adapters.model.config import AgentModelConfig, ModelCatalog
 from huddol.core.errors import DomainError
 from huddol.core.parameters import agent_parameters, validate_parameters
 from huddol.core.turn import idle_streak
@@ -72,7 +74,25 @@ class Api:
             }
 
         def create_agent(params: dict[str, Any]) -> Any:
-            result = self._human().create_agent(str(params.get("name", "")))
+            result: dict[str, Any] = {}
+
+            def create(stored: dict[str, object] | None) -> dict[str, object]:
+                nonlocal result
+                catalog = ModelCatalog.restore(stored)
+                try:
+                    selection = AgentModelConfig.model_validate(
+                        params.get("model_config", {})
+                    )
+                except ValidationError:
+                    raise DomainError(
+                        "invalid_model_config", "Invalid Agent model configuration"
+                    ) from None
+                catalog.validate_selection(selection, "New Agent")
+                result = self._human().create_agent(str(params.get("name", "")))
+                catalog.agent_configs[str(result["id"])] = selection
+                return catalog.model_dump()
+
+            settings.update_settings("model", create)
             self._changed("member.created", result)
             return result
 
@@ -295,19 +315,7 @@ class Api:
             section = str(params.get("section", "model"))
             values = settings.get_settings(section) or {}
             if section == "model":
-                config = ModelConfig.restore(values)
-                return (
-                    config.redacted()
-                    if config
-                    else {
-                        **{
-                            key: values[key]
-                            for key in ("api_type", "base_url", "model")
-                            if key in values
-                        },
-                        "api_key_set": bool(values.get("api_key")),
-                    }
-                )
+                return ModelCatalog.restore(values).redacted()
             if section == "agent":
                 return asdict(agent_parameters(values))
             if section == "observability":
@@ -323,15 +331,23 @@ class Api:
         def settings_update(params: dict[str, Any]) -> Any:
             section = str(params.get("section", "model"))
             values = dict(params.get("values", {}))
-            if (
-                section == "model"
-                and "api_type" in values
-                and values["api_type"] not in API_TYPES
-            ):
-                raise DomainError(
-                    "invalid_api_type",
-                    f"api_type must be one of {', '.join(API_TYPES)}",
-                )
+            if section == "model":
+
+                def update_model(stored: dict[str, object] | None) -> dict[str, object]:
+                    agent_ids = {
+                        int(member["id"])
+                        for member in self._human().list_members()
+                        if member["type"] == "agent"
+                    }
+                    return (
+                        ModelCatalog.restore(stored)
+                        .apply(values, agent_ids)
+                        .model_dump()
+                    )
+
+                updated = settings.update_settings("model", update_model)
+                self._dispatcher.emit("settings.updated", {"section": section})
+                return ModelCatalog.restore(updated).redacted()
             if section == "agent":
                 values = validate_parameters(values)
             if section == "execution":

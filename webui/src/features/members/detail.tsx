@@ -31,6 +31,7 @@ import { OverflowMenu } from "@/components/ui/menu";
 import { Tooltip } from "@/components/ui/tooltip";
 import { TreeView } from "@/features/library/tree-view";
 import { agentStateLabel } from "@/features/members/state";
+import { AgentModelPanel } from "@/features/settings/model";
 import { reportLoadFailure } from "@/features/settings/saver";
 import {
   type AgentDetail,
@@ -199,6 +200,8 @@ function AgentPage({
                 value={<AgentState member={member} tokenLimit={tokenLimit} />}
               />
             </div>
+
+            <AgentModelPanel key={member.id} agentId={member.id} />
 
             <WorkspaceSection agentId={member.id} entries={detail.workspace} />
 

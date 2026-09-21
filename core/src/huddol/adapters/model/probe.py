@@ -11,7 +11,14 @@ from pydantic_ai.models import Model
 from pydantic_ai.providers.google import GoogleProvider
 from pydantic_ai.providers.openai import OpenAIProvider
 
-from huddol.adapters.model.config import API_TYPES, ApiType, ModelConfig
+from huddol.adapters.model.config import (
+    API_TYPES,
+    ApiType,
+    ModelCatalog,
+    ModelConfig,
+    Thinking,
+    thinking_settings,
+)
 from huddol.adapters.model.runner import build_model
 from huddol.core.errors import DomainError
 
@@ -46,6 +53,22 @@ def describe(failure: BaseException, timeout: float) -> str:
 def resolve(
     values: dict[str, Any], stored: dict[str, Any] | None, *, model_required: bool
 ) -> ModelConfig:
+    if "provider_id" in values or "model_id" in values:
+        catalog = ModelCatalog.restore(stored)
+        registered = (
+            catalog.registered_model(values["model_id"])
+            if "model_id" in values
+            else None
+        )
+        provider = catalog.provider(
+            registered.provider_id if registered else values["provider_id"]
+        )
+        values = {
+            **provider.model_dump(),
+            **values,
+            "model": registered.model if registered else "",
+        }
+        stored = provider.model_dump()
     api_type = api_type_of(values.get("api_type"))
     base_url = str(values.get("base_url") or "").strip()
     if not base_url:
@@ -60,8 +83,15 @@ def resolve(
     model = str(values.get("model") or "").strip()
     if model_required and not model:
         raise ValueError("model is required")
+    thinking = cast(Thinking, values.get("thinking", "default"))
+    if model_required:
+        thinking_settings(api_type, model, thinking)
     return ModelConfig(
-        api_type=api_type, base_url=base_url, api_key=api_key, model=model
+        api_type=api_type,
+        base_url=base_url,
+        api_key=api_key,
+        model=model,
+        thinking=thinking,
     )
 
 
@@ -112,8 +142,12 @@ def try_model(
 
     async def probe() -> str:
         agent: Agent[None, str] = Agent(build(config), name="huddol_model_test")
+        configured = thinking_settings(config.api_type, config.model, config.thinking)
         result = await agent.run(
-            TEST_PROMPT, model_settings={"max_tokens": TEST_MAX_TOKENS}
+            TEST_PROMPT,
+            model_settings={
+                "max_tokens": configured.get("max_tokens", TEST_MAX_TOKENS)
+            },
         )
         return result.output
 
