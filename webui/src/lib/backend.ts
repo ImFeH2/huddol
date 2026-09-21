@@ -196,6 +196,38 @@ function unconfirmed(method: string): BackendError {
   );
 }
 
+const DIAGNOSIS_TIMEOUT = 5_000;
+
+export async function diagnoseConnection(url: string): Promise<BackendError> {
+  const failure = new BackendError(
+    "connection_failed",
+    "Check that Huddol is running, then reconnect.",
+    true,
+  );
+  const endpoint = new URL(url);
+  endpoint.protocol = endpoint.protocol === "wss:" ? "https:" : "http:";
+  let response: Response;
+  try {
+    response = await fetch(endpoint, {
+      credentials: "omit",
+      cache: "no-store",
+      redirect: "error",
+      referrerPolicy: "no-referrer",
+      signal: AbortSignal.timeout(DIAGNOSIS_TIMEOUT),
+    });
+    await response.body?.cancel();
+  } catch {
+    return failure;
+  }
+  return response.status === 401
+    ? new BackendError(
+        "authentication_failed",
+        "The access credentials are no longer valid.",
+        true,
+      )
+    : failure;
+}
+
 export function connectionFrom(search: string, origin: string): Connection {
   const params = new URLSearchParams(search);
   const error = params.get("error");
@@ -369,6 +401,12 @@ export class Backend {
     const connection = this.#locate();
     if ("error" in connection)
       throw new BackendError("startup_failed", connection.error, true);
+    if (!new URL(connection.url).searchParams.get("token"))
+      throw new BackendError(
+        "authentication_missing",
+        "This page was opened without access credentials.",
+        true,
+      );
     return new Promise<Socket>((resolve, reject) => {
       const socket = this.#socket(connection.url);
       const generation = this.#generation;
@@ -417,13 +455,9 @@ export class Backend {
           );
           return;
         }
-        reject(
-          new BackendError(
-            "connection_failed",
-            "Could not connect to Huddol. Check that it is running and reopen its link if authentication changed.",
-            true,
-          ),
-        );
+        void diagnoseConnection(connection.url).then((error) => {
+          if (generation === this.#generation) reject(error);
+        });
       };
     });
   }

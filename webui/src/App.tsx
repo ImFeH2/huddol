@@ -19,17 +19,14 @@ import {
   Nav,
   NavItem,
   NavSubItem,
-  Page,
-  PageBody,
-  PageHeader,
   PageTransition,
   Shell,
   Sidebar,
   SidebarBrand,
 } from "@/components/layout/shell";
+import { AccessError } from "@/components/ui/access-error";
 import {
   Badge,
-  Button,
   dismissToast,
   IconButton,
   Spinner,
@@ -47,7 +44,7 @@ import { MemberPage } from "@/features/members/detail";
 import { MembersPage } from "@/features/members/list";
 import { SettingsPage } from "@/features/settings/page";
 import {
-  type BackendError,
+  BackendError,
   backend,
   type DiscussionSummary,
   type Member,
@@ -217,7 +214,8 @@ function Chrome({ loaded }: { loaded: Loaded }) {
 
 export default function App() {
   const [loaded, setLoaded] = useState<Loaded | null>(null);
-  const [failure, setFailure] = useState<string | null>(null);
+  const [failure, setFailure] = useState<BackendError | null>(null);
+  const [reconnecting, setReconnecting] = useState(false);
   const booted = useRef(false);
 
   const refresh = useCallback(async () => {
@@ -237,8 +235,9 @@ export default function App() {
   useEffect(
     () =>
       backend.onFailure((error) => {
-        reportBackendFailure(error);
-        if (!booted.current) setFailure(error.message);
+        setReconnecting(false);
+        if (booted.current) reportBackendFailure(error);
+        else setFailure(error);
       }),
     [],
   );
@@ -248,23 +247,33 @@ export default function App() {
       .connect()
       .then(refresh)
       .catch((error) =>
-        setFailure(error instanceof Error ? error.message : String(error)),
+        setFailure(
+          error instanceof BackendError
+            ? error
+            : new BackendError(
+                "startup_failed",
+                "Huddol could not finish starting. Close this window and start Huddol again.",
+              ),
+        ),
       );
   }, [refresh]);
 
   useEffect(() => {
     return backend.onEvent((event) => {
       if (event.type === "connection.reconnecting") {
-        toast({
-          id: CONNECTION_TOAST,
-          tone: "info",
-          title: "Reconnecting…",
-          duration: null,
-          closable: false,
-        });
+        setReconnecting(true);
+        if (booted.current)
+          toast({
+            id: CONNECTION_TOAST,
+            tone: "info",
+            title: "Reconnecting…",
+            duration: null,
+            closable: false,
+          });
       }
       if (event.type === "connection.restored") {
         dismissToast(CONNECTION_TOAST);
+        setReconnecting(false);
         setFailure(null);
       }
       if (
@@ -301,13 +310,11 @@ export default function App() {
   let body: ReactNode;
   if (failure && !loaded) {
     body = (
-      <Page>
-        <PageHeader title="Unable to start Huddol" />
-        <PageBody>
-          <p>{failure}</p>
-          <Button onClick={reconnect}>Reconnect</Button>
-        </PageBody>
-      </Page>
+      <AccessError
+        error={failure}
+        reconnect={reconnect}
+        waiting={reconnecting}
+      />
     );
   } else if (!loaded) {
     body = (

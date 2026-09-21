@@ -68,7 +68,9 @@ def test_core_without_a_frontend_serves_only_the_websocket_endpoint(
         assert kernel.http("/")[0] == 404
         assert kernel.http("/assets/app.js")[0] == 404
         assert kernel.http("/ws")[0] == 401
-        assert kernel.http(f"/ws?token={kernel.token}")[0] == 426
+        status, _content_type, body = kernel.http(f"/ws?token={kernel.token}")
+        assert status == 204
+        assert body == b""
         with kernel.connect() as connection:
             client = Client(connection)
             assert client.call({"id": 1, "method": "ping"})["result"] == {"pong": None}

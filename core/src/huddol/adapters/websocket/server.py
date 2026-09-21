@@ -16,6 +16,11 @@ from websockets.http11 import Request, Response
 from websockets.sync.server import Server, ServerConnection, serve
 
 from huddol.adapters.jsonl.protocol import Dispatcher, encode
+from huddol.adapters.websocket.access_error import ACCESS_ERROR_PAGE
+
+APP_ORIGINS = frozenset(
+    {"http://localhost:1420", "http://tauri.localhost", "tauri://localhost"}
+)
 
 HOST = "127.0.0.1"
 CONTENT_TYPES = {
@@ -128,9 +133,30 @@ class WebServer:
         url = urlsplit(request.path)
         if url.path == "/ws":
             supplied = parse_qs(url.query).get("token", [""])[0]
-            if supplied and secrets.compare_digest(supplied, self._token):
+            authenticated = bool(supplied) and secrets.compare_digest(
+                supplied.encode(), self._token.encode()
+            )
+            if (
+                authenticated
+                and request.headers.get("Upgrade", "").lower() == "websocket"
+            ):
                 return None
-            return _plain(http.HTTPStatus.UNAUTHORIZED, "Unauthorized")
+            response = _response(
+                http.HTTPStatus.NO_CONTENT
+                if authenticated
+                else http.HTTPStatus.UNAUTHORIZED,
+                "text/html; charset=utf-8",
+                b"" if authenticated else ACCESS_ERROR_PAGE,
+            )
+            if authenticated:
+                del response.headers["Content-Length"]
+            response.headers["Cache-Control"] = "no-store"
+            response.headers["Referrer-Policy"] = "no-referrer"
+            response.headers["Vary"] = "Origin"
+            origin = request.headers.get("Origin")
+            if origin in APP_ORIGINS:
+                response.headers["Access-Control-Allow-Origin"] = origin
+            return response
         if self._directory is None:
             return _plain(http.HTTPStatus.NOT_FOUND, "Not found")
         return static_response(self._directory, url.path)

@@ -834,10 +834,14 @@ def test_a_stale_run_file_does_not_block_startup(tmp_path: Path) -> None:
 def test_wrong_or_missing_tokens_get_401_without_an_upgrade(tmp_path: Path) -> None:
     with Kernel(tmp_path / "data") as kernel:
         for token in ("wrong", ""):
-            status, _content_type, body = kernel.http(
+            status, content_type, body = kernel.http(
                 f"/ws?token={token}" if token else "/ws"
             )
-            assert (status, body) == (401, b"Unauthorized")
+            assert status == 401
+            assert content_type == "text/html; charset=utf-8"
+            assert b"Access to Huddol requires authentication" in body
+            assert b"access link provided when Huddol starts" in body
+            assert kernel.token.encode() not in body
             with pytest.raises(InvalidStatus) as rejected, kernel.connect(token):
                 pass
             assert rejected.value.response.status_code == 401
@@ -846,6 +850,47 @@ def test_wrong_or_missing_tokens_get_401_without_an_upgrade(tmp_path: Path) -> N
                 "pong": None
             }
         assert kernel.shutdown() == 0, kernel.stderr
+
+
+def test_authentication_diagnosis_and_fixed_application_origins(tmp_path: Path) -> None:
+    with Kernel(tmp_path / "data", env={"TMPDIR": str(tmp_path)}) as kernel:
+        for origin in (
+            "http://localhost:1420",
+            "http://tauri.localhost",
+            "tauri://localhost",
+            "https://example.com",
+            "null",
+        ):
+            for token in (kernel.token, "invalid", "%E6%97%A0%E6%95%88", ""):
+                with closing(HTTPConnection("127.0.0.1", kernel.port)) as connection:
+                    connection.request(
+                        "GET", f"/ws?token={token}", headers={"Origin": origin}
+                    )
+                    response = connection.getresponse()
+                    body = response.read()
+                    assert response.status == (204 if token == kernel.token else 401)
+                    assert response.getheader("Cache-Control") == "no-store"
+                    assert response.getheader("Referrer-Policy") == "no-referrer"
+                    assert response.getheader("Vary") == "Origin"
+                    assert response.getheader("Access-Control-Allow-Origin") == (
+                        origin
+                        if origin
+                        in (
+                            "http://localhost:1420",
+                            "http://tauri.localhost",
+                            "tauri://localhost",
+                        )
+                        else None
+                    )
+                    assert (
+                        response.getheader("Access-Control-Allow-Credentials") is None
+                    )
+                    assert kernel.token.encode() not in body
+                    if token == kernel.token:
+                        assert body == b""
+        assert kernel.shutdown() == 0, kernel.stderr
+        assert kernel.token not in kernel.stderr
+        assert kernel.token not in (tmp_path / "data/logs/huddol.log").read_text()
 
 
 def test_responses_stay_on_their_own_connection(tmp_path: Path) -> None:

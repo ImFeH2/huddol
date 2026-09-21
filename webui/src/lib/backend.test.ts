@@ -230,7 +230,10 @@ describe("browser connection preparation", () => {
 });
 
 describe("Backend", () => {
-  afterEach(() => vi.useRealTimers());
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+  });
 
   it("does not connect when the page carries an error", async () => {
     vi.useFakeTimers();
@@ -254,21 +257,75 @@ describe("Backend", () => {
     expect(socket.url).toBe(URL);
   });
 
-  it("reports a socket refused before opening, as with a wrong token, as a connection failure", async () => {
+  it.each([
+    [401, "authentication_failed"],
+    [204, "connection_failed"],
+    [503, "connection_failed"],
+  ])("classifies a refused socket using HTTP %s", async (status, code) => {
     vi.useFakeTimers();
+    const fetch = vi.fn().mockResolvedValue(new Response(null, { status }));
+    vi.stubGlobal("fetch", fetch);
     const { backend, socket } = harness();
     const failure = vi.fn();
     backend.onFailure(failure);
     const pending = backend.connect().catch((error) => error);
     await vi.advanceTimersByTimeAsync(0);
     socket().fail();
-    expect(await pending).toMatchObject({
-      code: "connection_failed",
-      transport: true,
-    });
+    expect(await pending).toMatchObject({ code, transport: true });
+    expect(fetch).toHaveBeenCalledTimes(1);
+    expect(fetch).toHaveBeenCalledWith(
+      new globalThis.URL("http://127.0.0.1:4321/ws?token=secret"),
+      expect.objectContaining({
+        credentials: "omit",
+        cache: "no-store",
+        redirect: "error",
+        referrerPolicy: "no-referrer",
+        signal: expect.any(AbortSignal),
+      }),
+    );
     expect(failure).toHaveBeenCalledTimes(1);
     expect(backend.disconnected).toBe(true);
     expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("rejects missing credentials without creating a socket", async () => {
+    const { backend } = harness({ url: "ws://localhost/ws" });
+    await expect(backend.connect()).rejects.toMatchObject({
+      code: "authentication_missing",
+    });
+    expect(FakeSocket.instances).toHaveLength(0);
+  });
+
+  it("reports a failed diagnostic request as a connection failure", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new TypeError("network")));
+    const { backend, socket } = harness();
+    const pending = backend.connect().catch((error) => error);
+    socket().fail();
+    expect(await pending).toMatchObject({ code: "connection_failed" });
+  });
+
+  it("ignores an old authentication diagnosis after recovery", async () => {
+    vi.useFakeTimers();
+    let finishDiagnosis!: (response: Response) => void;
+    const diagnosis = new Promise<Response>((resolve) => {
+      finishDiagnosis = resolve;
+    });
+    vi.stubGlobal("fetch", vi.fn().mockReturnValue(diagnosis));
+    const { backend, socket } = harness();
+    const failures = vi.fn();
+    backend.onFailure(failures);
+    const pending = backend.connect().catch((error) => error);
+    socket().fail();
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(await pending).toMatchObject({ code: "connection_timeout" });
+    const recovered = backend.reconnect();
+    socket().open();
+    await recovered;
+    finishDiagnosis(new Response(null, { status: 401 }));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(backend.disconnected).toBe(false);
+    expect(failures).toHaveBeenCalledTimes(1);
+    await expect(backend.connect()).resolves.toBeUndefined();
   });
 
   it("ends concurrent requests once when the socket closes", async () => {
