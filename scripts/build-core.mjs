@@ -1,11 +1,13 @@
 import { cpSync, rmSync } from "node:fs";
 import { resolve } from "node:path";
-import { executableName, root, run } from "./process.mjs";
+import { root, run } from "./process.mjs";
 
 const core = resolve(root, "core");
 const bundled = resolve(root, "app", "core");
 const dist = resolve(core, "dist");
 const work = resolve(core, "build");
+
+const extension = process.platform === "win32" ? ".exe" : "";
 
 run(
   "uv",
@@ -30,5 +32,5 @@ run(
 rmSync(bundled, { force: true, recursive: true });
 cpSync(resolve(dist, "huddol"), bundled, { recursive: true });
 
-const executable = resolve(bundled, executableName("huddol"));
+const executable = resolve(bundled, `huddol${extension}`);
 process.stdout.write(`${executable}\n`);
