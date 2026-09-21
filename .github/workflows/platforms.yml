@@ -25,5 +25,5 @@ jobs:
           node --input-type=module -e '
             import { readFileSync, appendFileSync } from "node:fs";
             const matrix = JSON.parse(readFileSync(".github/platforms.json", "utf8"));
-            appendFileSync(process.env.GITHUB_OUTPUT, `matrix=${JSON.stringify(matrix)}\n`);
+            appendFileSync(process.env.GITHUB_OUTPUT, "matrix=" + JSON.stringify(matrix) + "\n");
           '
