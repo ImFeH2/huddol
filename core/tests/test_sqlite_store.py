@@ -21,6 +21,53 @@ def store(tmp_path: Path) -> SqliteStore:
     created.close()
 
 
+def test_nested_transactions_commit_together(store: SqliteStore) -> None:
+    with store._db:
+        first = store.create_member("agent", "First")
+        with store._db:
+            second = store.create_member("agent", "Second")
+    assert {member.id for member in store.list_members()} == {first.id, second.id}
+
+
+def test_nested_sqlite_failure_rolls_back_every_write(store: SqliteStore) -> None:
+    with pytest.raises(sqlite3.IntegrityError), store._db:
+        member = store.create_member("agent", "First")
+        with store._db:
+            store._db.execute(
+                "INSERT INTO members (id, type, name, name_key) VALUES (?, ?, ?, ?)",
+                (member.id, "agent", "Duplicate", "duplicate"),
+            )
+    assert store.list_members() == ()
+    assert store.create_member("agent", "After failure").name == "After failure"
+
+
+def test_caught_inner_failure_still_rejects_outer_transaction(
+    store: SqliteStore,
+) -> None:
+    with pytest.raises(RuntimeError, match="nested transaction failed"), store._db:
+        store.create_member("agent", "First")
+        with pytest.raises(ValueError, match="Rejected"), store._db:
+            store.create_member("agent", "Second")
+            raise ValueError("Rejected")
+        store.create_member("agent", "Third")
+    assert store.list_members() == ()
+    assert store.create_member("agent", "Next").name == "Next"
+
+
+@pytest.mark.parametrize("operation", ["commit", "executescript", "close"])
+def test_explicit_connection_operations_cannot_commit_nested_writes(
+    store: SqliteStore, operation: str
+) -> None:
+    with pytest.raises(RuntimeError, match="nested transaction failed"), store._db:
+        store.create_member("agent", "First")
+        with pytest.raises(RuntimeError):
+            if operation == "executescript":
+                store._db.executescript("SELECT 1;")
+            else:
+                getattr(store._db, operation)()
+    assert store.list_members() == ()
+
+
 def reference_pending(
     store: SqliteStore, member_id: int
 ) -> tuple[tuple[int, int], ...]:

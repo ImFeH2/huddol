@@ -100,6 +100,8 @@ class LockedConnection:
     def __init__(self, connection: sqlite3.Connection) -> None:
         self._connection = connection
         self._lock = RLock()
+        self._depth = 0
+        self._rollback_only = False
 
     @property
     def lock(self) -> RLock:
@@ -123,19 +125,40 @@ class LockedConnection:
 
     def executescript(self, sql: str) -> None:
         with self._lock:
+            if self._depth or self._connection.in_transaction:
+                self._rollback_only = True
+                raise RuntimeError(
+                    "Cannot execute a script inside an active transaction"
+                )
             self._connection.executescript(sql)
 
     def commit(self) -> None:
         with self._lock:
+            if self._depth:
+                self._rollback_only = True
+                raise RuntimeError("Only the outermost transaction can commit")
             self._connection.commit()
 
     def close(self) -> None:
         with self._lock:
+            if self._depth:
+                self._rollback_only = True
+                raise RuntimeError("Cannot close an active transaction")
             self._connection.close()
 
+    def transaction(self, *, immediate: bool = True) -> Transaction:
+        return Transaction(self, immediate=immediate)
+
     def __enter__(self) -> Self:
-        self._lock.acquire()
-        self._connection.__enter__()
+        return self._enter(immediate=True)
+
+    def _enter(self, *, immediate: bool) -> Self:
+        with self._lock:
+            if self._depth == 0:
+                self._connection.execute("BEGIN IMMEDIATE" if immediate else "BEGIN")
+                self._rollback_only = False
+            self._depth += 1
+            self._lock.acquire()
         return self
 
     def __exit__(
@@ -145,9 +168,37 @@ class LockedConnection:
         traceback: TracebackType | None,
     ) -> None:
         try:
-            self._connection.__exit__(exc_type, exc, traceback)
+            self._rollback_only = self._rollback_only or exc_type is not None
+            self._depth -= 1
+            if self._depth == 0:
+                try:
+                    if self._rollback_only:
+                        if exc_type is None:
+                            raise RuntimeError("A nested transaction failed")
+                    else:
+                        self._connection.commit()
+                finally:
+                    if self._connection.in_transaction:
+                        self._connection.rollback()
         finally:
             self._lock.release()
+
+
+class Transaction:
+    def __init__(self, connection: LockedConnection, *, immediate: bool) -> None:
+        self._connection = connection
+        self._immediate = immediate
+
+    def __enter__(self) -> LockedConnection:
+        return self._connection._enter(immediate=self._immediate)
+
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        traceback: TracebackType | None,
+    ) -> None:
+        self._connection.__exit__(exc_type, exc, traceback)
 
 
 class SqliteStore:
@@ -514,8 +565,7 @@ class SqliteStore:
         before: int | None = None,
         after: int | None = None,
     ) -> DiscussionPage:
-        with self._db as db:
-            db.execute("BEGIN")
+        with self._db.transaction(immediate=False) as db:
             discussion = self._member_discussion(discussion_id, member_id)
             read_through = self.watermark(discussion_id, member_id)
             latest_id = int(
@@ -605,8 +655,7 @@ class SqliteStore:
             raise DomainError("not_found", "Message is not in this Discussion")
 
     def mark_read(self, discussion_id: int, member_id: int, message_id: int) -> int:
-        with self._db as db:
-            db.execute("BEGIN IMMEDIATE")
+        with self._db:
             self._member_discussion(discussion_id, member_id)
             self._require_message(discussion_id, message_id)
             self._advance_read(discussion_id, member_id, message_id)
@@ -626,7 +675,6 @@ class SqliteStore:
         self, discussion_id: int, member_id: int, through_message_id: int
     ) -> PendingAcknowledgement:
         with self._db as db:
-            db.execute("BEGIN IMMEDIATE")
             self._member_discussion(discussion_id, member_id)
             self._require_message(discussion_id, through_message_id)
             count, last = self._pending_summary(
