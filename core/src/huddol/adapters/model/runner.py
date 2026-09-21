@@ -76,7 +76,7 @@ from huddol.adapters.model.prompt import SYSTEM_PROMPT
 from huddol.core.errors import DomainError
 from huddol.core.parameters import agent_parameters
 from huddol.ports.agent import SettingsStore
-from huddol.runtime.reminder import TurnOutcome, TurnRequest
+from huddol.runtime.reminder import HistoryPersistenceError, TurnOutcome, TurnRequest
 from huddol.tools import AgentTools
 
 pydantic_ai.BANNER_ENABLED = False
@@ -643,7 +643,6 @@ class PydanticModelRunner:
         )
         if agents_instructions is not None and not isinstance(agents_instructions, str):
             raise ValueError("Invalid AGENTS.md snapshot in resident history")
-        snapshot = ModelMessagesTypeAdapter.dump_json(history).decode("utf-8")
         hooks: Hooks[AgentTools] = Hooks()
 
         @hooks.on.tool_execute
@@ -721,19 +720,8 @@ class PydanticModelRunner:
             request_context: ModelRequestContext,
             response: ModelResponse,
         ) -> ModelResponse:
-            try:
-                fill_response_cost(response)
-                request.persist(
-                    ModelMessagesTypeAdapter.dump_json(
-                        _settle_tool_calls([*ctx.messages, response])
-                    ).decode("utf-8")
-                )
-            except Exception:
-                logging.getLogger("huddol.model").exception(
-                    "history persistence failed for agent %s run %s",
-                    request.agent_id,
-                    request.sequence,
-                )
+            fill_response_cost(response)
+            _persist_history(request, _settle_tool_calls([*ctx.messages, response]))
             return response
 
         counted = RunUsage()
@@ -765,25 +753,26 @@ class PydanticModelRunner:
         history_length = len(history)
         error = None
         context_exceeded = False
-        if new_window:
-            request.persist(snapshot)
+        snapshot = (
+            _persist_history(request, history)
+            if new_window
+            else _encode_history(history)
+        )
         with capture_run_messages() as captured, active_trace(trace):
             try:
                 result = asyncio.run(once())
+            except HistoryPersistenceError:
+                raise
             except Exception as failure:  # noqa: BLE001
                 messages = snapshot
                 if captured:
-                    messages = ModelMessagesTypeAdapter.dump_json(
-                        _settle_tool_calls(captured)
-                    ).decode("utf-8")
+                    messages = _encode_history(_settle_tool_calls(captured))
                 new_messages = captured[history_length:]
                 input_tokens = _last_input_tokens(new_messages)
                 error = f"{type(failure).__name__}: {failure}"
                 context_exceeded = is_context_exceeded(failure)
             else:
-                messages = ModelMessagesTypeAdapter.dump_json(
-                    result.all_messages()
-                ).decode("utf-8")
+                messages = _encode_history(result.all_messages())
                 new_messages = result.new_messages()
                 input_tokens = _last_input_tokens(new_messages)
 
@@ -856,10 +845,24 @@ def _settle_tool_calls(messages: list[ModelMessage]) -> list[ModelMessage]:
     return [*messages[:-1], replace(trailing, parts=[*trailing.parts, *parts])]
 
 
-def _decode_history(raw: str) -> list[Any]:
-    if not raw or raw == "[]":
-        return []
+def _decode_history(raw: str) -> list[ModelMessage]:
+    return ModelMessagesTypeAdapter.validate_json(raw)
+
+
+def _encode_history(messages: list[ModelMessage]) -> str:
     try:
-        return list(ModelMessagesTypeAdapter.validate_json(raw))
-    except ValueError:
-        return []
+        return ModelMessagesTypeAdapter.dump_json(messages).decode("utf-8")
+    except Exception as error:
+        raise HistoryPersistenceError("Could not serialize model history") from error
+
+
+def _persist_history(request: TurnRequest, messages: list[ModelMessage]) -> str:
+    raw = _encode_history(messages)
+    try:
+        request.persist(raw)
+    except Exception as error:
+        raise HistoryPersistenceError(
+            f"Could not save model history for agent {request.agent_id} "
+            f"turn {request.sequence}"
+        ) from error
+    return raw

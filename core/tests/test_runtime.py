@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import sqlite3
 import sys
 from pathlib import Path
 
@@ -1136,6 +1137,299 @@ def test_second_model_call_failure_keeps_saved_response_and_completed_tool_retur
     assert returned.tool_call_id == "read"
     assert returned.content["messages"][0]["body"] == "@Main please help"
     assert world.history.latest_messages(MAIN) == run.messages_json
+
+
+@pytest.mark.parametrize("fail_at", [1, 2, 3])
+@pytest.mark.parametrize("prior", [False, True])
+def test_sqlite_progress_failure_preserves_history_and_stops_execution(
+    world, monkeypatch, fail_at, prior
+):
+    from pydantic_ai import ModelMessagesTypeAdapter, models
+    from pydantic_ai.messages import (
+        ModelRequest,
+        ModelResponse,
+        ToolCallPart,
+        UserPromptPart,
+    )
+    from pydantic_ai.models.function import FunctionModel
+
+    from huddol.adapters.model.runner import PydanticModelRunner
+
+    monkeypatch.setattr(models, "ALLOW_MODEL_REQUESTS", False)
+    world.settings.set_settings(
+        "model",
+        {"base_url": "https://example.invalid", "api_key": "unused", "model": "local"},
+    )
+    snapshot = "instructions\n "
+    original = "[]"
+    if prior:
+        original = ModelMessagesTypeAdapter.dump_json(
+            [
+                ModelRequest(
+                    parts=[UserPromptPart("resident")],
+                    metadata={
+                        "huddol": {"block": "resident", "agents_instructions": snapshot}
+                    },
+                )
+            ]
+        ).decode()
+        previous = world.history.start_run(MAIN)
+        world.history.finish_run(
+            MAIN, previous.sequence, status="completed", messages_json=original
+        )
+    else:
+        world.library_tree.write("AGENTS.md", snapshot)
+    mention(world)
+    before_window = world.history.window(MAIN)
+    save = world.history.save_progress
+    attempted = []
+    persisted = []
+    model_calls = []
+    tool_calls = []
+    list_members = AgentTools.list_members
+
+    def track_tools(self):
+        tool_calls.append(1)
+        return list_members(self)
+
+    def save_progress(agent_id, sequence, raw):
+        attempted.append(raw)
+        before = world.history.runs(MAIN)[0].messages_json
+        if len(attempted) == fail_at:
+            world.store._db.execute(
+                "CREATE TEMP TRIGGER fail_progress AFTER UPDATE OF messages_json"
+                " ON agent_runs WHEN NEW.status = 'running'"
+                " BEGIN SELECT RAISE(ABORT, 'progress write failed'); END"
+            )
+            with pytest.raises(sqlite3.IntegrityError) as caught:
+                save(agent_id, sequence, raw)
+            assert world.history.runs(MAIN)[0].messages_json == before
+            raise caught.value
+        save(agent_id, sequence, raw)
+        persisted.append(raw)
+
+    def respond(messages, info):
+        model_calls.append(1)
+        return ModelResponse(
+            parts=[
+                ToolCallPart(
+                    "organization",
+                    {"action": "list_members"},
+                    tool_call_id=f"{len(model_calls)}-{index}",
+                )
+                for index in range(3)
+            ]
+        )
+
+    monkeypatch.setattr(world.history, "save_progress", save_progress)
+    monkeypatch.setattr(AgentTools, "list_members", track_tools)
+    scheduler = Scheduler(
+        world,
+        PydanticModelRunner(
+            world.settings, build_model=lambda config: FunctionModel(respond)
+        ),
+    )
+    record = scheduler.run_turn(MAIN)
+    assert record.status == "failed"
+    assert "HistoryPersistenceError" in record.error
+    assert len(attempted) == fail_at
+    assert len(model_calls) == fail_at - (not prior)
+    assert len(tool_calls) == max(0, len(model_calls) - 1) * 3
+    expected = persisted[-1] if persisted else original
+    assert world.history.runs(MAIN)[0].messages_json == expected
+    assert world.history.latest_messages(MAIN) == expected
+    if expected != "[]":
+        resident = ModelMessagesTypeAdapter.validate_json(expected)[0]
+        assert resident.metadata["huddol"]["agents_instructions"] == snapshot
+    if prior:
+        assert world.history.runs(MAIN)[1].messages_json == original
+    assert world.history.pause_reason(MAIN) == "runtime_error"
+    assert world.store.get_member(MAIN).state == "paused"
+    assert world.history.window(MAIN) == before_window
+    mention(world)
+    assert MAIN not in scheduler.runnable_agents()
+    assert scheduler.run_turn(MAIN) is None
+
+
+@pytest.mark.parametrize("invalid_json", [False, True])
+def test_invalid_history_preserves_sqlite_records_and_window(
+    world, monkeypatch, invalid_json
+):
+    from pydantic_ai import models
+
+    from huddol.adapters.model.runner import PydanticModelRunner
+
+    monkeypatch.setattr(models, "ALLOW_MODEL_REQUESTS", False)
+    world.settings.set_settings(
+        "model",
+        {"base_url": "https://example.invalid", "api_key": "unused", "model": "local"},
+    )
+    original = json.dumps(
+        [
+            {
+                "kind": "request",
+                "parts": [{"part_kind": "user-prompt", "content": "resident"}],
+                "metadata": {
+                    "huddol": {"block": "resident", "agents_instructions": "snapshot"}
+                },
+            },
+            {"kind": "unknown"},
+        ]
+    )
+    if invalid_json:
+        original = original[:-1]
+    previous = world.history.start_run(MAIN)
+    world.history.finish_run(
+        MAIN, previous.sequence, status="completed", messages_json=original
+    )
+    window = world.history.window(MAIN)
+    built = []
+    runner = PydanticModelRunner(
+        world.settings, build_model=lambda config: built.append(config)
+    )
+    mention(world)
+    record = Scheduler(world, runner).run_turn(MAIN)
+    assert record.status == "failed"
+    assert built == []
+    assert world.history.latest_messages(MAIN) == original
+    assert [run.messages_json for run in world.history.runs(MAIN)] == [
+        original,
+        original,
+    ]
+    assert world.history.window(MAIN) == window
+    assert world.store.get_member(MAIN).state == "paused"
+    assert world.history.pause_reason(MAIN) == "runtime_error"
+
+
+@pytest.mark.parametrize("mode", ["normal", "overflow", "preparation"])
+@pytest.mark.parametrize("continuous", [False, True])
+def test_final_sqlite_failure_protects_progress_and_window(
+    world, mode, continuous, caplog
+):
+    original = '[{"text":"original"}]'
+    progress = '[{"text":"saved progress"}]'
+    previous = world.history.start_run(MAIN)
+    world.history.finish_run(
+        MAIN,
+        previous.sequence,
+        status="completed",
+        messages_json=original,
+        usage_json=json.dumps(
+            {"last_input_tokens": 100 if mode == "preparation" else 1}
+        ),
+    )
+    world.settings.set_settings("agent", {"context_window_tokens": 100})
+    mention(world)
+    window = world.history.window(MAIN)
+    events = []
+    calls = []
+
+    def respond(request, tools):
+        calls.append(1)
+        request.persist(progress)
+        world.store._db.execute(
+            "CREATE TEMP TRIGGER fail_finish AFTER UPDATE OF completed_at ON agent_runs"
+            + (
+                ""
+                if continuous
+                else " WHEN NEW.error IS NOT 'IntegrityError: final write failed'"
+            )
+            + " BEGIN SELECT RAISE(ABORT, 'final write failed'); END"
+        )
+        return TurnOutcome(
+            messages_json='[{"text":"final"}]', context_exceeded=mode == "overflow"
+        )
+
+    scheduler = Scheduler(
+        world, RecordingRunner(respond), on_event=lambda *event: events.append(event)
+    )
+    if continuous:
+        with pytest.raises(
+            sqlite3.IntegrityError, match="final write failed"
+        ) as caught:
+            scheduler.run_turn(MAIN)
+        assert isinstance(caught.value.__context__, sqlite3.IntegrityError)
+        assert world.history.runs(MAIN)[0].status == "running"
+    else:
+        record = scheduler.run_turn(MAIN)
+        assert record.status == "failed"
+        assert world.history.runs(MAIN)[0].status == "failed"
+    assert "final write failed" in caplog.text
+    assert calls == [1]
+    assert world.history.runs(MAIN)[0].messages_json == progress
+    assert world.history.runs(MAIN)[1].messages_json == original
+    assert world.history.latest_messages(MAIN) == progress
+    assert world.history.window(MAIN) == window
+    assert all(name != "window.reset" for name, _ in events)
+    assert world.store.get_member(MAIN).state == "paused"
+    assert world.history.pause_reason(MAIN) == "runtime_error"
+    mention(world)
+    assert scheduler.run_turn(MAIN) is None
+    assert calls == [1]
+
+
+def test_progress_finish_and_safety_failures_remain_diagnostic_and_stop_agent(
+    world, monkeypatch, caplog
+):
+    from pydantic_ai import models
+    from pydantic_ai.messages import ModelResponse, ToolCallPart
+    from pydantic_ai.models.function import FunctionModel
+
+    from huddol.adapters.model.runner import PydanticModelRunner
+    from huddol.runtime.reminder import HistoryPersistenceError
+
+    monkeypatch.setattr(models, "ALLOW_MODEL_REQUESTS", False)
+    world.settings.set_settings(
+        "model",
+        {"base_url": "https://example.invalid", "api_key": "unused", "model": "local"},
+    )
+    mention(world)
+    calls = []
+    tools = []
+
+    def respond(messages, info):
+        calls.append(1)
+        world.store._db.executescript(
+            "CREATE TEMP TRIGGER fail_history AFTER UPDATE ON agent_runs"
+            " BEGIN SELECT RAISE(ABORT, 'history unavailable'); END;"
+            "CREATE TEMP TRIGGER fail_safety BEFORE INSERT ON agent_safety"
+            " BEGIN SELECT RAISE(ABORT, 'safety unavailable'); END;"
+        )
+        return ModelResponse(
+            parts=[
+                ToolCallPart(
+                    "organization", {"action": "list_members"}, tool_call_id=str(index)
+                )
+                for index in range(3)
+            ]
+        )
+
+    monkeypatch.setattr(AgentTools, "list_members", lambda self: tools.append(1))
+    scheduler = Scheduler(
+        world,
+        PydanticModelRunner(
+            world.settings, build_model=lambda config: FunctionModel(respond)
+        ),
+    )
+    with pytest.raises(sqlite3.IntegrityError, match="safety unavailable") as caught:
+        scheduler.run_turn(MAIN)
+    finish_error = caught.value.__context__
+    assert isinstance(finish_error, sqlite3.IntegrityError)
+    progress_error = finish_error.__context__
+    assert isinstance(progress_error, HistoryPersistenceError)
+    assert isinstance(progress_error.__cause__, sqlite3.IntegrityError)
+    assert "history unavailable" in str(progress_error.__cause__)
+    assert "history unavailable" in caplog.text
+    assert calls == [1]
+    assert tools == []
+    assert world.history.runs(MAIN)[0].status == "running"
+    assert world.store.get_member(MAIN).state == "running"
+    assert world.history.window(MAIN).number == 1
+    mention(world)
+    assert MAIN not in scheduler.runnable_agents()
+    assert scheduler.run_turn(MAIN) is None
+    assert calls == [1]
+    assert tools == []
 
 
 def test_scheduler_resumes_interrupted_progress_on_changed_mentions(world) -> None:

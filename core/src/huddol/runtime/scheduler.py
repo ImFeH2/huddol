@@ -242,18 +242,23 @@ class Scheduler:
             },
         )
         discussion_ids = tuple(item.discussion_id for item in items)
+        persisted_history = self.history.latest_messages(agent_id)
+
+        def persist(messages_json: str) -> None:
+            nonlocal persisted_history
+            self.history.save_progress(agent_id, run.sequence, messages_json)
+            persisted_history = messages_json
+
         request = TurnRequest(
             agent_id=agent_id,
             sequence=run.sequence,
             agent_name=agent_name,
             prompt=prompt,
             reminder=reminder,
-            history_json=self.history.latest_messages(agent_id),
+            history_json=persisted_history,
             resident="",
             environment=lambda: self.environment_facts(agent_id),
-            persist=lambda messages_json: self.history.save_progress(
-                agent_id, run.sequence, messages_json
-            ),
+            persist=persist,
             ephemeral=lambda: exchange_nudge(
                 self.store,
                 agent_id,
@@ -264,6 +269,7 @@ class Scheduler:
         status = "completed"
         error: str | None = None
         context_exceeded = False
+        finalized = False
         pause_reason: str | None = None
         try:
             request = replace(
@@ -297,7 +303,9 @@ class Scheduler:
                 usage_json=outcome.usage_json,
                 error=error,
             )
+            finalized = True
         except Exception as failure:
+            context_exceeded = False
             pause_reason = "runtime_error"
             status = "failed"
             error = f"{type(failure).__name__}: {failure}"
@@ -306,12 +314,14 @@ class Scheduler:
                 agent_id,
                 run.sequence,
                 status=status,
-                messages_json=request.history_json,
+                messages_json=persisted_history,
                 error=error,
             )
+            finalized = True
         finally:
             if (
-                status == "completed"
+                finalized
+                and status == "completed"
                 and self.history.no_tool_streak(agent_id)
                 >= self.parameters().no_tool_turns_before_pause
             ):
@@ -329,7 +339,7 @@ class Scheduler:
                 and run.sequence != self.history.window(agent_id).since_sequence
             ):
                 reason = "overflow"
-            if reason is not None:
+            if reason is not None and finalized:
                 window = self.history.reset_window(agent_id, reason)
                 self.emit(
                     "window.reset",

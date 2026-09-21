@@ -47,7 +47,12 @@ from huddol.adapters.model.runner import (
     is_context_exceeded,
 )
 from huddol.core.errors import DomainError
-from huddol.runtime.reminder import Reminder, ReminderItem, TurnRequest
+from huddol.runtime.reminder import (
+    HistoryPersistenceError,
+    Reminder,
+    ReminderItem,
+    TurnRequest,
+)
 
 
 class FakeSettings:
@@ -376,30 +381,100 @@ def test_each_response_persists_the_complete_history_without_ephemeral(
         assert first[: len(history)] == history
 
 
-def test_persistence_errors_are_logged_without_failing_the_turn(
-    settings, caplog
+@pytest.mark.parametrize("prior", [False, True])
+@pytest.mark.parametrize("fail_at", [1, 2, 3])
+@pytest.mark.parametrize("tool_count", [1, 3])
+def test_persistence_failure_stops_model_and_all_response_tools(
+    settings, prior, fail_at, tool_count
 ) -> None:
-    calls = []
+    original = request()
+    if prior:
+        previous = PydanticModelRunner(settings, build_model=Builder()).run(
+            original, None
+        )
+        original = replace(original, history_json=previous.messages_json)
+    saved = []
+    model_calls = []
+    tool_calls = []
+    failure = OSError("disk unavailable")
 
     def persist(raw):
-        calls.append(raw)
-        raise OSError("disk unavailable")
+        saved.append(raw)
+        if len(saved) == fail_at:
+            raise failure
+
+    class Tools:
+        def list_members(self):
+            tool_calls.append(1)
+            return []
 
     def respond(messages, info):
-        return ModelResponse(parts=[TextPart("Done")])
+        model_calls.append(1)
+        return ModelResponse(
+            parts=[
+                ToolCallPart(
+                    "organization",
+                    {"action": "list_members"},
+                    tool_call_id=f"call-{len(model_calls)}-{index}",
+                )
+                for index in range(tool_count)
+            ]
+        )
 
-    previous = PydanticModelRunner(settings, build_model=Builder()).run(request(), None)
-    outcome = PydanticModelRunner(
+    runner = PydanticModelRunner(
         settings, build_model=lambda config: FunctionModel(respond)
-    ).run(
-        replace(request(), persist=persist, history_json=previous.messages_json), None
     )
-    assert outcome.error is None
-    assert calls == [outcome.messages_json]
-    assert any(
-        record.name == "huddol.model" and record.exc_info for record in caplog.records
+    with pytest.raises(HistoryPersistenceError) as caught:
+        runner.run(replace(original, persist=persist), Tools())
+    assert caught.value.__cause__ is failure
+    assert len(saved) == fail_at
+    assert len(model_calls) == fail_at - (not prior)
+    assert len(tool_calls) == max(0, len(model_calls) - 1) * tool_count
+
+
+@pytest.mark.parametrize("raw", ["", "{", "null", "{}", '[{"kind":"unknown"}]'])
+def test_invalid_history_fails_before_model_creation_or_saving(settings, raw):
+    built = []
+    saved = []
+    runner = PydanticModelRunner(
+        settings, build_model=lambda config: built.append(config)
     )
-    assert "disk unavailable" in caplog.text
+    with pytest.raises(ValueError):
+        runner.run(replace(request(), history_json=raw, persist=saved.append), None)
+    assert built == []
+    assert saved == []
+
+
+@pytest.mark.parametrize("fail_at", [1, 2, 3])
+def test_serialization_failure_propagates_at_snapshot_response_and_outcome(
+    settings, monkeypatch, fail_at
+):
+    serialize = ModelMessagesTypeAdapter.dump_json
+    calls = []
+    saved = []
+    model_calls = []
+    failure = ValueError("history cannot be serialized")
+
+    def encode(messages, **kwargs):
+        calls.append(1)
+        if len(calls) == fail_at:
+            raise failure
+        return serialize(messages, **kwargs)
+
+    def respond(messages, info):
+        model_calls.append(1)
+        return ModelResponse(parts=[TextPart("done")])
+
+    monkeypatch.setattr(ModelMessagesTypeAdapter, "dump_json", encode)
+    runner = PydanticModelRunner(
+        settings, build_model=lambda config: FunctionModel(respond)
+    )
+    with pytest.raises(HistoryPersistenceError) as caught:
+        runner.run(replace(request(), persist=saved.append), None)
+    assert caught.value.__cause__ is failure
+    assert len(calls) == fail_at
+    assert len(saved) == fail_at - 1
+    assert len(model_calls) == (fail_at > 1)
 
 
 def test_invalid_tool_responses_are_persisted_before_retry(settings) -> None:
@@ -1484,8 +1559,9 @@ def test_non_tool_faults_are_not_tool_failures(settings, monkeypatch, stage):
     if stage == "serialize":
         from pydantic_core import PydanticSerializationError
 
-        with pytest.raises(PydanticSerializationError):
+        with pytest.raises(HistoryPersistenceError) as caught:
             runner.run(request(), Tools())
+        assert isinstance(caught.value.__cause__, PydanticSerializationError)
     else:
         outcome = runner.run(request(), Tools())
         assert outcome.error is not None
@@ -1637,8 +1713,10 @@ def test_initial_snapshot_persistence_failure_prevents_model_creation(settings):
     runner = PydanticModelRunner(
         settings, build_model=lambda config: built.append(config)
     )
-    with pytest.raises(OSError, match="snapshot disk unavailable"):
+    with pytest.raises(HistoryPersistenceError) as caught:
         runner.run(replace(request(), agents_instructions="raw\n ", persist=fail), None)
+    assert isinstance(caught.value.__cause__, OSError)
+    assert str(caught.value.__cause__) == "snapshot disk unavailable"
     assert built == []
 
 

@@ -173,6 +173,10 @@ def read_agents_instructions(*trees: FileTree) -> str | None:
     return "\n\n".join(parts) if parts else None
 
 
+class HistoryPersistenceError(RuntimeError):
+    pass
+
+
 @dataclass(frozen=True)
 class TurnRequest:
     agent_id: int
