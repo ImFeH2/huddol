@@ -346,7 +346,11 @@ describe("Backend", () => {
     expect(await second).toMatchObject({ code: "disconnected" });
     backend.reportFailure(new Error("late failure"));
     expect(failures).toHaveBeenCalledTimes(1);
-    expect(events).not.toHaveBeenCalled();
+    expect(events).toHaveBeenCalledTimes(1);
+    expect(events).toHaveBeenCalledWith({
+      type: "connection.closed",
+      error: expect.objectContaining({ code: "disconnected" }),
+    });
     expect(vi.getTimerCount()).toBe(0);
     await expect(backend.organization()).rejects.toMatchObject({
       code: "disconnected",
@@ -654,6 +658,131 @@ describe("Backend", () => {
       result: { path: "new.md" },
     });
     await expect(promise).resolves.toMatchObject({ path: "new.md" });
+  });
+
+  it.each(["locate", "socket"])(
+    "recovers immediately after synchronous %s failure",
+    async (source) => {
+      vi.useFakeTimers();
+      FakeSocket.instances = [];
+      let attempts = 0;
+      const failOnce = () => {
+        if (attempts++ === 0) throw new Error("construction failed");
+      };
+      const backend = new Backend(
+        () => {
+          if (source === "locate") failOnce();
+          return { url: URL };
+        },
+        (url) => {
+          if (source === "socket") failOnce();
+          return new FakeSocket(url);
+        },
+      );
+      let recovery: Promise<void> | undefined;
+      backend.onEvent((event) => {
+        if (event.type === "connection.closed")
+          recovery = backend.reconnect(true);
+      });
+      const initial = backend.connect().catch((error) => error);
+      expect(await initial).toMatchObject({ code: "connection_failed" });
+      expect(FakeSocket.instances).toHaveLength(1);
+      FakeSocket.instances[0].open();
+      await recovery;
+      await expect(backend.connect()).resolves.toBeUndefined();
+      expect(backend.disconnected).toBe(false);
+      expect(vi.getTimerCount()).toBe(0);
+    },
+  );
+
+  it("limits automatic recovery after a synchronous failure and permits manual recovery", async () => {
+    let attempts = 0;
+    const backend = new Backend(
+      () => {
+        attempts += 1;
+        if (attempts < 3) throw new Error("locate unavailable");
+        return { url: URL };
+      },
+      (url) => new FakeSocket(url),
+    );
+    const recoveries: Promise<unknown>[] = [];
+    backend.onEvent((event) => {
+      if (event.type === "connection.closed")
+        recoveries.push(backend.reconnect(true).catch((error) => error));
+    });
+    await expect(backend.connect()).rejects.toMatchObject({
+      code: "connection_failed",
+    });
+    await Promise.all(recoveries);
+    await backend.reconnect(true);
+    expect(attempts).toBe(2);
+    expect(backend.disconnected).toBe(true);
+    const manual = backend.reconnect();
+    FakeSocket.instances[FakeSocket.instances.length - 1].open();
+    await manual;
+    expect(attempts).toBe(3);
+    expect(backend.disconnected).toBe(false);
+  });
+
+  it("shares one recovery and rejects writes once without replaying them", async () => {
+    vi.useFakeTimers();
+    const { backend, socket, connected } = harness();
+    const old = await connected();
+    const write = backend.send(1, "Only once").catch((error) => error);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(old.sent).toHaveLength(1);
+    old.fail();
+    expect(await write).toMatchObject({ code: "unconfirmed" });
+    const first = backend.reconnect(true);
+    expect(backend.reconnect(true)).toBe(first);
+    expect(backend.reconnect()).toBe(first);
+    expect(FakeSocket.instances).toHaveLength(2);
+    socket().open();
+    await first;
+    old.open();
+    old.fail();
+    old.reply({ type: "response", id: old.sent[0].id, result: { id: 1 } });
+    expect(backend.disconnected).toBe(false);
+    expect(socket().sent).toHaveLength(0);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it.each([
+    "authentication_missing",
+    "authentication_failed",
+    "protocol_error",
+    "storage_read_failed",
+    "invalid_connection",
+  ])("requires explicit recovery for %s", async (code) => {
+    let attempts = 0;
+    const backend = new Backend(() => {
+      attempts += 1;
+      throw new BackendError(code, "Explicit recovery required", true);
+    });
+    await expect(backend.connect()).rejects.toMatchObject({ code });
+    await backend.reconnect(true);
+    expect(attempts).toBe(1);
+    await expect(backend.reconnect()).rejects.toMatchObject({ code });
+    expect(attempts).toBe(2);
+  });
+
+  it("does not publish restoration for a connection that closes immediately after opening", async () => {
+    const { backend, socket, connected } = harness();
+    const old = await connected();
+    old.fail();
+    const events = vi.fn();
+    backend.onEvent(events);
+    const recovery = backend.reconnect(true).catch((error) => error);
+    socket().open();
+    socket().fail();
+    await recovery;
+    expect(backend.disconnected).toBe(true);
+    expect(events.mock.calls.map(([event]) => event.type)).toEqual([
+      "connection.reconnecting",
+      "connection.closed",
+    ]);
+    await backend.reconnect(true);
+    expect(FakeSocket.instances).toHaveLength(2);
   });
 
   it("unsubscribing stops delivery", async () => {

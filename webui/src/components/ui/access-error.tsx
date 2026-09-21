@@ -8,32 +8,37 @@ export function AccessError({
   error,
   reconnect,
   waiting = false,
+  loadingData = false,
 }: {
   error: BackendError;
   reconnect?: () => void;
   waiting?: boolean;
+  loadingData?: boolean;
 }) {
   const titleId = useId();
   const descriptionId = useId();
   const authentication =
-    error.code === "authentication_missing" ||
-    error.code === "authentication_failed";
-  const startup = error.code === "startup_failed";
+    !loadingData &&
+    (error.code === "authentication_missing" ||
+      error.code === "authentication_failed");
+  const startup = !loadingData && error.code === "startup_failed";
   const preparation = [
     "storage_read_failed",
     "storage_write_failed",
     "url_cleanup_failed",
     "invalid_connection",
   ].includes(error.code);
-  const title = authentication
-    ? "Access to Huddol requires authentication"
-    : startup
-      ? "Unable to start Huddol"
-      : error.code === "protocol_error"
-        ? "Huddol sent an invalid response"
-        : preparation
-          ? "Unable to prepare the connection"
-          : "Could not connect to Huddol";
+  const title = loadingData
+    ? "Could not load Huddol"
+    : authentication
+      ? "Access to Huddol requires authentication"
+      : startup
+        ? "Unable to start Huddol"
+        : error.code === "protocol_error"
+          ? "Huddol sent an invalid response"
+          : preparation
+            ? "Unable to prepare the connection"
+            : "Could not connect to Huddol";
 
   return (
     <main className="flex h-dvh w-full overflow-auto bg-surface p-6">
@@ -58,8 +63,16 @@ export function AccessError({
             ) : reconnect ? (
               <div className="flex flex-wrap items-center gap-2 pt-1">
                 <Button onClick={reconnect} disabled={waiting}>
-                  {waiting ? <Spinner label="Reconnecting" /> : null}
-                  {waiting ? "Reconnecting…" : "Reconnect"}
+                  {waiting ? (
+                    <Spinner label={loadingData ? "Loading" : "Reconnecting"} />
+                  ) : null}
+                  {loadingData
+                    ? waiting
+                      ? "Loading…"
+                      : "Retry"
+                    : waiting
+                      ? "Reconnecting…"
+                      : "Reconnect"}
                 </Button>
               </div>
             ) : null}

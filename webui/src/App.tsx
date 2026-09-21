@@ -87,11 +87,11 @@ function reportBackendFailure(error: BackendError) {
   const uncertain = error.code === "unconfirmed";
   const disconnected = backend.disconnected && !uncertain;
   toast({
-    id: uncertain ? undefined : error.transport ? CONNECTION_TOAST : undefined,
+    id: disconnected ? CONNECTION_TOAST : undefined,
     tone: "danger",
     title: uncertain
       ? "Check operation result"
-      : error.transport
+      : disconnected
         ? "Connection lost"
         : "Request failed",
     description: error.message,
@@ -216,50 +216,103 @@ export function useApplication() {
   const [loaded, setLoaded] = useState<Loaded | null>(null);
   const [failure, setFailure] = useState<BackendError | null>(null);
   const [reconnecting, setReconnecting] = useState(false);
+  const [loading, setLoading] = useState(false);
   const booted = useRef(false);
+  const live = useRef(false);
+  const generation = useRef(0);
+  const pending = useRef<Promise<void> | null>(null);
+  const dirty = useRef(false);
 
-  const refresh = useCallback(async () => {
-    const [organization, discussions] = await Promise.all([
-      backend.organization(),
-      backend.discussions(),
-    ]);
-    setLoaded({
-      members: organization.members,
-      humanId: organization.human_id,
-      tokenLimit: organization.token_limit ?? 0,
-      discussions,
-    });
-    booted.current = true;
-  }, []);
-
-  useEffect(
-    () =>
-      backend.onFailure((error) => {
-        setReconnecting(false);
-        if (booted.current) reportBackendFailure(error);
-        else setFailure(error);
-      }),
-    [],
-  );
-
-  useEffect(() => {
-    backend
-      .connect()
-      .then(refresh)
-      .catch((error) =>
-        setFailure(
+  const refresh = useCallback((): Promise<void> => {
+    if (!live.current) return Promise.resolve();
+    if (pending.current) return pending.current;
+    const epoch = generation.current;
+    setLoading(true);
+    const operation = Promise.resolve().then(async () => {
+      if (!live.current || epoch !== generation.current) return;
+      try {
+        do {
+          dirty.current = false;
+          const [organization, discussions] = await Promise.all([
+            backend.organization(),
+            backend.discussions(),
+          ]);
+          if (!live.current || epoch !== generation.current) return;
+          setLoaded({
+            members: organization.members,
+            humanId: organization.human_id,
+            tokenLimit: organization.token_limit,
+            discussions,
+          });
+          booted.current = true;
+          setFailure(null);
+          dismissToast("application-data");
+        } while (dirty.current);
+      } catch (error) {
+        if (!live.current || epoch !== generation.current) return;
+        const problem =
           error instanceof BackendError
             ? error
             : new BackendError(
-                "startup_failed",
-                "Huddol could not finish starting. Close this window and start Huddol again.",
-              ),
-        ),
-      );
+                "request_failed",
+                error instanceof Error ? error.message : String(error),
+              );
+        setFailure(problem);
+        if (booted.current)
+          toast({
+            id: "application-data",
+            tone: "danger",
+            title: "Could not load organization",
+            description: problem.message,
+            duration: null,
+            action: {
+              label: "Retry",
+              onClick: () => {
+                if (backend.disconnected) reconnect();
+                else void refresh();
+              },
+            },
+          });
+      } finally {
+        if (live.current && epoch === generation.current) {
+          pending.current = null;
+          setLoading(false);
+        }
+      }
+    });
+    pending.current = operation;
+    return operation;
+  }, []);
+
+  const retry = useCallback((): Promise<void> => {
+    if (backend.disconnected)
+      return backend.reconnect().catch(backend.reportFailure);
+    return refresh();
   }, [refresh]);
 
   useEffect(() => {
-    return backend.onEvent((event) => {
+    live.current = true;
+    const invalidate = () => {
+      generation.current += 1;
+      pending.current = null;
+      dirty.current = false;
+    };
+    const recover = () => {
+      if (document.visibilityState === "visible" && navigator.onLine)
+        void backend.reconnect(true).catch(backend.reportFailure);
+    };
+    const offFailure = backend.onFailure((error) => {
+      if (backend.disconnected) setReconnecting(false);
+      if (booted.current) reportBackendFailure(error);
+      else if (backend.disconnected) setFailure(error);
+    });
+    const offEvent = backend.onEvent((event) => {
+      if (event.type === "connection.closed") {
+        invalidate();
+        setLoading(false);
+        recover();
+        return;
+      }
       if (event.type === "connection.reconnecting") {
         setReconnecting(true);
         if (booted.current)
@@ -270,14 +323,15 @@ export function useApplication() {
             duration: null,
             closable: false,
           });
+        return;
       }
       if (event.type === "connection.restored") {
         dismissToast(CONNECTION_TOAST);
         setReconnecting(false);
-        setFailure(null);
+        void refresh();
+        return;
       }
       if (
-        event.type === "connection.restored" ||
         event.type.startsWith("member.") ||
         event.type.startsWith("turn.") ||
         event.type === "message.created" ||
@@ -287,38 +341,57 @@ export function useApplication() {
         event.type === "discussion.created" ||
         event.type === "discussion.updated"
       ) {
-        void refresh().catch(backend.reportFailure);
+        if (pending.current) dirty.current = true;
+        else void refresh();
       }
     });
+    window.addEventListener("online", recover);
+    document.addEventListener("visibilitychange", recover);
+    const epoch = generation.current;
+    backend.connect().then(
+      () => {
+        if (live.current && epoch === generation.current) void refresh();
+      },
+      (error: unknown) => {
+        if (live.current && epoch === generation.current)
+          setFailure(
+            error instanceof BackendError
+              ? error
+              : new BackendError(
+                  "startup_failed",
+                  error instanceof Error ? error.message : String(error),
+                ),
+          );
+      },
+    );
+    return () => {
+      live.current = false;
+      invalidate();
+      offEvent();
+      offFailure();
+      window.removeEventListener("online", recover);
+      document.removeEventListener("visibilitychange", recover);
+      dismissToast("application-data");
+      dismissToast(CONNECTION_TOAST);
+    };
   }, [refresh]);
 
-  useEffect(() => {
-    const online = () => {
-      void backend.reconnect(true).catch(backend.reportFailure);
-    };
-    const visible = () => {
-      if (document.visibilityState === "visible") online();
-    };
-    window.addEventListener("online", online);
-    document.addEventListener("visibilitychange", visible);
-    return () => {
-      window.removeEventListener("online", online);
-      document.removeEventListener("visibilitychange", visible);
-    };
-  }, []);
-
-  return { loaded, failure, reconnecting, refresh };
+  return { loaded, failure, reconnecting, loading, refresh, retry };
 }
 
 export default function App() {
-  const { loaded, failure, reconnecting, refresh } = useApplication();
+  const { loaded, failure, reconnecting, loading, refresh, retry } =
+    useApplication();
   let body: ReactNode;
   if (failure && !loaded) {
     body = (
       <AccessError
         error={failure}
-        reconnect={reconnect}
-        waiting={reconnecting}
+        reconnect={() => {
+          void retry();
+        }}
+        waiting={reconnecting || loading}
+        loadingData={!backend.disconnected && !reconnecting}
       />
     );
   } else if (!loaded) {

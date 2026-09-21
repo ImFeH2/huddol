@@ -418,21 +418,43 @@ export class Backend {
 
   reconnect(automatic = false): Promise<void> {
     if (this.#reconnecting) return this.#reconnecting;
-    if (!this.#closed || (automatic && this.#automaticAttempted))
+    if (
+      !this.#closed ||
+      (automatic &&
+        (this.#automaticAttempted ||
+          !["disconnected", "connection_failed", "connection_timeout"].includes(
+            this.#closed.code,
+          )))
+    )
       return Promise.resolve();
     this.#automaticAttempted = true;
     this.#closed = null;
-    this.#ready = null;
-    this.#reconnecting = this.#open()
+    const generation = this.#generation;
+    let resolve!: () => void;
+    let reject!: (error: unknown) => void;
+    const operation = new Promise<void>((yes, no) => {
+      resolve = yes;
+      reject = no;
+    });
+    this.#reconnecting = operation;
+    this.#emit({ type: "connection.reconnecting" });
+    this.#open()
       .then(() => {
+        if (generation !== this.#generation)
+          throw new BackendError(
+            "connection_changed",
+            "Connection changed while reconnecting.",
+            true,
+          );
+        this.#reconnecting = null;
         this.#automaticAttempted = false;
         this.#emit({ type: "connection.restored" });
       })
       .finally(() => {
-        this.#reconnecting = null;
-      });
-    if (!this.#closed) this.#emit({ type: "connection.reconnecting" });
-    return this.#reconnecting;
+        if (this.#reconnecting === operation) this.#reconnecting = null;
+      })
+      .then(resolve, reject);
+    return operation;
   }
 
   #emit(event: BackendEvent): void {
@@ -504,62 +526,57 @@ export class Backend {
     });
   }
 
-  async #open(): Promise<Socket> {
-    if (this.#closed) throw this.#closed;
+  #open(): Promise<Socket> {
+    if (this.#closed) return Promise.reject(this.#closed);
     if (this.#ready) return this.#ready;
     const generation = this.#generation;
-    this.#ready = new Promise<Socket>((resolve, reject) => {
-      const timer = setTimeout(() => {
-        this.#disconnect(
-          new BackendError(
-            "connection_timeout",
-            "Connection timed out. Reconnect to try again.",
-            true,
-          ),
-        );
-      }, REQUEST_TIMEOUT);
-      this.#rejectConnection = (error) => {
-        clearTimeout(timer);
-        this.#rejectConnection = null;
-        reject(error);
-      };
-      let attached: Promise<Socket>;
-      try {
-        attached = this.#attach();
-      } catch (error) {
-        this.#disconnect(
-          error instanceof BackendError
-            ? error
-            : new BackendError(
-                "connection_failed",
-                "Could not open the connection. Reopen the Huddol link.",
-                true,
-              ),
-        );
-        return;
-      }
-      attached.then(
-        (socket) => {
-          if (generation !== this.#generation) return;
-          clearTimeout(timer);
-          this.#rejectConnection = null;
-          resolve(socket);
-        },
-        (error: unknown) => {
-          if (generation === this.#generation)
-            this.#disconnect(
-              error instanceof BackendError
-                ? error
-                : new BackendError(
-                    "connection_failed",
-                    "Could not open the connection. Reopen the Huddol link.",
-                    true,
-                  ),
-            );
-        },
-      );
+    let resolve!: (socket: Socket) => void;
+    let reject!: (error: BackendError) => void;
+    const ready = new Promise<Socket>((yes, no) => {
+      resolve = yes;
+      reject = no;
     });
-    return this.#ready;
+    this.#ready = ready;
+    const timer = setTimeout(() => {
+      this.#disconnect(
+        new BackendError(
+          "connection_timeout",
+          "Connection timed out. Reconnect to try again.",
+          true,
+        ),
+      );
+    }, REQUEST_TIMEOUT);
+    this.#rejectConnection = (error) => {
+      clearTimeout(timer);
+      this.#rejectConnection = null;
+      reject(error);
+    };
+    const fail = (error: unknown) => {
+      if (generation !== this.#generation) return;
+      this.#disconnect(
+        error instanceof BackendError
+          ? error
+          : new BackendError(
+              "connection_failed",
+              "Could not open the connection. Reopen the Huddol link.",
+              true,
+            ),
+      );
+    };
+    let attached: Promise<Socket>;
+    try {
+      attached = this.#attach();
+    } catch (error) {
+      fail(error);
+      return ready;
+    }
+    attached.then((socket) => {
+      if (generation !== this.#generation) return;
+      clearTimeout(timer);
+      this.#rejectConnection = null;
+      resolve(socket);
+    }, fail);
+    return ready;
   }
 
   get disconnected(): boolean {
@@ -593,6 +610,8 @@ export class Backend {
     if (this.#closed) return;
     this.#closed = error;
     this.#generation += 1;
+    this.#ready = null;
+    this.#reconnecting = null;
     this.#rejectConnection?.(error);
     const socket = this.#activeSocket;
     this.#activeSocket = null;
@@ -606,6 +625,7 @@ export class Backend {
     }
     this.#pending.clear();
     this.#notify(error);
+    this.#emit({ type: "connection.closed", error });
   }
 
   onEvent(listener: (event: BackendEvent) => void): () => void {
