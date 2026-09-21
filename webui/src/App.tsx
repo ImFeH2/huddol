@@ -212,7 +212,7 @@ function Chrome({ loaded }: { loaded: Loaded }) {
   );
 }
 
-export default function App() {
+export function useApplication() {
   const [loaded, setLoaded] = useState<Loaded | null>(null);
   const [failure, setFailure] = useState<BackendError | null>(null);
   const [reconnecting, setReconnecting] = useState(false);
@@ -307,6 +307,11 @@ export default function App() {
     };
   }, []);
 
+  return { loaded, failure, reconnecting, refresh };
+}
+
+export default function App() {
+  const { loaded, failure, reconnecting, refresh } = useApplication();
   let body: ReactNode;
   if (failure && !loaded) {
     body = (
