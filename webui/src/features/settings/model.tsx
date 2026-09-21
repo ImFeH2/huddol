@@ -222,9 +222,12 @@ export function AgentModelPanel({ agentId }: { agentId: number }) {
   });
   const [busy, setBusy] = useState(false);
   const dirty = useRef(false);
+  const loadGeneration = useRef(0);
   const load = useCallback(async () => {
+    const generation = ++loadGeneration.current;
     try {
       const loaded = await backend.modelCatalog();
+      if (generation !== loadGeneration.current) return;
       setCatalog(loaded);
       if (!dirty.current) {
         setValue(
@@ -235,14 +238,20 @@ export function AgentModelPanel({ agentId }: { agentId: number }) {
         );
       }
     } catch (error) {
-      reportLoadFailure(`agent-model:${agentId}`, error, () => void load());
+      if (generation === loadGeneration.current) {
+        reportLoadFailure(`agent-model:${agentId}`, error, () => void load());
+      }
     }
   }, [agentId]);
   useEffect(() => {
     void load();
-    return backend.onEvent((event) => {
+    const off = backend.onEvent((event) => {
       if (event.type === "connection.restored") void load();
     });
+    return () => {
+      loadGeneration.current += 1;
+      off();
+    };
   }, [load]);
   return (
     <form
@@ -253,9 +262,17 @@ export function AgentModelPanel({ agentId }: { agentId: number }) {
       onSubmit={async (event) => {
         event.preventDefault();
         if (!catalog || busy) return;
+        loadGeneration.current += 1;
         setBusy(true);
         try {
-          setCatalog(await backend.configureModel("set_agent", agentId, value));
+          const updated = await backend.configureModel(
+            "set_agent",
+            agentId,
+            value,
+          );
+          loadGeneration.current += 1;
+          setCatalog(updated);
+          setValue(updated.agent_configs[String(agentId)] ?? value);
           dirty.current = false;
           toast({ tone: "success", title: "Agent model settings saved" });
         } catch (error) {
@@ -298,26 +315,39 @@ export function ModelPanel() {
   const [busy, setBusy] = useState(false);
   const [failed, setFailed] = useState(false);
   const [providerId, setProviderId] = useState<string | null>(null);
+  const loadGeneration = useRef(0);
   const load = useCallback(async () => {
+    const generation = ++loadGeneration.current;
     try {
-      setCatalog(await backend.modelCatalog());
+      const loaded = await backend.modelCatalog();
+      if (generation !== loadGeneration.current) return;
+      setCatalog(loaded);
       setFailed(false);
     } catch (error) {
-      setFailed(true);
-      reportLoadFailure("settings-model", error, () => void load());
+      if (generation === loadGeneration.current) {
+        setFailed(true);
+        reportLoadFailure("settings-model", error, () => void load());
+      }
     }
   }, []);
   useEffect(() => {
     void load();
-    return backend.onEvent((event) => {
+    const off = backend.onEvent((event) => {
       if (event.type === "connection.restored") void load();
     });
+    return () => {
+      loadGeneration.current += 1;
+      off();
+    };
   }, [load]);
   const save: SaveModel = async (action, id, values = {}) => {
+    loadGeneration.current += 1;
     setBusy(true);
     try {
       const updated = await backend.configureModel(action, id, values);
+      loadGeneration.current += 1;
       setCatalog(updated);
+      setFailed(false);
       if (action === "save_provider" && id === null) {
         const created = updated.providers[updated.providers.length - 1];
         if (!created) throw new Error("Saved provider is missing");
