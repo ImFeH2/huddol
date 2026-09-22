@@ -34,6 +34,12 @@ class RecordingRunner:
         self.requests: list[TurnRequest] = []
         self._behaviour = behaviour
 
+    def check_available(self, agent_id: int) -> None:
+        pass
+
+    def validate_history(self, raw: str) -> None:
+        json.loads(raw)
+
     def run(self, request: TurnRequest, tools: AgentTools) -> TurnOutcome:
         self.requests.append(request)
         if self._behaviour is not None:
@@ -78,29 +84,21 @@ def mention(deps: Dependencies, body: str = "@Main please help") -> int:
     return room.id
 
 
-def test_unavailable_execution_does_not_disable_business_tools(
-    world, tmp_path: Path
-) -> None:
-    from huddol.core.errors import DomainError
-
+def test_unavailable_execution_blocks_new_turns(world) -> None:
     room = mention(world)
     world.execution.close()
     world.execution = ExecutionManager(settings={"legacy": "invalid"})
-
-    def respond(request, tools):
-        assert request.resident == "Your MEMORY.md is empty."
-        assert request.environment() is None
-        assert tools.list_members()
-        tools.send_message(room, "Business tools still work")
-        with pytest.raises(DomainError):
-            tools.run(["must-not-run"])
-        return TurnOutcome(messages_json="[]")
-
-    scheduler = Scheduler(world, RecordingRunner(respond))
+    runner = RecordingRunner()
+    scheduler = Scheduler(world, runner)
     try:
-        result = scheduler.run_turn(MAIN)
-        assert result is not None and result.status == "completed"
-        assert world.store.messages(room)[-1].body == "Business tools still work"
+        assert scheduler.run_turn(MAIN) is None
+        state = scheduler.agent_status(MAIN)
+        assert state["state"] == "blocked"
+        assert any(
+            reason["code"] == "execution_unavailable" for reason in state["reasons"]
+        )
+        assert runner.requests == []
+        assert world.history.new_mentions(MAIN, [(room, 1)]) == {(room, 1)}
     finally:
         scheduler.stop()
 
@@ -395,6 +393,11 @@ def test_preparation_runs_without_pending_and_resets_after_completion(
     assert scheduler.run_turn(MAIN).status == first_status
     assert world.store.pending(MAIN) == ()
     assert scheduler.preparation_due(MAIN)
+    if first_status == "failed":
+        assert scheduler.runnable_agents() == ()
+        assert Scheduler(world, runner).runnable_agents() == ()
+        assert scheduler.run_turn(MAIN) is None
+        return
     assert scheduler.runnable_agents() == (MAIN,)
     restarted = Scheduler(world, runner)
     assert restarted.preparation_due(MAIN)
@@ -411,9 +414,8 @@ def test_preparation_runs_without_pending_and_resets_after_completion(
         assert not any(name == "window.reset" for name, _ in events)
         expected = "saved" if preparation_status == "exception" else "notes saved"
         assert json.loads(world.history.latest_messages(MAIN)) == [{"text": expected}]
-        assert world.store.get_member(MAIN).state == (
-            "paused" if preparation_status == "exception" else "idle"
-        )
+        assert world.store.get_member(MAIN).state == "error"
+        assert scheduler.runnable_agents() == ()
         return
     assert state.number == 2 and state.since_sequence == 3
     assert state.reason == "prepared" and state.reset_at is not None
@@ -652,6 +654,11 @@ def test_a_new_session_continues_unchanged_mentions_once(world, fail) -> None:
 
     second = RecordingRunner()
     restart = Scheduler(world, second)
+    if fail:
+        assert restart.runnable_agents() == ()
+        assert restart.run_turn(MAIN) is None
+        assert second.requests == []
+        return
     assert restart.runnable_agents() == (MAIN,)
     record = restart.run_turn(MAIN)
     assert record is not None
@@ -669,9 +676,7 @@ def test_a_new_session_continues_unchanged_mentions_once(world, fail) -> None:
 
 
 def test_a_new_session_reminds_only_the_unhandled_mentions(world) -> None:
-    runner = RecordingRunner(
-        lambda request, tools: TurnOutcome(messages_json="[]", error="no model")
-    )
+    runner = RecordingRunner(lambda request, tools: TurnOutcome(messages_json="[]"))
     scheduler = Scheduler(world, runner)
     mention(world)
     assert scheduler.run_turn(MAIN) is not None
@@ -707,7 +712,7 @@ def test_a_new_session_keeps_safety_pauses_and_token_limits(world) -> None:
     assert restarted.runnable_agents() == ()
     assert restarted.run_turn(MAIN) is None
 
-    world.history.reset_safety(MAIN)
+    restarted.resume(MAIN)
     assert restarted.runnable_agents() == (MAIN,)
 
     world.settings.set_settings("agent", {"token_limit": 10})
@@ -738,8 +743,9 @@ def test_next_turn_compares_mentions_with_the_start_of_the_previous_turn(
     scheduler = Scheduler(world, RecordingRunner(respond))
     assert scheduler.run_turn(MAIN) is not None
     restarted = Scheduler(world, RecordingRunner())
-    assert restarted.runnable_agents() == (() if change == "all_ack" else (MAIN,))
-    assert (restarted.run_turn(MAIN) is not None) == (change != "all_ack")
+    eligible = change == "new_mention" or (change == "partial_ack" and not fail)
+    assert restarted.runnable_agents() == ((MAIN,) if eligible else ())
+    assert (restarted.run_turn(MAIN) is not None) == eligible
     assert restarted.run_turn(MAIN) is None
 
 
@@ -998,8 +1004,8 @@ def test_resident_creation_failure_preserves_window_and_other_agents(
     assert len(runner.requests) == 1
     assert world.history.latest_messages(MAIN) == previous
     assert world.history.window(MAIN) == window
-    assert world.store.get_member(MAIN).state == "paused"
-    assert world.history.pause_reason(MAIN) == "runtime_error"
+    assert scheduler.agent_status(MAIN)["state"] == "error"
+    assert world.history.pause_reason(MAIN) is None
     assert not (tree.root / "MEMORY.md").exists()
 
     helper_room = world.store.create_discussion("helper", [HUMAN, HELPER])
@@ -1041,7 +1047,7 @@ def test_workspace_index_truncation_follows_the_current_parameter(world) -> None
             assert "😀" not in resident
 
 
-def test_resident_loading_failure_preserves_history_and_hard_pauses(
+def test_resident_loading_failure_preserves_history_and_records_error(
     world, monkeypatch
 ) -> None:
     mention(world)
@@ -1058,8 +1064,8 @@ def test_resident_loading_failure_preserves_history_and_hard_pauses(
     assert record is not None and record.status == "failed"
     assert "workspace is unreadable" in record.error
     assert world.history.latest_messages(MAIN) == previous
-    assert world.store.get_member(MAIN).state == "paused"
-    assert world.history.pause_reason(MAIN) == "runtime_error"
+    assert scheduler.agent_status(MAIN)["state"] == "error"
+    assert world.history.pause_reason(MAIN) is None
 
 
 def test_second_model_call_failure_keeps_saved_response_and_completed_tool_return(
@@ -1244,12 +1250,12 @@ def test_sqlite_progress_failure_preserves_history_and_stops_execution(
         assert resident.metadata["huddol"]["agents_instructions"] == snapshot
     if prior:
         assert world.history.runs(MAIN)[1].messages_json == original
-    assert world.history.pause_reason(MAIN) == "runtime_error"
-    assert world.store.get_member(MAIN).state == "paused"
+    assert world.history.pause_reason(MAIN) is None
+    assert scheduler.agent_status(MAIN)["state"] == "error"
     assert world.history.window(MAIN) == before_window
-    mention(world)
-    assert MAIN not in scheduler.runnable_agents()
     assert scheduler.run_turn(MAIN) is None
+    mention(world)
+    assert MAIN in scheduler.runnable_agents()
 
 
 @pytest.mark.parametrize(
@@ -1402,7 +1408,8 @@ def test_turn_model_snapshot_survives_history_saving_and_failure(
             == "window instructions\n "
         )
     if failure_stage is not None:
-        assert world.history.pause_reason(MAIN) == "runtime_error"
+        assert world.history.pause_reason(MAIN) is None
+        assert scheduler.agent_status(MAIN)["state"] == "error"
         assert scheduler.run_turn(MAIN) is None
         world.store._db.execute("DROP TRIGGER fail_snapshot")
         scheduler.tools_for(HUMAN).resume_agent(MAIN)
@@ -1454,17 +1461,14 @@ def test_invalid_history_preserves_sqlite_records_and_window(
         world.settings, build_model=lambda config: built.append(config)
     )
     mention(world)
-    record = Scheduler(world, runner).run_turn(MAIN)
-    assert record.status == "failed"
+    scheduler = Scheduler(world, runner)
+    assert scheduler.run_turn(MAIN) is None
     assert built == []
     assert world.history.latest_messages(MAIN) == original
-    assert [run.messages_json for run in world.history.runs(MAIN)] == [
-        original,
-        original,
-    ]
+    assert [run.messages_json for run in world.history.runs(MAIN)] == [original]
     assert world.history.window(MAIN) == window
-    assert world.store.get_member(MAIN).state == "paused"
-    assert world.history.pause_reason(MAIN) == "runtime_error"
+    assert scheduler.agent_status(MAIN)["state"] == "blocked"
+    assert world.history.pause_reason(MAIN) == "history_invalid"
 
 
 @pytest.mark.parametrize("mode", ["normal", "overflow", "preparation"])
@@ -1530,10 +1534,15 @@ def test_final_sqlite_failure_protects_progress_and_window(
     assert world.history.latest_messages(MAIN) == progress
     assert world.history.window(MAIN) == window
     assert all(name != "window.reset" for name, _ in events)
-    assert world.store.get_member(MAIN).state == "paused"
-    assert world.history.pause_reason(MAIN) == "runtime_error"
-    mention(world)
+    assert scheduler.agent_status(MAIN)["state"] == (
+        "blocked" if continuous or invalid_parameters else "error"
+    )
+    assert world.history.pause_reason(MAIN) is None
     assert scheduler.run_turn(MAIN) is None
+    mention(world)
+    assert (MAIN in scheduler.runnable_agents()) == (
+        not continuous and not invalid_parameters
+    )
     assert calls == [1]
 
 
@@ -1583,11 +1592,11 @@ def test_progress_finish_and_safety_failures_remain_diagnostic_and_stop_agent(
             world.settings, build_model=lambda config: FunctionModel(respond)
         ),
     )
-    with pytest.raises(sqlite3.IntegrityError, match="safety unavailable") as caught:
+    with pytest.raises(sqlite3.IntegrityError, match="history unavailable") as caught:
         scheduler.run_turn(MAIN)
     finish_error = caught.value.__context__
     assert isinstance(finish_error, sqlite3.IntegrityError)
-    progress_error = finish_error.__context__
+    progress_error = caught.value.__cause__
     assert isinstance(progress_error, HistoryPersistenceError)
     assert isinstance(progress_error.__cause__, sqlite3.IntegrityError)
     assert "history unavailable" in str(progress_error.__cause__)
@@ -1598,11 +1607,8 @@ def test_progress_finish_and_safety_failures_remain_diagnostic_and_stop_agent(
     assert world.store.get_member(MAIN).state == "running"
     assert world.history.window(MAIN).number == 1
     mention(world)
-    if invalid_parameters:
-        with pytest.raises(DomainError, match="no_tool_turns_before_pause"):
-            scheduler.runnable_agents()
-    else:
-        assert MAIN not in scheduler.runnable_agents()
+    assert scheduler.agent_status(MAIN)["state"] == "blocked"
+    assert MAIN not in scheduler.runnable_agents()
     assert scheduler.run_turn(MAIN) is None
     assert calls == [1]
     assert tools == []
@@ -1637,7 +1643,7 @@ def test_a_failing_turn_is_recorded_and_the_agent_recovers(world) -> None:
     assert record is not None
     assert record.status == "failed"
     assert "model exploded" in (record.error or "")
-    assert world.store.get_member(MAIN).state == "idle"
+    assert scheduler.agent_status(MAIN)["state"] == "error"
 
 
 def test_a_failed_turn_is_not_restarted_on_the_same_pending(world) -> None:
@@ -1651,7 +1657,7 @@ def test_a_failed_turn_is_not_restarted_on_the_same_pending(world) -> None:
         scheduler._threads[MAIN].join(timeout=5)
         runs = world.history.runs(MAIN)
         assert [run.status for run in runs] == ["failed"]
-        assert world.store.get_member(MAIN).state == "idle"
+        assert scheduler.agent_status(MAIN)["state"] == "error"
         assert world.store.pending(MAIN)
 
         assert scheduler.runnable_agents() == ()
@@ -2046,8 +2052,12 @@ def test_invalid_parameters_prevent_scheduling(world, pending, method) -> None:
     world.settings.set_settings("agent", {"token_limit": "not a number"})
     runner = RecordingRunner()
     scheduler = Scheduler(world, runner)
-    with pytest.raises(DomainError, match="token_limit"):
-        getattr(scheduler, method)(*([MAIN] if method == "run_turn" else []))
+    if method == "run_turn":
+        assert scheduler.run_turn(MAIN) is None
+        assert scheduler.agent_status(MAIN)["state"] == "blocked"
+    else:
+        with pytest.raises(DomainError, match="token_limit"):
+            getattr(scheduler, method)()
     assert scheduler._loop is None
     assert scheduler._threads == {}
     assert runner.requests == []
@@ -2076,8 +2086,8 @@ def test_parameter_failure_after_a_turn_preserves_history_and_pauses(world) -> N
     stored = world.history.runs(MAIN)[0]
     assert stored.messages_json == messages
     assert stored.usage_json == usage
-    assert world.history.pause_reason(MAIN) == "runtime_error"
-    assert world.store.get_member(MAIN).state == "paused"
+    assert world.history.pause_reason(MAIN) is None
+    assert scheduler.agent_status(MAIN)["state"] == "blocked"
     assert world.history.window(MAIN).number == 1
     assert events[-1] == (
         "turn.finished",
@@ -2106,43 +2116,39 @@ def test_invalid_parameters_during_finalization_preserve_saved_result(
             )
         if safety_failure:
             world.store._db.execute(
-                "CREATE TEMP TRIGGER fail_safety BEFORE INSERT ON agent_safety"
-                " BEGIN SELECT RAISE(ABORT, 'safety unavailable'); END"
+                "CREATE TEMP TRIGGER fail_lifecycle BEFORE UPDATE ON agent_lifecycle"
+                " BEGIN SELECT RAISE(ABORT, 'lifecycle unavailable'); END"
             )
         return TurnOutcome(messages_json=messages, usage_json=usage)
 
     runner = RecordingRunner(respond)
     scheduler = Scheduler(world, runner, on_event=lambda *event: events.append(event))
     if finish_failure or safety_failure:
-        message = "safety unavailable" if safety_failure else "error record unavailable"
+        message = (
+            "error record unavailable" if finish_failure else "lifecycle unavailable"
+        )
         with pytest.raises(sqlite3.IntegrityError, match=message) as caught:
             scheduler.run_turn(MAIN)
         original = caught.value.__context__
-        if finish_failure and safety_failure:
-            assert isinstance(original, sqlite3.IntegrityError)
-            original = original.__context__
-        if finish_failure:
-            assert isinstance(original, DomainError)
-            assert "no_tool_turns_before_pause" in str(original)
+        assert isinstance(original, DomainError)
+        assert "no_tool_turns_before_pause" in str(original)
     else:
         result = scheduler.run_turn(MAIN)
         assert result.status == "failed"
     stored = world.history.runs(MAIN)[0]
     assert stored.messages_json == messages
     assert stored.usage_json == usage
-    assert stored.status == ("completed" if finish_failure else "failed")
+    assert stored.status == (
+        "completed" if finish_failure or safety_failure else "failed"
+    )
     assert "no_tool_turns_before_pause" in caplog.text
     assert world.history.window(MAIN).number == 1
     assert not any(name == "window.reset" for name, _ in events)
-    if safety_failure:
-        assert world.history.pause_reason(MAIN) is None
-        assert world.store.get_member(MAIN).state == "running"
-        assert not any(name == "turn.finished" for name, _ in events)
-    else:
-        assert world.history.pause_reason(MAIN) == "runtime_error"
-        assert world.store.get_member(MAIN).state == "paused"
-        assert events[-1][0] == "turn.finished"
-        assert events[-1][1]["status"] == "failed"
+    assert world.history.pause_reason(MAIN) is None
+    assert scheduler.agent_status(MAIN)["state"] == "blocked"
+    assert MAIN not in scheduler._reserved
+    assert events[-1][0] == "turn.finished"
+    assert events[-1][1]["status"] == "failed"
     assert scheduler.run_turn(MAIN) is None
     assert len(runner.requests) == 1
 
@@ -2192,8 +2198,8 @@ def test_scheduler_failure_logs_and_finishes_inflight_turns(
         scheduler._threads[MAIN].join(5)
         assert not scheduler._threads[MAIN].is_alive()
         assert world.history.runs(MAIN)[0].status == "failed"
-        assert world.history.pause_reason(MAIN) == "runtime_error"
-        assert world.store.get_member(MAIN).state == "paused"
+        assert world.history.pause_reason(MAIN) is None
+        assert scheduler.agent_status(MAIN)["state"] == "blocked"
         world.settings.set_settings("agent", {"max_concurrent_turns": 1})
         scheduler.wake()
         scheduler.start()
@@ -2302,9 +2308,7 @@ def test_agents_instructions_are_read_only_at_window_creation(
 
 
 @pytest.mark.parametrize("bad_global", [False, True])
-def test_unreadable_agents_file_fails_and_safety_pauses_before_model(
-    world, tmp_path, bad_global
-):
+def test_unreadable_agents_file_records_error_before_model(world, tmp_path, bad_global):
     target = (
         tmp_path / "library" if bad_global else world.workspace_tree_for(MAIN).root
     ) / "AGENTS.md"
@@ -2315,7 +2319,8 @@ def test_unreadable_agents_file_fails_and_safety_pauses_before_model(
     assert record.status == "failed"
     assert str(target) in record.error
     assert "UTF-8" in record.error
-    assert world.history.pause_reason(MAIN) == "runtime_error"
+    assert world.history.pause_reason(MAIN) is None
+    assert world.history.lifecycle(MAIN).error == record.error
     assert runner.requests == []
     assert target.read_bytes() == b"\xff"
 

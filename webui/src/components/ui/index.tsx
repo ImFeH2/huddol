@@ -61,6 +61,8 @@ const stateDotStates = {
   idle: "bg-gray-500",
   running: "bg-green-200 animate-breathe",
   paused: "bg-yellow-300",
+  blocked: "bg-yellow-300",
+  error: "bg-red-300",
 };
 
 const dotTones = {
@@ -336,11 +338,10 @@ export function StateDot({
   state,
   ping = false,
 }: {
-  state: "idle" | "running" | "paused";
+  state: keyof typeof stateDotStates;
   ping?: boolean;
 }) {
-  const label =
-    state === "running" ? "Running" : state === "paused" ? "Paused" : "Idle";
+  const label = state.charAt(0).toUpperCase() + state.slice(1);
   return (
     <span className="relative inline-flex flex-none items-center justify-center size-2">
       <span

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Iterator, Sequence
-from contextlib import contextmanager
+from contextlib import AbstractContextManager, contextmanager, nullcontext
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
@@ -46,12 +46,20 @@ class AgentTools:
         turn: TurnBinding | None = None,
         *,
         on_change: Callable[[str, dict[str, Any]], None] | None = None,
+        agent_status: Callable[[int], dict[str, Any]] | None = None,
+        pause: Callable[[int], dict[str, Any]] | None = None,
+        resume: Callable[[int, bool], dict[str, Any]] | None = None,
+        member_guard: Callable[[int], AbstractContextManager[object]] | None = None,
     ) -> None:
         self._deps = deps
         self._actor = actor
         self._auth = authorizer or Authorizer()
         self._turn = turn
         self._on_change = on_change or (lambda name, payload: None)
+        self._agent_status = agent_status
+        self._pause = pause
+        self._resume = resume
+        self._member_guard = member_guard
 
     def _changed(self, name: str, payload: dict[str, Any]) -> dict[str, Any]:
         self._on_change(name, payload)
@@ -82,7 +90,17 @@ class AgentTools:
     def list_members(self, include_deleted: bool = False) -> list[dict[str, Any]]:
         self._check("organization.list_members")
         return [
-            {"id": item.id, "type": item.type, "name": item.name, "state": item.state}
+            {
+                "id": item.id,
+                "type": item.type,
+                "name": item.name,
+                "state": item.state,
+                **(
+                    self._agent_status(item.id)
+                    if item.is_agent and self._agent_status is not None
+                    else {}
+                ),
+            }
             for item in self._deps.store.list_members(include_deleted=include_deleted)
         ]
 
@@ -107,11 +125,15 @@ class AgentTools:
 
     def pause_agent(self, agent_id: int) -> dict[str, Any]:
         self._check("organization.pause_agent", agent_id)
+        if self._pause is not None:
+            return self._pause(agent_id)
         self._deps.store.set_agent_state(agent_id, "paused")
         return {"id": agent_id, "state": "paused"}
 
     def resume_agent(self, agent_id: int) -> dict[str, Any]:
         self._check("organization.resume_agent", agent_id)
+        if self._resume is not None:
+            return self._resume(agent_id, self._actor.is_agent)
         member = self._deps.store.get_member(agent_id)
         if member is None or not member.is_agent:
             raise DomainError("not_found", f"Agent {agent_id} does not exist")
@@ -134,10 +156,23 @@ class AgentTools:
 
     def delete_agent(self, agent_id: int) -> dict[str, Any]:
         self._check("organization.delete_agent", agent_id)
+        with (
+            self._member_guard(agent_id)
+            if self._member_guard is not None
+            else nullcontext()
+        ):
+            return self._delete_agent(agent_id)
+
+    def _delete_agent(self, agent_id: int) -> dict[str, Any]:
         member = self._deps.store.get_member(agent_id)
         if member is None or not member.is_agent:
             raise DomainError("not_found", f"Agent {agent_id} does not exist")
-        if member.state == "running":
+        state = (
+            self._agent_status(agent_id)["state"]
+            if self._agent_status is not None
+            else member.state
+        )
+        if state == "running":
             raise DomainError(
                 "agent_running",
                 "Pause the Agent and let its Turn finish before deleting",

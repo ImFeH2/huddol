@@ -54,11 +54,17 @@ import "@/styles/App.css";
 type Loaded = {
   members: Member[];
   humanId: number;
-  tokenLimit: number;
+  tokenLimit: number | null;
   discussions: DiscussionSummary[];
 };
 
-function View({ route, tokenLimit }: { route: Route; tokenLimit: number }) {
+function View({
+  route,
+  tokenLimit,
+}: {
+  route: Route;
+  tokenLimit: number | null;
+}) {
   switch (route.name) {
     case "discussions":
       return <DiscussionsPage />;

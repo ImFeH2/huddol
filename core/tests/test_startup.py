@@ -9,6 +9,7 @@ from pathlib import Path
 
 import pytest
 from test_sidecar_process import Client, Kernel, wait_for_persisted_turn
+from test_sidecar_process import local_model as local_model  # noqa: PLC0414
 
 from huddol.adapters.sqlite.agent import SqliteAgentStore
 from huddol.adapters.sqlite.store import SqliteStore
@@ -119,12 +120,15 @@ def test_startup_failure_releases_created_resources(
 
 
 @pytest.mark.parametrize("raw", ["null", '{"request_limit":'])
-def test_backup_repair_and_restart_preserve_safety_state(tmp_path, raw) -> None:
+def test_backup_repair_and_restart_preserve_safety_state(
+    tmp_path, raw, local_model
+) -> None:
     directory = tmp_path / "data"
     stored_setting(directory, "agent", raw)
     store = SqliteStore(directory / "huddol.sqlite3")
     try:
         history = SqliteAgentStore(store._db)
+        history.set_settings("model", local_model)
         human = store.create_member("human", "You")
         ready = store.create_member("agent", "Ready")
         paused = store.create_member("agent", "Paused")

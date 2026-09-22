@@ -658,7 +658,69 @@ def test_model_api_type_round_trips_and_is_validated_over_the_pipe(
     assert "SECRET-GOOGLE-KEY" not in json.dumps(frames) + stderr
 
 
-def test_turns_without_a_model_fail_with_guidance_and_the_kernel_keeps_running(
+@pytest.fixture
+def local_model():
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_POST(self):
+            request = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+            body = json.dumps(
+                {
+                    "id": "test-completion",
+                    "object": "chat.completion",
+                    "created": 1,
+                    "model": request["model"],
+                    "choices": [
+                        {
+                            "index": 0,
+                            "message": {"role": "assistant", "content": "Completed"},
+                            "finish_reason": "stop",
+                        }
+                    ],
+                    "usage": {
+                        "prompt_tokens": 1,
+                        "completion_tokens": 1,
+                        "total_tokens": 2,
+                    },
+                }
+            ).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, format, *args):
+            pass
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    thread = threading.Thread(target=server.serve_forever)
+    thread.start()
+    try:
+        yield {
+            "base_url": f"http://127.0.0.1:{server.server_port}/v1",
+            "api_key": "test-only",
+            "model": "test-model",
+        }
+    finally:
+        server.shutdown()
+        thread.join(5)
+        server.server_close()
+
+
+def configure_local_model(data: Path, config: dict[str, str]) -> None:
+    from huddol.adapters.sqlite.agent import SqliteAgentStore
+    from huddol.adapters.sqlite.store import SqliteStore
+
+    store = SqliteStore(data / "huddol.sqlite3")
+    try:
+        SqliteAgentStore(store._db).set_settings("model", config)
+    finally:
+        store.close()
+
+
+def test_missing_model_blocks_turns_with_guidance_and_keeps_kernel_running(
     tmp_path: Path,
 ) -> None:
     with Kernel(tmp_path / "data") as kernel:
@@ -685,15 +747,15 @@ def test_turns_without_a_model_fail_with_guidance_and_the_kernel_keeps_running(
                     "params": {"discussion_id": 1, "body": "@Main go"},
                 }
             )
-            finished = client.wait_for(
-                lambda frame: frame.get("type") == "turn.finished"
-            )
-            assert finished["status"] == "failed"
             detail = client.call(
                 {"id": 4, "method": "agent.detail", "params": {"agent_id": 2}}
             )
-            assert detail["result"]["runs"][0]["error"] == (
-                "Configure a model in Settings before running Agents"
+            assert detail["result"]["runs"] == []
+            assert detail["result"]["state"] == "blocked"
+            assert any(
+                reason["message"]
+                == "Configure a model in Settings before running Agents"
+                for reason in detail["result"]["reasons"]
             )
             assert client.call({"id": 5, "method": "ping"})["result"] == {"pong": None}
         assert kernel.shutdown() == 0, kernel.stderr
@@ -1282,18 +1344,21 @@ def wait_for_persisted_turn(data: Path, agent_id: int, sequence: int) -> None:
                 (agent_id, sequence),
             ).fetchone()
             if row is not None and row[0] != "running":
-                assert row[0] == "failed"
+                assert row[0] == "completed"
                 return
             time.sleep(0.05)
     raise AssertionError(f"Agent {agent_id} did not finish Turn {sequence}")
 
 
-def test_a_restart_reminds_agents_about_unhandled_mentions_once(tmp_path: Path) -> None:
+def test_a_restart_reminds_agents_about_unhandled_mentions_once(
+    tmp_path: Path, local_model
+) -> None:
     from huddol.adapters.sqlite.agent import SqliteAgentStore
     from huddol.adapters.sqlite.store import SqliteStore
     from huddol.runtime.reminder import build_reminder
 
     data = tmp_path / "data"
+    configure_local_model(data, local_model)
     with Kernel(data) as kernel:
         with kernel.connect() as connection:
             client = Client(connection)
@@ -1324,14 +1389,14 @@ def test_a_restart_reminds_agents_about_unhandled_mentions_once(tmp_path: Path) 
             assert started["kind"] == "reminder"
             assert started["items"] == 1
             frame = client.wait_for(lambda frame: frame.get("type") == "turn.finished")
-            assert frame["status"] == "failed"
+            assert frame["status"] == "completed"
         assert kernel.shutdown() == 0, kernel.stderr
 
     store = SqliteStore(data / "huddol.sqlite3")
     try:
         agent_store = SqliteAgentStore(store._db)
         assert [(run.sequence, run.status) for run in agent_store.runs(2)] == [
-            (1, "failed")
+            (1, "completed")
         ]
         assert agent_store.last_reminder(2) == frozenset({(1, 1)})
         first_reminded_at = store._db.execute(
@@ -1355,8 +1420,8 @@ def test_a_restart_reminds_agents_about_unhandled_mentions_once(tmp_path: Path) 
     try:
         agent_store = SqliteAgentStore(store._db)
         assert [(run.sequence, run.status) for run in agent_store.runs(2)] == [
-            (2, "failed"),
-            (1, "failed"),
+            (2, "completed"),
+            (1, "completed"),
         ]
         assert store.pending(2)
         assert (
@@ -1375,6 +1440,7 @@ def test_a_restart_reminds_agents_about_unhandled_mentions_once(tmp_path: Path) 
 
 def test_startup_continues_an_interrupted_turn_without_new_mentions(
     tmp_path: Path,
+    local_model,
 ) -> None:
     from huddol.adapters.sqlite.agent import SqliteAgentStore
     from huddol.adapters.sqlite.store import SqliteStore
@@ -1383,12 +1449,17 @@ def test_startup_continues_an_interrupted_turn_without_new_mentions(
     store = SqliteStore(data / "huddol.sqlite3")
     try:
         history = SqliteAgentStore(store._db)
+        history.set_settings("model", local_model)
         store.create_member("human", "You")
         store.create_member("agent", "Main")
         room = store.create_discussion("interrupted", [1, 2])
         store.append_message(room.id, 1, "@Main continue")
         run = history.start_run(2, reminded=[(room.id, 1)])
-        history.save_progress(2, run.sequence, '[{"text":"partial"}]')
+        history.save_progress(
+            2,
+            run.sequence,
+            '[{"kind":"response","parts":[{"part_kind":"text","content":"partial"}]}]',
+        )
         store.set_agent_state(2, "running")
     finally:
         store.close()
@@ -1403,10 +1474,13 @@ def test_startup_continues_an_interrupted_turn_without_new_mentions(
         history = SqliteAgentStore(store._db)
         runs = history.runs(2)
         assert [(run.sequence, run.status) for run in runs] == [
-            (2, "failed"),
+            (2, "completed"),
             (1, "interrupted"),
         ]
-        assert all(run.messages_json == '[{"text":"partial"}]' for run in runs)
+        assert all(
+            json.loads(run.messages_json)[0]["parts"][0]["content"] == "partial"
+            for run in runs
+        )
         assert store.get_member(2).state == "idle"
         assert [(item.discussion_id, item.message_id) for item in store.pending(2)] == [
             (1, 1)
@@ -1415,7 +1489,9 @@ def test_startup_continues_an_interrupted_turn_without_new_mentions(
         store.close()
 
 
-def test_a_restart_starts_only_agents_with_unhandled_mentions(tmp_path: Path) -> None:
+def test_a_restart_starts_only_agents_with_unhandled_mentions(
+    tmp_path: Path, local_model
+) -> None:
     from huddol.adapters.sqlite.agent import SqliteAgentStore
     from huddol.adapters.sqlite.store import SqliteStore
 
@@ -1431,6 +1507,7 @@ def test_a_restart_starts_only_agents_with_unhandled_mentions(tmp_path: Path) ->
         store.create_member("agent", "Manual")
         store.create_member("agent", "Spent")
         store.create_member("agent", "Idle")
+        agent_store.set_settings("model", local_model)
         store.create_discussion("work", [1, 2, 3, 4, 5, 6])
         store.append_message(1, 1, "@Main @Helper @Safety @Manual @Spent please help")
         store.ack(1, [1], 3)
@@ -1468,7 +1545,10 @@ def test_internal_methods_are_refused_over_the_pipe(tmp_path: Path) -> None:
     assert response(frames, 1)["error"]["code"] == "internal_method"
 
 
-def test_agents_wake_and_report_turns_over_the_socket(tmp_path: Path) -> None:
+def test_agents_wake_and_report_turns_over_the_socket(
+    tmp_path: Path, local_model
+) -> None:
+    configure_local_model(tmp_path / "data", local_model)
     with Kernel(tmp_path / "data") as kernel:
         with kernel.connect() as connection:
             client = Client(connection)

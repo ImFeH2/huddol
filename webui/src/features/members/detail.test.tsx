@@ -106,14 +106,14 @@ describe("Agent deletion", () => {
 });
 
 describe("Agent detail status", () => {
-  it("shows the safety pause reason only while stopped", () => {
+  it("shows pause intent while the current Turn completes", () => {
     expect(
-      status({ ...detail, pause_reason: "no_tool_calls", no_tool_streak: 3 }),
-    ).toContain("Paused: 3 tool-free Turns");
-    expect(status({ ...detail, pause_reason: "runtime_error" })).toContain(
-      "Paused: runtime error",
-    );
-    expect(status(detail)).not.toContain("Paused:");
+      status({ ...detail, state: "running", pause_requested: true }),
+    ).toContain("Pause requested · Current Turn will finish");
+    expect(
+      status({ ...detail, state: "paused", pause_requested: true }),
+    ).not.toContain("Current Turn will finish");
+    expect(status(detail)).not.toContain("Pause requested");
   });
   it("uses the kernel idle flag even below the previous threshold", () => {
     expect(status({ ...detail, idle: true, idle_streak: 1 })).toContain(

@@ -34,7 +34,7 @@ import {
 } from "@/components/ui/index";
 import { type MenuAction, OverflowMenu } from "@/components/ui/menu";
 import { Segmented } from "@/components/ui/segmented";
-import { agentStateLabel } from "@/features/members/state";
+import { agentStateLabel, canResume } from "@/features/members/state";
 import { AgentCreateDialog } from "@/features/settings/model";
 import { backend, type Member } from "@/lib/backend";
 import { plural } from "@/lib/format";
@@ -72,7 +72,7 @@ export function memberActions(
     onSelect: on.rename,
   };
   if (member.type !== "agent") return [rename];
-  const paused = member.state === "paused";
+  const paused = canResume(member);
   return [
     {
       id: "toggle",
@@ -92,7 +92,7 @@ export function memberActions(
   ];
 }
 
-export function MembersPage({ tokenLimit }: { tokenLimit: number }) {
+export function MembersPage({ tokenLimit }: { tokenLimit: number | null }) {
   const { members, refresh } = useOrganization();
   const navigate = useNavigate();
   const [query, setQuery] = useState("");
@@ -149,7 +149,7 @@ export function MembersPage({ tokenLimit }: { tokenLimit: number }) {
                 tokenLimit={tokenLimit}
                 onOpen={() => navigate({ name: "member", id: member.id })}
                 onToggle={async () => {
-                  await (member.state === "paused"
+                  await (canResume(member)
                     ? backend.resumeAgent(member.id)
                     : backend.pauseAgent(member.id));
                   await refresh();
@@ -206,7 +206,7 @@ export function MemberRow({
   onDelete,
 }: {
   member: Member;
-  tokenLimit: number;
+  tokenLimit: number | null;
   onOpen: () => void;
   onToggle: () => void;
   onRename: () => void;
@@ -240,14 +240,17 @@ export function MemberRow({
           <div className="flex min-w-[110px] flex-col items-end gap-[5px]">
             <span className="tabular-nums whitespace-nowrap">
               {tokens.toLocaleString()}
-              {tokenLimit > 0 ? (
+              {tokenLimit !== null && tokenLimit > 0 ? (
                 <span className="text-fg-muted">
                   {" "}
                   / {tokenLimit.toLocaleString()}
                 </span>
               ) : null}
             </span>
-            {tokenLimit > 0 ? (
+            {tokenLimit === null ? (
+              <span className="text-fg-muted">Token ceiling unavailable</span>
+            ) : null}
+            {tokenLimit !== null && tokenLimit > 0 ? (
               <div className="w-24">
                 <Meter
                   value={tokens}
@@ -271,7 +274,10 @@ export function MemberRow({
               />
             }
           >
-            {agentStateLabel(member, tokenLimit)}
+            {agentStateLabel(member)}
+            {member.pause_requested && member.state === "running"
+              ? " · Pause requested"
+              : ""}
           </StatusText>
         ) : (
           <span className="text-fg-muted">—</span>

@@ -40,11 +40,18 @@ export type ModelCatalog = {
   agent_configs: Record<string, AgentModelConfig>;
 };
 
-export type Member = {
+export type AgentStatus = {
+  state: "idle" | "running" | "paused" | "blocked" | "error";
+  pause_requested?: boolean;
+  reasons?: { code: string; message: string; recovery: string }[];
+  error?: string | null;
+  scheduler_stopped?: string | null;
+};
+
+export type Member = AgentStatus & {
   id: number;
   type: "human" | "agent";
   name: string;
-  state: "idle" | "running" | "paused";
   tokens?: number;
 };
 
@@ -130,17 +137,18 @@ export type Usage = {
   total_tokens: number;
 };
 
-export type AgentDetail = {
+export type AgentDetail = Partial<AgentStatus> & {
   id: number;
   workspace: LibraryEntry[];
   runs: AgentRun[];
   usage: Usage;
-  token_limit: number;
-  over_token_limit: boolean;
-  idle: boolean;
+  token_limit: number | null;
+  over_token_limit: boolean | null;
+  idle: boolean | null;
+  statistics_unavailable?: string | null;
   idle_streak: number;
   no_tool_streak: number;
-  pause_reason: "no_tool_calls" | "runtime_error" | null;
+  pause_reason: string | null;
   window: {
     number: number;
     since_sequence: number;
@@ -709,7 +717,7 @@ export class Backend {
       id: number;
       members: Member[];
       human_id: number;
-      token_limit: number;
+      token_limit: number | null;
     }>("organization.get");
   }
 

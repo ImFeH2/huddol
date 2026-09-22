@@ -239,14 +239,8 @@ def main(argv: list[str] | None = None) -> int:
         store = SqliteStore(directory / "huddol.sqlite3")
         resources.callback(store.close)
         agent_store = SqliteAgentStore(store._db)
-        agent_store.mark_interrupted()
-        agent_store.mark_session_start()
-
         if store.get_member(HUMAN_ID) is None:
             store.create_member("human", "You")
-        for member in store.list_members():
-            if member.is_agent and member.state == "running":
-                store.set_agent_state(member.id, "idle")
 
         def agent_directory_for(member_id: int) -> Path:
             path = directory / "agents" / str(member_id)
@@ -285,6 +279,7 @@ def main(argv: list[str] | None = None) -> int:
             PydanticModelRunner(agent_store),
             on_event=lambda name, payload: dispatcher.emit(name, payload),
         )
+        scheduler.recover()
         Api(scheduler, dispatcher)
 
         stop = Stop()

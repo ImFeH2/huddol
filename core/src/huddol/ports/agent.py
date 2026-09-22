@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Sequence
+from contextlib import AbstractContextManager
 from dataclasses import dataclass
 from typing import Protocol
 
@@ -35,7 +36,32 @@ class TurnEffect:
     created_at: str
 
 
+@dataclass(frozen=True)
+class AgentLifecycle:
+    pause_requested: bool = False
+    error: str | None = None
+    prepared_sequence: int | None = None
+
+
 class HistoryStore(Protocol):
+    def transaction(self) -> AbstractContextManager[object]: ...
+
+    def lifecycle(self, agent_id: int) -> AgentLifecycle: ...
+
+    def set_lifecycle(self, agent_id: int, value: AgentLifecycle) -> None: ...
+
+    def consume_preparation(
+        self, agent_id: int, sequence: int, keys: Sequence[tuple[int, int]]
+    ) -> None: ...
+
+    def new_mentions(
+        self, agent_id: int, keys: Sequence[tuple[int, int]]
+    ) -> frozenset[tuple[int, int]]: ...
+
+    def prepared_mentions(
+        self, agent_id: int, sequence: int
+    ) -> frozenset[tuple[int, int]]: ...
+
     def window(self, agent_id: int) -> WindowState: ...
 
     def reset_window(self, agent_id: int, reason: str) -> WindowState: ...
@@ -59,7 +85,7 @@ class HistoryStore(Protocol):
 
     def previously_reminded(
         self, agent_id: int, keys: Sequence[tuple[int, int]]
-    ) -> frozenset[int]: ...
+    ) -> frozenset[tuple[int, int]]: ...
 
     def save_progress(
         self, agent_id: int, sequence: int, messages_json: str

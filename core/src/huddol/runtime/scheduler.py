@@ -5,14 +5,16 @@ import logging
 import threading
 from collections.abc import Callable
 from dataclasses import dataclass, replace
+from typing import Any
 
 from huddol.core.errors import DomainError
 from huddol.core.parameters import AgentParameters, agent_parameters
-from huddol.ports.agent import HistoryStore, SettingsStore
+from huddol.ports.agent import AgentLifecycle, AgentRun, HistoryStore, SettingsStore
 from huddol.ports.execution import ExecutionControl
 from huddol.ports.store import OrganizationStore
 from huddol.runtime.reminder import (
     PREPARATION_PROMPT,
+    HistoryValidationError,
     ModelRunner,
     Reminder,
     TurnRequest,
@@ -37,6 +39,24 @@ class TurnRecord:
     error: str | None = None
 
 
+@dataclass
+class PreparedTurn:
+    run: AgentRun
+    name: str
+    reminder: Reminder | None
+    prompt: str
+    history: str
+
+
+@dataclass
+class FailedFinalization:
+    sequence: int
+    saved_history: str
+    messages: str
+    usage: str | None
+    error: str
+
+
 class Scheduler:
     def __init__(
         self,
@@ -50,7 +70,14 @@ class Scheduler:
         self._runner = runner
         self._authorizer = authorizer or Authorizer()
         self._threads: dict[int, threading.Thread] = {}
-        self._lock = threading.Lock()
+        self._lock = threading.RLock()
+        self._member_locks: dict[int, Any] = {}
+        self._active: dict[int, AgentRun] = {}
+        self._reserved: set[int] = set()
+        self._failures: dict[int, FailedFinalization] = {}
+        self._blocked: dict[int, str] = {}
+        self._pause_requested: set[int] = set()
+        self._scheduler_stopped: str | None = None
         self._stop = threading.Event()
         self._wake = threading.Event()
         self._loop: threading.Thread | None = None
@@ -81,6 +108,43 @@ class Scheduler:
     def wake(self) -> None:
         self._wake.set()
 
+    def recover(self) -> None:
+        with self.history.transaction():
+            for member in self.store.list_members():
+                if not member.is_agent:
+                    continue
+                lifecycle = self.history.lifecycle(member.id)
+                runs = self.history.runs(member.id, limit=1)
+                try:
+                    self._runner.validate_history(
+                        self.history.latest_messages(member.id)
+                    )
+                    if runs and runs[0].status == "running":
+                        run = runs[0]
+                        self._runner.validate_history(run.messages_json)
+                        self.history.save_progress(
+                            member.id, run.sequence, run.messages_json
+                        )
+                        self.history.finish_run(
+                            member.id,
+                            run.sequence,
+                            status="interrupted",
+                            messages_json=run.messages_json,
+                            usage_json=run.usage_json,
+                        )
+                except HistoryValidationError:
+                    self.history.pause_for_safety(member.id, "history_invalid")
+                if member.state == "running":
+                    self.store.set_agent_state(
+                        member.id,
+                        "paused"
+                        if lifecycle.pause_requested
+                        else "error"
+                        if lifecycle.error
+                        else "idle",
+                    )
+            self.history.mark_session_start()
+
     def start(self, poll_seconds: float = 0.2) -> None:
         if self._loop is not None:
             return
@@ -107,6 +171,223 @@ class Scheduler:
             if thread.ident is None:
                 continue
             thread.join(timeout=5)
+
+    def member_lock(self, agent_id: int) -> Any:
+        with self._lock:
+            return self._member_locks.setdefault(agent_id, threading.RLock())
+
+    def _require_agent(self, agent_id: int) -> None:
+        member = self.store.get_member(agent_id)
+        if member is None or not member.is_agent or member.deleted:
+            raise DomainError("not_found", f"Agent {agent_id} does not exist")
+
+    def _obstacles(self, agent_id: int) -> list[dict[str, str]]:
+        found = []
+        reason = self._blocked.get(agent_id) or self.history.pause_reason(agent_id)
+        if reason is not None:
+            descriptions = {
+                "no_tool_calls": "Consecutive Turns completed without tool calls",
+                "runtime_error": "A previous runtime failure requires Human recovery",
+                "history_invalid": "Stored model history is invalid",
+                "storage_unavailable": "Turn state could not be saved",
+            }
+            found.append(
+                {
+                    "code": reason,
+                    "message": descriptions[reason],
+                    "recovery": "A Human must repair the condition and Resume",
+                }
+            )
+        if self._scheduler_stopped is not None:
+            found.append(
+                {
+                    "code": "scheduler_stopped",
+                    "message": self._scheduler_stopped,
+                    "recovery": "Correct the configuration and restart the application",
+                }
+            )
+        try:
+            if self.over_token_limit(agent_id):
+                found.append(
+                    {
+                        "code": "token_limit",
+                        "message": "Token limit reached",
+                        "recovery": "Increase the token limit in Settings",
+                    }
+                )
+        except DomainError as error:
+            found.append(
+                {
+                    "code": "invalid_setting",
+                    "message": str(error),
+                    "recovery": "Correct Agent Settings and restart the application",
+                }
+            )
+        try:
+            self._runner.check_available(agent_id)
+        except DomainError as error:
+            found.append(
+                {
+                    "code": error.code,
+                    "message": str(error),
+                    "recovery": "Correct Model Settings; if unavailable, stop the application, back up and repair the model section, then restart",
+                }
+            )
+        execution_error = self.execution.status()["error"]
+        if execution_error is not None:
+            found.append(
+                {
+                    "code": "execution_unavailable",
+                    "message": str(execution_error),
+                    "recovery": "Correct execution settings",
+                }
+            )
+        return found
+
+    def agent_status(self, agent_id: int) -> dict[str, Any]:
+        with self.member_lock(agent_id):
+            lifecycle = self.history.lifecycle(agent_id)
+            requested = lifecycle.pause_requested or agent_id in self._pause_requested
+            obstacles = self._obstacles(agent_id)
+            active = agent_id in self._active or agent_id in self._reserved
+            if active:
+                state = "running"
+            elif obstacles:
+                state = "blocked"
+            elif requested:
+                state = "paused"
+            elif lifecycle.error is not None:
+                state = "error"
+            else:
+                state = "idle"
+            return {
+                "id": agent_id,
+                "state": state,
+                "pause_requested": requested,
+                "reasons": obstacles,
+                "error": lifecycle.error,
+                "scheduler_stopped": self._scheduler_stopped,
+            }
+
+    def pause(self, agent_id: int) -> dict[str, Any]:
+        failure = None
+        with self.member_lock(agent_id):
+            self._require_agent(agent_id)
+            self._pause_requested.add(agent_id)
+            active = agent_id in self._active
+            try:
+                with self.history.transaction():
+                    self.history.set_lifecycle(
+                        agent_id,
+                        replace(self.history.lifecycle(agent_id), pause_requested=True),
+                    )
+                    if not active:
+                        self.store.set_agent_state(agent_id, "paused")
+            except Exception as error:
+                logger.exception("Saving pause intent failed for agent %s", agent_id)
+                self._blocked[agent_id] = "storage_unavailable"
+                failure = error
+        self._changed("organization.changed", {"id": agent_id})
+        if failure is not None:
+            raise DomainError(
+                "pause_save_failed",
+                "The current Turn will finish; saving the pause intent failed",
+            ) from failure
+        return self.agent_status(agent_id)
+
+    def resume(self, agent_id: int, is_agent: bool = False) -> dict[str, Any]:
+        with self.member_lock(agent_id):
+            self._require_agent(agent_id)
+            if is_agent and (
+                self.history.pause_reason(agent_id) is not None
+                or agent_id in self._blocked
+            ):
+                raise DomainError(
+                    "not_permitted", "Only a Human can recover this Agent"
+                )
+            active = agent_id in self._active
+            with self.history.transaction():
+                lifecycle = self.history.lifecycle(agent_id)
+                if active:
+                    self.history.set_lifecycle(
+                        agent_id, replace(lifecycle, pause_requested=False)
+                    )
+                else:
+                    current = self.history.latest_messages(agent_id)
+                    self._runner.validate_history(current)
+                    failure = self._failures.get(agent_id)
+                    if failure is not None:
+                        runs = self.history.runs(agent_id, limit=1)
+                        if not runs or runs[0].sequence != failure.sequence:
+                            raise DomainError(
+                                "history_changed", "The failed Turn identity changed"
+                            )
+                        stored = runs[0].messages_json
+                        messages = (
+                            failure.messages
+                            if stored == failure.saved_history
+                            else stored
+                        )
+                        self._runner.validate_history(messages)
+                        self.history.save_progress(agent_id, failure.sequence, messages)
+                        self.history.finish_run(
+                            agent_id,
+                            failure.sequence,
+                            status="interrupted",
+                            messages_json=messages,
+                            usage_json=failure.usage,
+                            error=failure.error,
+                        )
+                    else:
+                        runs = self.history.runs(agent_id, limit=1)
+                        if runs and runs[0].status == "running":
+                            run = runs[0]
+                            self._runner.validate_history(run.messages_json)
+                            self.history.save_progress(
+                                agent_id, run.sequence, run.messages_json
+                            )
+                            self.history.finish_run(
+                                agent_id,
+                                run.sequence,
+                                status="interrupted",
+                                messages_json=run.messages_json,
+                                usage_json=run.usage_json,
+                                error=run.error,
+                            )
+                    self.history.reset_safety(agent_id)
+                    self.history.set_lifecycle(agent_id, AgentLifecycle())
+                    self.store.set_agent_state(agent_id, "idle")
+            if not active:
+                self._failures.pop(agent_id, None)
+            self._blocked.pop(agent_id, None)
+            self._pause_requested.discard(agent_id)
+        self._changed("organization.changed", {"id": agent_id})
+        return self.agent_status(agent_id)
+
+    def statistics(
+        self, agent_id: int | None = None, *, idle_streak: int = 0
+    ) -> dict[str, Any]:
+        try:
+            parameters = self.parameters()
+        except DomainError as error:
+            return {
+                "token_limit": None,
+                "over_token_limit": None,
+                "idle": None,
+                "statistics_unavailable": str(error),
+            }
+        result: dict[str, Any] = {
+            "token_limit": parameters.token_limit,
+            "statistics_unavailable": None,
+        }
+        if agent_id is not None:
+            usage = self.history.usage_total(agent_id)
+            result["over_token_limit"] = (
+                parameters.token_limit > 0
+                and usage["total_tokens"] >= parameters.token_limit
+            )
+            result["idle"] = idle_streak >= parameters.idle_streak_after
+        return result
 
     def token_limit(self) -> int:
         return self.parameters().token_limit
@@ -138,22 +419,29 @@ class Scheduler:
             for item in self.store.pending(agent_id)
         )
 
+    def _eligible(self, agent_id: int) -> bool:
+        state = self.agent_status(agent_id)["state"]
+        if state not in ("idle", "error"):
+            return False
+        keys = self.pending_keys(agent_id)
+        lifecycle = self.history.lifecycle(agent_id)
+        if state == "error":
+            return bool(self.history.new_mentions(agent_id, tuple(keys)))
+        if lifecycle.prepared_sequence is not None:
+            return bool(
+                keys
+                & self.history.prepared_mentions(agent_id, lifecycle.prepared_sequence)
+            ) or bool(self.history.new_mentions(agent_id, tuple(keys)))
+        return self.preparation_due(agent_id) or bool(
+            keys and keys != self.history.last_reminder(agent_id)
+        )
+
     def runnable_agents(self) -> tuple[int, ...]:
-        found: list[int] = []
-        for member in self.store.list_members():
-            if not member.is_agent or member.state != "idle":
-                continue
-            if self.history.pause_reason(member.id) is not None:
-                continue
-            if self.over_token_limit(member.id):
-                continue
-            if self.preparation_due(member.id):
-                found.append(member.id)
-                continue
-            keys = self.pending_keys(member.id)
-            if keys and keys != self.history.last_reminder(member.id):
-                found.append(member.id)
-        return tuple(found)
+        return tuple(
+            member.id
+            for member in self.store.list_members()
+            if member.is_agent and self._eligible(member.id)
+        )
 
     def tools_for(self, agent_id: int) -> AgentTools:
         member = self.store.get_member(agent_id)
@@ -172,6 +460,10 @@ class Scheduler:
             self._authorizer,
             turn,
             on_change=self._changed,
+            agent_status=self.agent_status,
+            pause=self.pause,
+            resume=self.resume,
+            member_guard=self.member_lock,
         )
 
     @property
@@ -204,35 +496,94 @@ class Scheduler:
         except DomainError:
             return None
 
+    def _prepare(self, agent_id: int) -> PreparedTurn | None:
+        with self.member_lock(agent_id):
+            member = self.store.get_member(agent_id)
+            if (
+                member is None
+                or not member.is_agent
+                or member.deleted
+                or not self._eligible(agent_id)
+            ):
+                return None
+            maximum = self.parameters().max_concurrent_turns
+            with self._lock:
+                if agent_id in self._reserved or len(self._reserved) >= maximum:
+                    return None
+                self._reserved.add(agent_id)
+            try:
+                with self.history.transaction():
+                    lifecycle = self.history.lifecycle(agent_id)
+                    pending = self.pending_keys(agent_id)
+                    prepared_from_error = (
+                        lifecycle.error is not None and self.preparation_due(agent_id)
+                    )
+                    reminder = (
+                        None
+                        if self.preparation_due(agent_id)
+                        else build_reminder(
+                            self.store, self.history, agent_id, member.name
+                        )
+                    )
+                    if reminder is None and not self.preparation_due(agent_id):
+                        return None
+                    previous = self.history.latest_messages(agent_id)
+                    self._runner.validate_history(previous)
+                    keys = (
+                        [
+                            (item.discussion_id, item.message_id)
+                            for item in reminder.items
+                        ]
+                        if reminder is not None
+                        else []
+                    )
+                    run = self.history.start_run(agent_id, reminded=keys)
+                    if reminder is None:
+                        self.history.consume_preparation(
+                            agent_id, run.sequence, tuple(pending)
+                        )
+                    self.store.set_agent_state(agent_id, "running")
+                    self.history.set_lifecycle(
+                        agent_id,
+                        replace(
+                            lifecycle,
+                            prepared_sequence=run.sequence
+                            if prepared_from_error
+                            else None,
+                        ),
+                    )
+                self._active[agent_id] = run
+                return PreparedTurn(
+                    run,
+                    member.name,
+                    reminder,
+                    reminder.render() if reminder is not None else PREPARATION_PROMPT,
+                    previous,
+                )
+            except HistoryValidationError:
+                self.history.pause_for_safety(agent_id, "history_invalid")
+                return None
+            except Exception:
+                self._blocked[agent_id] = "storage_unavailable"
+                raise
+            finally:
+                if agent_id not in self._active:
+                    with self._lock:
+                        self._reserved.discard(agent_id)
+
     def run_turn(self, agent_id: int) -> TurnRecord | None:
-        member = self.store.get_member(agent_id)
-        if member is None or not member.is_agent or member.state != "idle":
-            return None
-        if self.history.pause_reason(agent_id) is not None:
-            return None
-        if self.over_token_limit(agent_id):
-            return None
-        if self.preparation_due(agent_id):
-            return self._execute(agent_id, member.name, None, PREPARATION_PROMPT)
-        reminder = build_reminder(self.store, self.history, agent_id, member.name)
-        if reminder is None:
-            return None
-        keys = frozenset(
-            (item.discussion_id, item.message_id) for item in reminder.items
-        )
-        if keys == self.history.last_reminder(agent_id):
-            return None
-        return self._execute(agent_id, member.name, reminder, reminder.render())
+        prepared = self._prepare(agent_id)
+        return self._execute(prepared) if prepared is not None else None
 
     def _execute(
-        self, agent_id: int, agent_name: str, reminder: Reminder | None, prompt: str
+        self, prepared: PreparedTurn, startup_error: Exception | None = None
     ) -> TurnRecord:
+        run = prepared.run
+        agent_id = run.agent_id
+        agent_name = prepared.name
+        reminder = prepared.reminder
+        prompt = prepared.prompt
         items = reminder.items if reminder is not None else ()
-        self.store.set_agent_state(agent_id, "running")
-        run = self.history.start_run(
-            agent_id,
-            reminded=[(item.discussion_id, item.message_id) for item in items],
-        )
         self.emit(
             "turn.started",
             {
@@ -243,7 +594,7 @@ class Scheduler:
             },
         )
         discussion_ids = tuple(item.discussion_id for item in items)
-        persisted_history = self.history.latest_messages(agent_id)
+        persisted_history = prepared.history
 
         def persist(messages_json: str) -> None:
             nonlocal persisted_history
@@ -271,16 +622,17 @@ class Scheduler:
         error: str | None = None
         usage_json: str | None = None
         context_exceeded = False
-        finalized = False
-        pause_reason: str | None = None
+        messages = persisted_history
+        run_failure: Exception | None = None
         try:
+            if startup_error is not None:
+                raise startup_error
             request = replace(
                 request,
                 resident=self.resident_block(agent_id),
                 agents_instructions=(
                     read_agents_instructions(
-                        self._deps.library_tree,
-                        self._deps.workspace_tree_for(agent_id),
+                        self._deps.library_tree, self._deps.workspace_tree_for(agent_id)
                     )
                     if not json.loads(request.history_json)
                     else None
@@ -289,73 +641,161 @@ class Scheduler:
             outcome = self._runner.run(
                 request,
                 self.tools_for_actor(
-                    Actor(agent_id, True),
-                    TurnBinding(agent_id, run.sequence),
+                    Actor(agent_id, True), TurnBinding(agent_id, run.sequence)
                 ),
             )
             usage_json = outcome.usage_json
             context_exceeded = outcome.context_exceeded
+            messages = outcome.messages_json
             if outcome.error:
                 status = "failed"
                 error = outcome.error
-            self.history.finish_run(
-                agent_id,
-                run.sequence,
-                status=status,
-                messages_json=outcome.messages_json,
-                usage_json=outcome.usage_json,
-                error=error,
-            )
-            persisted_history = outcome.messages_json
-            finalized = True
-            if (
-                status == "completed"
-                and self.history.no_tool_streak(agent_id)
-                >= self.parameters().no_tool_turns_before_pause
-            ):
-                pause_reason = "no_tool_calls"
         except Exception as failure:
-            finalized = False
-            context_exceeded = False
-            pause_reason = "runtime_error"
+            run_failure = failure
             status = "failed"
             error = f"{type(failure).__name__}: {failure}"
+            messages = persisted_history
+            context_exceeded = False
+            if isinstance(failure, HistoryValidationError):
+                with self.member_lock(agent_id):
+                    self._blocked[agent_id] = "history_invalid"
             logger.exception("turn failed for agent %s", agent_id)
-            self.history.finish_run(
-                agent_id,
-                run.sequence,
-                status=status,
-                messages_json=persisted_history,
-                usage_json=usage_json,
-                error=error,
-            )
-            finalized = True
+        window = None
+        threshold = None
+        parameter_error = None
+        if status == "completed":
+            try:
+                threshold = self.parameters().no_tool_turns_before_pause
+            except DomainError as failure:
+                parameter_error = failure
+                context_exceeded = False
+                logger.exception(
+                    "Turn finalization configuration failed for agent %s", agent_id
+                )
+        try:
+            with self.member_lock(agent_id):
+                try:
+                    if parameter_error is not None:
+                        self.history.finish_run(
+                            agent_id,
+                            run.sequence,
+                            status=status,
+                            messages_json=messages,
+                            usage_json=usage_json,
+                            error=error,
+                        )
+                        persisted_history = messages
+                        raise parameter_error
+                    with self.history.transaction():
+                        self.history.finish_run(
+                            agent_id,
+                            run.sequence,
+                            status=status,
+                            messages_json=messages,
+                            usage_json=usage_json,
+                            error=error,
+                        )
+                        if (
+                            status == "completed"
+                            and threshold is not None
+                            and self.history.no_tool_streak(agent_id) >= threshold
+                        ):
+                            self.history.pause_for_safety(agent_id, "no_tool_calls")
+                        reason = None
+                        if status == "completed" and reminder is None:
+                            reason = "prepared"
+                        elif (
+                            reminder is not None
+                            and context_exceeded
+                            and run.sequence
+                            != self.history.window(agent_id).since_sequence
+                        ):
+                            reason = "overflow"
+                        if reason is not None:
+                            window = self.history.reset_window(agent_id, reason)
+                        lifecycle = self.history.lifecycle(agent_id)
+                        requested = (
+                            lifecycle.pause_requested
+                            or agent_id in self._pause_requested
+                        )
+                        self.history.set_lifecycle(
+                            agent_id,
+                            AgentLifecycle(
+                                pause_requested=requested,
+                                error=error,
+                                prepared_sequence=lifecycle.prepared_sequence
+                                if reminder is None and status == "completed"
+                                else None,
+                            ),
+                        )
+                        self.store.set_agent_state(
+                            agent_id,
+                            "blocked"
+                            if self.history.pause_reason(agent_id) is not None
+                            else "paused"
+                            if requested
+                            else "error"
+                            if error
+                            else "idle",
+                        )
+                    persisted_history = messages
+                except Exception as failure:
+                    logger.exception("Turn finalization failed for agent %s", agent_id)
+                    status = "failed"
+                    error = f"{type(failure).__name__}: {failure}"
+                    with self.history.transaction():
+                        self.history.finish_run(
+                            agent_id,
+                            run.sequence,
+                            status="failed",
+                            messages_json=persisted_history,
+                            usage_json=usage_json,
+                            error=error,
+                        )
+                        lifecycle = self.history.lifecycle(agent_id)
+                        requested = (
+                            lifecycle.pause_requested
+                            or agent_id in self._pause_requested
+                        )
+                        self.history.set_lifecycle(
+                            agent_id,
+                            AgentLifecycle(pause_requested=requested, error=error),
+                        )
+                        self.store.set_agent_state(
+                            agent_id, "paused" if requested else "error"
+                        )
+                    window = None
+                if self._blocked.get(agent_id) == "storage_unavailable":
+                    self._blocked.pop(agent_id)
+        except Exception as failure:
+            with self.member_lock(agent_id):
+                self._blocked[agent_id] = "storage_unavailable"
+                saved = self.history.runs(agent_id, limit=1)[0].messages_json
+                self._failures[agent_id] = FailedFinalization(
+                    run.sequence,
+                    saved,
+                    persisted_history,
+                    usage_json,
+                    error or str(failure),
+                )
+            if run_failure is not None:
+                raise failure from run_failure
+            raise
         finally:
-            if pause_reason is not None:
-                self.history.pause_for_safety(agent_id, pause_reason)
-                self.store.set_agent_state(agent_id, "paused")
-                self.emit("organization.changed", {"id": agent_id, "state": "paused"})
-            reason = None
-            if reminder is None and status == "completed":
-                reason = "prepared"
-            elif (
-                reminder is not None
-                and pause_reason != "runtime_error"
-                and context_exceeded
-                and run.sequence != self.history.window(agent_id).since_sequence
-            ):
-                reason = "overflow"
-            if reason is not None and finalized:
-                window = self.history.reset_window(agent_id, reason)
+            with self.member_lock(agent_id):
+                self._active.pop(agent_id, None)
+                with self._lock:
+                    self._reserved.discard(agent_id)
+            if window is not None:
                 self.emit(
                     "window.reset",
-                    {"agent_id": agent_id, "number": window.number, "reason": reason},
+                    {
+                        "agent_id": agent_id,
+                        "number": window.number,
+                        "reason": window.reason,
+                    },
                 )
-                self.wake()
-            current = self.store.get_member(agent_id)
-            if current is not None and current.state == "running":
-                self.store.set_agent_state(agent_id, "idle")
-            self.emit(
+            self._changed(
                 "turn.finished",
                 {"agent_id": agent_id, "sequence": run.sequence, "status": status},
             )
@@ -363,27 +803,34 @@ class Scheduler:
 
     def tick(self) -> tuple[int, ...]:
         self.parameters()
+        if self._scheduler_stopped is not None or self._stop.is_set():
+            return ()
         started: list[int] = []
         for agent_id in self.runnable_agents():
-            with self._lock:
-                existing = self._threads.get(agent_id)
-                if existing is not None and existing.is_alive():
-                    continue
-                running = sum(thread.is_alive() for thread in self._threads.values())
-                if running >= self.parameters().max_concurrent_turns:
-                    break
+            prepared = self._prepare(agent_id)
+            if prepared is None:
+                continue
 
-                def work(target: int = agent_id) -> None:
-                    try:
-                        self.run_turn(target)
-                    finally:
-                        self.wake()
+            def work(turn: PreparedTurn = prepared) -> None:
+                try:
+                    self._execute(turn)
+                except Exception:
+                    logger.exception(
+                        "Turn finalization failed for agent %s", turn.run.agent_id
+                    )
+                finally:
+                    self.wake()
 
+            try:
                 thread = threading.Thread(
                     target=work, name=f"huddol-agent-{agent_id}", daemon=True
                 )
+                with self._lock:
+                    self._threads[agent_id] = thread
                 thread.start()
-                self._threads[agent_id] = thread
+            except Exception as error:
+                self._execute(prepared, error)
+                raise
             started.append(agent_id)
         return tuple(started)
 
@@ -393,6 +840,10 @@ class Scheduler:
                 self.tick()
                 self._wake.wait(timeout=poll_seconds)
                 self._wake.clear()
-        except Exception:
+        except Exception as error:
+            self._scheduler_stopped = f"{type(error).__name__}: {error}"
+            self.emit(
+                "organization.changed", {"scheduler_stopped": self._scheduler_stopped}
+            )
             logger.exception("Scheduler stopped after a runtime failure")
             raise

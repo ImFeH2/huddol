@@ -8,7 +8,7 @@ from typing import Literal
 from huddol.core.errors import DomainError
 
 MemberType = Literal["human", "agent"]
-AgentState = Literal["idle", "running", "paused"]
+AgentState = Literal["idle", "running", "paused", "blocked", "error"]
 
 MAX_NAME_LENGTH = 64
 _WHITESPACE = re.compile(r"\s+")

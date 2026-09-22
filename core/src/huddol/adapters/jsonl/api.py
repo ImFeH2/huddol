@@ -70,7 +70,7 @@ class Api:
                 "id": 1,
                 "members": members,
                 "human_id": HUMAN_ID,
-                "token_limit": self._scheduler.token_limit(),
+                **self._scheduler.statistics(),
             }
 
         def create_agent(params: dict[str, Any]) -> Any:
@@ -286,17 +286,16 @@ class Api:
                     for run in runs
                 ]
             )
+            statistics = self._scheduler.statistics(agent_id, idle_streak=streak)
             return {
-                "id": agent_id,
+                **self._scheduler.agent_status(agent_id),
                 "window": asdict(self._scheduler.history.window(agent_id)),
                 "workspace": self._human().list_workspace(agent_id=agent_id),
                 "usage": self._scheduler.history.usage_total(agent_id),
-                "token_limit": self._scheduler.token_limit(),
-                "over_token_limit": self._scheduler.over_token_limit(agent_id),
+                **statistics,
                 "pause_reason": self._scheduler.history.pause_reason(agent_id),
                 "no_tool_streak": self._scheduler.history.no_tool_streak(agent_id),
                 "idle_streak": streak,
-                "idle": streak >= self._scheduler.parameters().idle_streak_after,
                 "runs": [
                     {
                         "sequence": run.sequence,

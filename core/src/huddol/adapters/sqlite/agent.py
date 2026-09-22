@@ -8,13 +8,26 @@ from collections.abc import Callable, Sequence
 from huddol.adapters.model.config import ModelCatalog
 from huddol.adapters.sqlite.store import LockedConnection, first
 from huddol.core.errors import DomainError
-from huddol.ports.agent import AgentRun, TurnEffect, WindowState
+from huddol.ports.agent import AgentLifecycle, AgentRun, TurnEffect, WindowState
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS agent_safety (
     agent_id INTEGER PRIMARY KEY,
     resumed_after INTEGER NOT NULL DEFAULT 0,
     pause_reason TEXT
+);
+CREATE TABLE IF NOT EXISTS agent_lifecycle (
+    agent_id INTEGER PRIMARY KEY,
+    pause_requested INTEGER NOT NULL DEFAULT 0,
+    error TEXT,
+    prepared_sequence INTEGER
+);
+CREATE TABLE IF NOT EXISTS preparation_mentions (
+    agent_id INTEGER NOT NULL,
+    discussion_id INTEGER NOT NULL,
+    message_id INTEGER NOT NULL,
+    sequence INTEGER NOT NULL,
+    PRIMARY KEY (agent_id, discussion_id, message_id)
 );
 CREATE TABLE IF NOT EXISTS agent_windows (
     agent_id INTEGER PRIMARY KEY,
@@ -59,6 +72,73 @@ class SqliteAgentStore:
             "model", lambda values: ModelCatalog.restore(values).model_dump()
         )
 
+    def transaction(self) -> LockedConnection:
+        return self._db
+
+    def lifecycle(self, agent_id: int) -> AgentLifecycle:
+        row = first(
+            self._db.execute(
+                "SELECT pause_requested, error, prepared_sequence FROM agent_lifecycle WHERE agent_id = ?",
+                (agent_id,),
+            )
+        )
+        if row is not None:
+            return AgentLifecycle(bool(row[0]), row[1], row[2])
+        member = first(
+            self._db.execute("SELECT state FROM members WHERE id = ?", (agent_id,))
+        )
+        return AgentLifecycle(
+            pause_requested=member is not None and member[0] == "paused"
+        )
+
+    def set_lifecycle(self, agent_id: int, value: AgentLifecycle) -> None:
+        with self._db:
+            self._db.execute(
+                "INSERT INTO agent_lifecycle (agent_id, pause_requested, error, prepared_sequence)"
+                " VALUES (?, ?, ?, ?) ON CONFLICT (agent_id) DO UPDATE SET"
+                " pause_requested = excluded.pause_requested, error = excluded.error,"
+                " prepared_sequence = excluded.prepared_sequence",
+                (agent_id, value.pause_requested, value.error, value.prepared_sequence),
+            )
+
+    def consume_preparation(
+        self, agent_id: int, sequence: int, keys: Sequence[tuple[int, int]]
+    ) -> None:
+        with self._db:
+            self._db.executemany(
+                "INSERT OR IGNORE INTO preparation_mentions (agent_id, discussion_id, message_id, sequence)"
+                " VALUES (?, ?, ?, ?)",
+                [
+                    (agent_id, discussion_id, message_id, sequence)
+                    for discussion_id, message_id in keys
+                ],
+            )
+
+    def new_mentions(
+        self, agent_id: int, keys: Sequence[tuple[int, int]]
+    ) -> frozenset[tuple[int, int]]:
+        with self._db:
+            consumed = {
+                (int(row[0]), int(row[1]))
+                for row in self._db.execute(
+                    "SELECT discussion_id, message_id FROM reminded WHERE agent_id = ?"
+                    " UNION SELECT discussion_id, message_id FROM preparation_mentions WHERE agent_id = ?",
+                    (agent_id, agent_id),
+                )
+            }
+            return frozenset(keys) - consumed
+
+    def prepared_mentions(
+        self, agent_id: int, sequence: int
+    ) -> frozenset[tuple[int, int]]:
+        return frozenset(
+            (int(row[0]), int(row[1]))
+            for row in self._db.execute(
+                "SELECT discussion_id, message_id FROM preparation_mentions WHERE agent_id = ? AND sequence = ?",
+                (agent_id, sequence),
+            )
+        )
+
     def _now(self) -> str:
         from huddol.adapters.sqlite.store import now
 
@@ -79,10 +159,10 @@ class SqliteAgentStore:
 
     def previously_reminded(
         self, agent_id: int, keys: Sequence[tuple[int, int]]
-    ) -> frozenset[int]:
+    ) -> frozenset[tuple[int, int]]:
         if not keys:
             return frozenset()
-        found: set[int] = set()
+        found: set[tuple[int, int]] = set()
         for discussion_id, message_id in keys:
             row = first(
                 self._db.execute(
@@ -92,7 +172,7 @@ class SqliteAgentStore:
                 )
             )
             if row is not None:
-                found.add(message_id)
+                found.add((discussion_id, message_id))
         return frozenset(found)
 
     def last_reminder(self, agent_id: int) -> frozenset[tuple[int, int]]:
@@ -191,6 +271,13 @@ class SqliteAgentStore:
                 " first_reminded_at) VALUES (?, ?, ?, ?)",
                 [
                     (agent_id, discussion_id, message_id, started)
+                    for discussion_id, message_id in reminded
+                ],
+            )
+            self._db.executemany(
+                "DELETE FROM preparation_mentions WHERE agent_id = ? AND discussion_id = ? AND message_id = ?",
+                [
+                    (agent_id, discussion_id, message_id)
                     for discussion_id, message_id in reminded
                 ],
             )

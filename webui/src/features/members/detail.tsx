@@ -30,7 +30,7 @@ import {
 import { OverflowMenu } from "@/components/ui/menu";
 import { Tooltip } from "@/components/ui/tooltip";
 import { TreeView } from "@/features/library/tree-view";
-import { agentStateLabel } from "@/features/members/state";
+import { agentStateLabel, canResume } from "@/features/members/state";
 import { AgentModelPanel } from "@/features/settings/model";
 import { reportLoadFailure } from "@/features/settings/saver";
 import {
@@ -88,7 +88,7 @@ function AgentPage({
   const navigate = useNavigate();
   const [detail, setDetail] = useState<AgentDetail | null>(null);
   const [doomed, setDoomed] = useState(false);
-  const paused = member.state === "paused";
+  const paused = canResume(member);
 
   const load = useCallback(async () => {
     try {
@@ -108,13 +108,13 @@ function AgentPage({
     return backend.onEvent((event) => {
       if (
         event.type.startsWith("turn.") ||
+        event.type === "organization.changed" ||
+        event.type === "settings.updated" ||
         event.type === "connection.restored"
       )
         void load();
     });
   }, [load]);
-
-  const tokenLimit = detail?.token_limit ?? 0;
 
   return (
     <Page>
@@ -122,7 +122,7 @@ function AgentPage({
         title={member.name}
         status={
           <>
-            <AgentState member={member} tokenLimit={tokenLimit} />
+            <AgentState member={member} />
             {detail ? <AgentDetailStatus detail={detail} /> : null}
           </>
         }
@@ -169,7 +169,11 @@ function AgentPage({
                 label="Token spend"
                 value={detail.usage.total_tokens.toLocaleString("en-US")}
                 detail={
-                  detail.token_limit > 0 ? (
+                  detail.token_limit === null ? (
+                    <span className="text-fg-muted">
+                      Token ceiling unavailable
+                    </span>
+                  ) : detail.token_limit > 0 ? (
                     <>
                       <Meter
                         value={detail.usage.total_tokens}
@@ -195,11 +199,22 @@ function AgentPage({
                   </span>
                 }
               />
-              <Stat
-                label="State"
-                value={<AgentState member={member} tokenLimit={tokenLimit} />}
-              />
+              <Stat label="State" value={<AgentState member={member} />} />
             </div>
+
+            {detail.reasons?.map((reason) => (
+              <p key={reason.code} className="text-warning">
+                {reason.message}. {reason.recovery}
+              </p>
+            ))}
+            {detail.error ? (
+              <p className="text-danger">Last Turn: {detail.error}</p>
+            ) : null}
+            {detail.statistics_unavailable ? (
+              <p className="text-warning">
+                Statistics unavailable: {detail.statistics_unavailable}
+              </p>
+            ) : null}
 
             <AgentModelPanel key={member.id} agentId={member.id} />
 
@@ -244,12 +259,8 @@ export function AgentDetailStatus({ detail }: { detail: AgentDetail }) {
           Token ceiling
         </Chip>
       ) : null}
-      {detail.pause_reason ? (
-        <Chip tone="danger">
-          {detail.pause_reason === "no_tool_calls"
-            ? `Paused: ${plural(detail.no_tool_streak, "tool-free Turn")}`
-            : "Paused: runtime error"}
-        </Chip>
+      {detail.pause_requested && detail.state === "running" ? (
+        <Chip tone="warning">Pause requested · Current Turn will finish</Chip>
       ) : null}
       {detail.idle ? (
         <Chip tone="warning">{plural(detail.idle_streak, "idle Turn")}</Chip>
@@ -353,18 +364,12 @@ export function WorkspaceSection({
   );
 }
 
-function AgentState({
-  member,
-  tokenLimit,
-}: {
-  member: Member;
-  tokenLimit: number;
-}) {
+function AgentState({ member }: { member: Member }) {
   return (
     <StatusText
       dot={<StateDot state={member.state} ping={member.state === "running"} />}
     >
-      {agentStateLabel(member, tokenLimit)}
+      {agentStateLabel(member)}
     </StatusText>
   );
 }

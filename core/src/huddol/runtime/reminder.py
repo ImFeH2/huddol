@@ -83,7 +83,8 @@ def build_reminder(
                 message_id=mention.message_id,
                 sender_id=sender_id,
                 sender_name=members.get(sender_id, f"Member {sender_id}"),
-                previously_reminded=mention.message_id in reminded,
+                previously_reminded=(mention.discussion_id, mention.message_id)
+                in reminded,
             )
         )
     if not items:
@@ -177,6 +178,10 @@ class HistoryPersistenceError(RuntimeError):
     pass
 
 
+class HistoryValidationError(ValueError):
+    pass
+
+
 @dataclass(frozen=True)
 class TurnRequest:
     agent_id: int
@@ -202,4 +207,8 @@ class TurnOutcome:
 
 
 class ModelRunner(Protocol):
+    def validate_history(self, raw: str) -> None: ...
+
+    def check_available(self, agent_id: int) -> None: ...
+
     def run(self, request: TurnRequest, tools: AgentTools) -> TurnOutcome: ...

@@ -17,7 +17,7 @@ def outcome(calls=0, error=None):
     )
 
 
-def test_no_tool_turns_hard_pause_and_only_human_can_resume(world):
+def test_no_tool_turns_block_and_only_human_can_resume(world):
     room = mention(world)
     scheduler = Scheduler(world, RecordingRunner(lambda request, tools: outcome()))
     for turn in range(1, 4):
@@ -25,7 +25,7 @@ def test_no_tool_turns_hard_pause_and_only_human_can_resume(world):
             world.store.append_message(room, HUMAN, "@Main continue")
         assert scheduler.run_turn(MAIN).status == "completed"
         assert world.history.no_tool_streak(MAIN) == turn
-    assert world.store.get_member(MAIN).state == "paused"
+    assert world.store.get_member(MAIN).state == "blocked"
     assert world.history.pause_reason(MAIN) == "no_tool_calls"
     assert SqliteAgentStore(world.store._db).pause_reason(MAIN) == "no_tool_calls"
     restarted = Scheduler(world, scheduler._runner)
@@ -48,11 +48,11 @@ def test_human_resume_allows_the_same_mentions(world):
     world.settings.set_settings("agent", {"no_tool_turns_before_pause": 1})
     scheduler = Scheduler(world, RecordingRunner(lambda request, tools: outcome()))
     assert scheduler.run_turn(MAIN).status == "completed"
-    assert world.store.get_member(MAIN).state == "paused"
+    assert world.store.get_member(MAIN).state == "blocked"
     scheduler.tools_for_actor(Actor(HUMAN, False)).resume_agent(MAIN)
     assert scheduler.runnable_agents() == (MAIN,)
     assert scheduler.run_turn(MAIN).status == "completed"
-    assert world.store.get_member(MAIN).state == "paused"
+    assert world.store.get_member(MAIN).state == "blocked"
 
 
 def test_soft_failures_do_not_count_and_tools_reset_the_streak(world):
@@ -72,14 +72,17 @@ def test_soft_failures_do_not_count_and_tools_reset_the_streak(world):
     )
     for expected in [1, 1, 0, 1, 0, 1]:
         world.store.append_message(room, HUMAN, "@Main retry")
-        assert scheduler.run_turn(MAIN) is not None
+        result = scheduler.run_turn(MAIN)
+        assert result is not None
         assert world.history.no_tool_streak(MAIN) == expected
         assert world.history.pause_reason(MAIN) is None
-        assert world.store.get_member(MAIN).state == "idle"
+        assert world.store.get_member(MAIN).state == (
+            "error" if result.status == "failed" else "idle"
+        )
         assert scheduler.run_turn(MAIN) is None
 
 
-def test_runtime_exception_hard_pauses(world):
+def test_runtime_exception_records_error(world):
     mention(world)
 
     def fail(request, tools):
@@ -87,8 +90,9 @@ def test_runtime_exception_hard_pauses(world):
 
     scheduler = Scheduler(world, RecordingRunner(fail))
     assert scheduler.run_turn(MAIN).status == "failed"
-    assert world.store.get_member(MAIN).state == "paused"
-    assert world.history.pause_reason(MAIN) == "runtime_error"
+    assert world.store.get_member(MAIN).state == "error"
+    assert world.history.pause_reason(MAIN) is None
+    assert scheduler.agent_status(MAIN)["error"] == "RuntimeError: framework failure"
 
 
 @pytest.mark.parametrize("invalid", [False, True])
@@ -135,14 +139,14 @@ def test_actual_tool_calls_include_retry_results_and_do_not_leak_between_turns(
     world.store.append_message(room, HUMAN, "@Main another input")
     assert scheduler.run_turn(MAIN).status == "completed"
     assert world.history.no_tool_streak(MAIN) == 1
-    assert world.store.get_member(MAIN).state == "paused"
+    assert world.store.get_member(MAIN).state == "blocked"
 
 
-def test_resume_cannot_reset_an_active_turn(world):
+def test_resume_finalizes_an_interrupted_turn(world):
     mention(world)
     world.history.start_run(MAIN, reminded=[(1, 1)])
     world.store.set_agent_state(MAIN, "paused")
     scheduler = Scheduler(world, RecordingRunner())
-    with pytest.raises(DomainError, match="finish"):
-        scheduler.tools_for_actor(Actor(HUMAN, False)).resume_agent(MAIN)
-    assert world.store.get_member(MAIN).state == "paused"
+    scheduler.tools_for_actor(Actor(HUMAN, False)).resume_agent(MAIN)
+    assert world.store.get_member(MAIN).state == "idle"
+    assert world.history.runs(MAIN)[0].status == "interrupted"

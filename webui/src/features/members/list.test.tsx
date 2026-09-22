@@ -90,21 +90,26 @@ describe("member row", () => {
     expect(html).toMatch(/<span\b[^>]*>You<\/span>/);
   });
 
-  it("reports the ceiling in the State column", () => {
-    expect(render(agent("idle"), 1000)).toContain("At ceiling");
-    expect(render(agent("idle"), 2000)).toContain("Idle");
+  it("reports the backend state in the State column", () => {
+    expect(render(agent("blocked"), 1000)).toContain("Blocked");
+    expect(render(agent("error"), 2000)).toContain("Error");
+  });
+
+  it("offers Resume while the current Turn completes", () => {
+    const member = { ...agent("running"), pause_requested: true };
+    expect(memberActions(member, noop)[0].label).toBe("Resume");
+    expect(render(member)).toContain("Pause requested");
   });
 });
 
 describe("agentStateLabel", () => {
-  it("prefers the live state over the ceiling", () => {
-    expect(agentStateLabel(agent("running"), 1000)).toBe("Running");
-    expect(agentStateLabel(agent("paused"), 1000)).toBe("Paused");
-  });
-
-  it("reports the ceiling only when a limit is set and reached", () => {
-    expect(agentStateLabel(agent("idle"), 1200)).toBe("At ceiling");
-    expect(agentStateLabel(agent("idle"), 1201)).toBe("Idle");
-    expect(agentStateLabel(agent("idle"), 0)).toBe("Idle");
+  it.each([
+    ["running", "Running"],
+    ["paused", "Paused"],
+    ["blocked", "Blocked"],
+    ["error", "Error"],
+    ["idle", "Idle"],
+  ] as const)("displays %s", (state, label) => {
+    expect(agentStateLabel(agent(state))).toBe(label);
   });
 });

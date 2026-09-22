@@ -76,7 +76,12 @@ from huddol.adapters.model.prompt import SYSTEM_PROMPT
 from huddol.core.errors import DomainError
 from huddol.core.parameters import agent_parameters
 from huddol.ports.agent import SettingsStore
-from huddol.runtime.reminder import HistoryPersistenceError, TurnOutcome, TurnRequest
+from huddol.runtime.reminder import (
+    HistoryPersistenceError,
+    HistoryValidationError,
+    TurnOutcome,
+    TurnRequest,
+)
 from huddol.tools import AgentTools
 
 pydantic_ai.BANNER_ENABLED = False
@@ -591,6 +596,19 @@ class PydanticModelRunner:
         ):
             _result(tool)
 
+    def check_available(self, agent_id: int) -> None:
+        ModelCatalog.restore(self._settings.get_settings("model")).resolve(agent_id)
+
+    def validate_history(self, raw: str) -> None:
+        for message in _decode_history(raw):
+            if isinstance(message, ModelRequest) and message.metadata is not None:
+                metadata = message.metadata.get("huddol", {})
+                if not isinstance(metadata, dict):
+                    raise HistoryValidationError("Invalid resident history metadata")
+                instructions = metadata.get("agents_instructions")
+                if instructions is not None and not isinstance(instructions, str):
+                    raise HistoryValidationError("Invalid resident instructions")
+
     def run(self, request: TurnRequest, tools: AgentTools) -> TurnOutcome:
         parameters = agent_parameters(self._settings.get_settings("agent"))
         usage_limits = UsageLimits(request_limit=parameters.request_limit or None)
@@ -600,6 +618,7 @@ class PydanticModelRunner:
             )
         except DomainError as failure:
             return TurnOutcome(messages_json=request.history_json, error=str(failure))
+        self.validate_history(request.history_json)
         with self._lock:
             tracing = ObservabilityConfig.restore(
                 self._settings.get_settings("observability")
@@ -846,7 +865,10 @@ def _settle_tool_calls(messages: list[ModelMessage]) -> list[ModelMessage]:
 
 
 def _decode_history(raw: str) -> list[ModelMessage]:
-    return ModelMessagesTypeAdapter.validate_json(raw)
+    try:
+        return ModelMessagesTypeAdapter.validate_json(raw)
+    except ValueError as error:
+        raise HistoryValidationError("Stored model history is invalid") from error
 
 
 def _encode_history(messages: list[ModelMessage]) -> str:
