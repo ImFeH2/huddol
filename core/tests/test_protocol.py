@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import io
 import json
+import sqlite3
 from dataclasses import asdict
 from pathlib import Path
 from typing import Any
@@ -656,6 +657,53 @@ def test_execution_settings_update_the_live_sandbox(server, tmp_path: Path) -> N
     assert deps.settings.get_settings("execution") == {
         "write_directories": [str(target.resolve())]
     }
+
+
+def test_summary_paths_read_only_metadata(server) -> None:
+    dispatcher, output, deps = server
+    agent_id = call(dispatcher, output, "organization.create_agent", name="Main")[
+        "result"
+    ]["id"]
+    payload = json.dumps([{"text": "x" * 1048576}])
+    for _ in range(32):
+        run = deps.history.start_run(agent_id)
+        deps.history.finish_run(
+            agent_id,
+            run.sequence,
+            status="completed",
+            messages_json=payload,
+            usage_json='{"input_tokens":100,"output_tokens":20,"last_input_tokens":200000,"tool_calls":1}',
+        )
+        deps.history.record_effect(agent_id, run.sequence, "send", "message")
+    scheduler = Scheduler(deps, PydanticModelRunner(deps.history))
+    connection = deps.store._db._connection
+
+    def authorize(action, table, column, database, source):
+        if (
+            action == sqlite3.SQLITE_READ
+            and table == "agent_runs"
+            and column == "messages_json"
+        ):
+            return sqlite3.SQLITE_DENY
+        return sqlite3.SQLITE_OK
+
+    connection.set_authorizer(authorize)
+    try:
+        detail = call(dispatcher, output, "agent.detail", agent_id=agent_id)["result"]
+        organization = call(dispatcher, output, "organization.get")["result"]
+        assert scheduler.preparation_due(agent_id)
+    finally:
+        connection.set_authorizer(None)
+    assert len(detail["runs"]) == 30
+    assert [run["sequence"] for run in detail["runs"]] == list(range(32, 2, -1))
+    assert detail["runs"][0]["effects"] == [
+        {"ordinal": 1, "tool": "send", "summary": "message"}
+    ]
+    assert detail["idle_streak"] == 0
+    assert detail["usage"]["total_tokens"] == 3840
+    member = next(item for item in organization["members"] if item["id"] == agent_id)
+    assert member["tokens"] == 3840
+    assert deps.history.latest_messages(agent_id) == payload
 
 
 def test_agent_detail_reports_runs(server) -> None:

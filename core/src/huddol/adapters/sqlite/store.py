@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import sqlite3
 from collections.abc import Iterator, Mapping, Sequence
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
 from threading import RLock
@@ -303,26 +303,27 @@ class SqliteStore:
     def __init__(self, path: Path | str) -> None:
         self._path = Path(path)
         self._path.parent.mkdir(parents=True, exist_ok=True)
-        connection = sqlite3.connect(self._path, check_same_thread=False)
-        connection.row_factory = sqlite3.Row
-        connection.execute("PRAGMA journal_mode=WAL")
-        connection.execute("PRAGMA foreign_keys=ON")
-        self._db = LockedConnection(connection)
-        self._db.executescript(SCHEMA)
-        if "length" not in {
-            row["name"] for row in self._db.execute("PRAGMA table_info(mentions)")
-        }:
-            self._db.execute(
-                "ALTER TABLE mentions ADD COLUMN length INTEGER NOT NULL DEFAULT 0"
-            )
-        if "reminded_json" not in {
-            row["name"] for row in self._db.execute("PRAGMA table_info(agent_runs)")
-        }:
-            self._db.execute(
-                "ALTER TABLE agent_runs ADD COLUMN reminded_json TEXT NOT NULL DEFAULT '[]'"
-            )
-        self._db.commit()
-        try:
+        with ExitStack() as cleanup:
+            connection = sqlite3.connect(self._path, check_same_thread=False)
+            cleanup.callback(connection.close)
+            connection.row_factory = sqlite3.Row
+            connection.execute("PRAGMA journal_mode=WAL")
+            connection.execute("PRAGMA foreign_keys=ON")
+            self._db = LockedConnection(connection)
+            self._db.executescript(SCHEMA)
+            if "length" not in {
+                row["name"] for row in self._db.execute("PRAGMA table_info(mentions)")
+            }:
+                self._db.execute(
+                    "ALTER TABLE mentions ADD COLUMN length INTEGER NOT NULL DEFAULT 0"
+                )
+            if "reminded_json" not in {
+                row["name"] for row in self._db.execute("PRAGMA table_info(agent_runs)")
+            }:
+                self._db.execute(
+                    "ALTER TABLE agent_runs ADD COLUMN reminded_json TEXT NOT NULL DEFAULT '[]'"
+                )
+            self._db.commit()
             with self._db:
                 if "pending_revision" not in {
                     row["name"]
@@ -333,9 +334,12 @@ class SqliteStore:
                     )
                 for statement in PENDING_REVISION_SCHEMA:
                     self._db.execute(statement)
-        except BaseException:
-            self._db.close()
-            raise
+                self._db.execute(
+                    "CREATE INDEX IF NOT EXISTS agent_runs_summary ON agent_runs"
+                    " (agent_id, sequence, status, started_at, completed_at,"
+                    " usage_json, error, reminded_json, pending_revision)"
+                )
+            cleanup.pop_all()
 
     def close(self) -> None:
         self._db.close()

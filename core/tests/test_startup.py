@@ -211,6 +211,115 @@ def test_scheduler_failure_keeps_http_and_settings_diagnostics(tmp_path, raw) ->
         assert kernel.shutdown() == 0
 
 
+@pytest.mark.parametrize(
+    "stage",
+    ["pragma", "schema", "mentions", "reminder", "index", "interrupt", "commit"],
+)
+def test_database_initialization_failure_closes_connection_before_ready(
+    tmp_path, monkeypatch, capsys, stage
+) -> None:
+    import huddol.__main__ as entry
+
+    directory = tmp_path / "data"
+    directory.mkdir()
+    path = directory / "huddol.sqlite3"
+    base = SqliteStore(path)
+    history = SqliteAgentStore(base._db)
+    run = history.start_run(7)
+    history.finish_run(
+        7, run.sequence, status="completed", messages_json='[{"text":"preserved"}]'
+    )
+    base._db.execute("DROP INDEX agent_runs_summary")
+    base._db.execute("ALTER TABLE mentions DROP COLUMN length")
+    base._db.execute("ALTER TABLE agent_runs DROP COLUMN reminded_json")
+    base._db.commit()
+    base.close()
+    connect = sqlite3.connect
+    connections = []
+    index_started = False
+    interrupted = False
+
+    def authorize(action, first, second, database, source):
+        nonlocal index_started
+        if action == sqlite3.SQLITE_CREATE_INDEX and first == "agent_runs_summary":
+            index_started = True
+            if stage == "index":
+                return sqlite3.SQLITE_DENY
+        if stage == "pragma" and action == sqlite3.SQLITE_PRAGMA:
+            return sqlite3.SQLITE_DENY
+        if (
+            stage == "schema"
+            and action == sqlite3.SQLITE_INSERT
+            and first == "discussion_sequence"
+        ):
+            return sqlite3.SQLITE_DENY
+        if (
+            stage == "mentions"
+            and action == sqlite3.SQLITE_ALTER_TABLE
+            and second == "mentions"
+        ):
+            return sqlite3.SQLITE_DENY
+        if (
+            stage == "reminder"
+            and action == sqlite3.SQLITE_ALTER_TABLE
+            and second == "agent_runs"
+        ):
+            return sqlite3.SQLITE_DENY
+        if (
+            stage == "commit"
+            and index_started
+            and action == sqlite3.SQLITE_TRANSACTION
+            and first == "COMMIT"
+        ):
+            return sqlite3.SQLITE_DENY
+        return sqlite3.SQLITE_OK
+
+    def progress():
+        nonlocal interrupted
+        if stage == "interrupt" and index_started and not interrupted:
+            interrupted = True
+            return 1
+        return 0
+
+    def failing_connect(*args, **kwargs):
+        connection = connect(*args, **kwargs)
+        connections.append(connection)
+        connection.set_authorizer(authorize)
+        connection.set_progress_handler(progress, 1)
+        return connection
+
+    monkeypatch.setattr(sqlite3, "connect", failing_connect)
+    monkeypatch.setattr(entry, "configure_stdio", lambda: None)
+    monkeypatch.setattr(entry, "install_signal_handlers", lambda callback: None)
+    with pytest.raises(sqlite3.DatabaseError) as failure:
+        entry.main(["--data-dir", str(directory), "--transport", "stdio"])
+    if stage == "interrupt":
+        assert failure.value.sqlite_errorcode == sqlite3.SQLITE_INTERRUPT
+    else:
+        assert failure.value.sqlite_errorcode == sqlite3.SQLITE_AUTH
+    assert len(connections) == 1
+    with pytest.raises(sqlite3.ProgrammingError, match="closed"):
+        connections[0].execute("SELECT 1")
+    assert capsys.readouterr().out == ""
+    assert not (directory / "run.json").exists()
+    assert "Listening" not in (directory / "logs" / "huddol.log").read_text()
+    monkeypatch.setattr(sqlite3, "connect", connect)
+    with closing(connect(path)) as connection:
+        indexes = connection.execute(
+            "SELECT name FROM sqlite_schema WHERE name='agent_runs_summary'"
+        ).fetchall()
+        assert indexes == []
+        assert connection.execute(
+            "SELECT messages_json FROM agent_runs"
+        ).fetchall() == [('[{"text":"preserved"}]',)]
+    base = SqliteStore(path)
+    try:
+        assert SqliteAgentStore(base._db).run_summaries(7)[0].status == "completed"
+        assert base._db.execute("PRAGMA integrity_check")[0][0] == "ok"
+    finally:
+        base.close()
+
+
 def test_explicit_options_override_the_environment(tmp_path: Path) -> None:
     from_environment = tmp_path / "from-environment"
     explicit = tmp_path / "explicit"

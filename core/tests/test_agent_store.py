@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import sqlite3
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from pathlib import Path
@@ -11,7 +12,7 @@ from huddol.adapters.model.config import ModelCatalog
 from huddol.adapters.sqlite.agent import SqliteAgentStore
 from huddol.adapters.sqlite.store import SqliteStore
 from huddol.core.errors import DomainError
-from huddol.ports.agent import WindowState
+from huddol.ports.agent import RunSummary, WindowState
 from huddol.services.history import History
 
 AGENT = 13
@@ -42,6 +43,7 @@ def test_reminder_snapshot_survives_upgrade_restart_and_window_reset(tmp_path) -
     store = SqliteAgentStore(base._db)
     legacy = store.start_run(AGENT)
     store.finish_run(AGENT, legacy.sequence, status="completed", messages_json="[]")
+    base._db.execute("DROP INDEX agent_runs_summary")
     base._db.execute("ALTER TABLE agent_runs DROP COLUMN reminded_json")
     base._db.commit()
     base.close()
@@ -394,6 +396,180 @@ def test_usage_totals_add_up_across_turns(agent_store: SqliteAgentStore) -> None
     assert total["output_tokens"] == 70
     assert total["total_tokens"] == 470
     assert total["requests"] == 2
+
+
+@pytest.mark.parametrize("size", [0, 4096, 1048576])
+def test_metadata_queries_cover_history_and_preserve_records(agent_store, size) -> None:
+    payload = json.dumps([{"text": "x" * size}])
+    for status in ("completed", "failed", "interrupted"):
+        run = agent_store.start_run(AGENT, reminded=[(1, 2)])
+        agent_store.finish_run(
+            AGENT,
+            run.sequence,
+            status=status,
+            messages_json=payload,
+            usage_json='{"input_tokens":100,"output_tokens":20,"tool_calls":0}',
+            error="test" if status == "failed" else None,
+        )
+    agent_store.start_run(AGENT)
+    agent_store.start_run(AGENT + 1)
+    expected = tuple(
+        RunSummary(
+            run.sequence,
+            run.status,
+            run.started_at,
+            run.completed_at,
+            run.usage_json,
+            run.error,
+        )
+        for run in agent_store.runs(AGENT)
+    )
+    connection = agent_store._db._connection
+    statements = []
+
+    def authorize(action, table, column, database, source):
+        if (
+            action == sqlite3.SQLITE_READ
+            and table == "agent_runs"
+            and column == "messages_json"
+        ):
+            return sqlite3.SQLITE_DENY
+        return sqlite3.SQLITE_OK
+
+    connection.set_authorizer(authorize)
+    connection.set_trace_callback(statements.append)
+    try:
+        assert agent_store.run_summaries(AGENT) == expected
+        assert agent_store.run_summaries(AGENT, limit=1) == expected[:1]
+        assert agent_store.run_summaries(AGENT, limit=0) == ()
+        assert agent_store.run_summaries(999) == ()
+        assert agent_store.usage_total(AGENT)["total_tokens"] == 360
+        assert agent_store.no_tool_streak(AGENT) == 1
+        assert agent_store.last_reminder(AGENT) == frozenset({(1, 2)})
+    finally:
+        connection.set_trace_callback(None)
+        connection.set_authorizer(None)
+    for sql in statements:
+        plan = connection.execute("EXPLAIN QUERY PLAN " + sql).fetchall()
+        assert any("COVERING INDEX agent_runs_summary" in row[3] for row in plan)
+    assert agent_store.latest_messages(AGENT) == payload
+    assert agent_store.runs(AGENT)[1].messages_json == payload
+
+
+def test_summary_index_tracks_commits_and_rollbacks(agent_store) -> None:
+    run = agent_store.start_run(AGENT)
+    baseline = agent_store.run_summaries(AGENT)
+    with pytest.raises(ValueError, match="rollback"), agent_store._db:
+        agent_store.finish_run(
+            AGENT,
+            run.sequence,
+            status="completed",
+            messages_json='[{"text":"a"}]',
+            usage_json='{"input_tokens":7}',
+        )
+        assert agent_store.usage_total(AGENT)["total_tokens"] == 7
+        assert agent_store.run_summaries(AGENT)[0].status == "completed"
+        raise ValueError("rollback")
+    assert agent_store.run_summaries(AGENT) == baseline
+    assert agent_store.usage_total(AGENT)["total_tokens"] == 0
+    for tokens in (7, 11):
+        agent_store.finish_run(
+            AGENT,
+            run.sequence,
+            status="completed",
+            messages_json='[{"text":"a"}]',
+            usage_json=json.dumps({"input_tokens": tokens}),
+        )
+        assert agent_store.usage_total(AGENT)["total_tokens"] == tokens
+    summary = agent_store.run_summaries(AGENT)
+    agent_store.save_progress(AGENT, run.sequence, '[{"text":"b"}]')
+    assert agent_store.run_summaries(AGENT) == summary
+    assert agent_store.runs(AGENT)[0].messages_json == '[{"text":"b"}]'
+    with agent_store._db:
+        agent_store._db.execute("DELETE FROM agent_runs WHERE agent_id = ?", (AGENT,))
+    assert agent_store.run_summaries(AGENT) == ()
+    assert agent_store.usage_total(AGENT)["total_tokens"] == 0
+
+
+def test_summary_index_preserves_invalid_usage_errors(agent_store) -> None:
+    run = agent_store.start_run(AGENT)
+    agent_store.finish_run(
+        AGENT,
+        run.sequence,
+        status="failed",
+        messages_json="[]",
+        usage_json="{invalid",
+    )
+    assert agent_store.run_summaries(AGENT)[0].usage_json == "{invalid"
+    with pytest.raises(sqlite3.OperationalError, match="malformed JSON"):
+        agent_store.usage_total(AGENT)
+
+
+@pytest.mark.parametrize("legacy", [False, True])
+def test_summary_index_upgrade_preserves_history_and_is_idempotent(
+    tmp_path, legacy
+) -> None:
+    path = tmp_path / "upgrade.sqlite3"
+    base = SqliteStore(path)
+    history = SqliteAgentStore(base._db)
+    run = history.start_run(AGENT)
+    history.finish_run(
+        AGENT,
+        run.sequence,
+        status="failed",
+        messages_json='[{"text":"retained"}]',
+        usage_json='{"input_tokens":3}',
+        error="failure",
+    )
+    original = history.runs(AGENT)
+    base._db.execute("DROP INDEX agent_runs_summary")
+    if legacy:
+        base._db.execute("ALTER TABLE agent_runs DROP COLUMN reminded_json")
+    base._db.commit()
+    base.close()
+    for _ in range(2):
+        base = SqliteStore(path)
+        try:
+            history = SqliteAgentStore(base._db)
+            assert history.runs(AGENT) == original
+            assert history.usage_total(AGENT)["total_tokens"] == 3
+            assert history.run_summaries(AGENT)[0].error == "failure"
+            indexes = base._db.execute(
+                "SELECT name FROM sqlite_schema WHERE name='agent_runs_summary'"
+            )
+            assert len(indexes) == 1
+        finally:
+            base.close()
+
+
+def test_initialization_write_contention_releases_connection(
+    tmp_path, monkeypatch
+) -> None:
+    path = tmp_path / "busy.sqlite3"
+    SqliteStore(path).close()
+    connect = sqlite3.connect
+    blocker = connect(path)
+    blocker.execute("BEGIN IMMEDIATE")
+    opened = []
+
+    def short_timeout(*args, **kwargs):
+        connection = connect(*args, **kwargs, timeout=0.01)
+        opened.append(connection)
+        return connection
+
+    monkeypatch.setattr(sqlite3, "connect", short_timeout)
+    try:
+        with pytest.raises(sqlite3.OperationalError) as failure:
+            SqliteStore(path)
+        assert failure.value.sqlite_errorcode == sqlite3.SQLITE_BUSY
+        assert len(opened) == 1
+        with pytest.raises(sqlite3.ProgrammingError, match="closed"):
+            opened[0].execute("SELECT 1")
+    finally:
+        blocker.rollback()
+        blocker.close()
+        monkeypatch.setattr(sqlite3, "connect", connect)
+    SqliteStore(path).close()
 
 
 def test_turns_without_usage_do_not_break_the_total(

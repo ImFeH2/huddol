@@ -144,7 +144,7 @@ class AgentTools:
             raise DomainError(
                 "not_permitted", "Only a Human can resume a safety-paused Agent"
             )
-        runs = self._deps.history.runs(agent_id, limit=1)
+        runs = self._deps.history.run_summaries(agent_id, limit=1)
         if runs and runs[0].status == "running":
             raise DomainError(
                 "agent_running", "Wait for the active Turn to finish before resuming"

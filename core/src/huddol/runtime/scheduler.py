@@ -407,7 +407,7 @@ class Scheduler:
         return agent_parameters(self.settings.get_settings("agent"))
 
     def preparation_due(self, agent_id: int) -> bool:
-        runs = self.history.runs(agent_id, limit=1)
+        runs = self.history.run_summaries(agent_id, limit=1)
         if not runs:
             return False
         run = runs[0]

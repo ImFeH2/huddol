@@ -8,7 +8,13 @@ from collections.abc import Callable, Sequence
 from huddol.adapters.model.config import ModelCatalog
 from huddol.adapters.sqlite.store import LockedConnection, first
 from huddol.core.errors import DomainError
-from huddol.ports.agent import AgentLifecycle, AgentRun, TurnEffect, WindowState
+from huddol.ports.agent import (
+    AgentLifecycle,
+    AgentRun,
+    RunSummary,
+    TurnEffect,
+    WindowState,
+)
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS agent_safety (
@@ -408,6 +414,26 @@ class SqliteAgentStore:
             (agent_id, limit),
         )
         return tuple(self._run(row) for row in rows)
+
+    def run_summaries(
+        self, agent_id: int, *, limit: int = 50
+    ) -> tuple[RunSummary, ...]:
+        rows = self._db.execute(
+            "SELECT sequence, status, started_at, completed_at, usage_json, error"
+            " FROM agent_runs WHERE agent_id = ? ORDER BY sequence DESC LIMIT ?",
+            (agent_id, limit),
+        )
+        return tuple(
+            RunSummary(
+                sequence=int(row["sequence"]),
+                status=str(row["status"]),
+                started_at=str(row["started_at"]),
+                completed_at=row["completed_at"],
+                usage_json=row["usage_json"],
+                error=row["error"],
+            )
+            for row in rows
+        )
 
     def record_effect(
         self, agent_id: int, sequence: int, tool: str, summary: str

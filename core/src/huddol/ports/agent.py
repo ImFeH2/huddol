@@ -21,6 +21,16 @@ class AgentRun:
 
 
 @dataclass(frozen=True)
+class RunSummary:
+    sequence: int
+    status: str
+    started_at: str
+    completed_at: str | None
+    usage_json: str | None
+    error: str | None
+
+
+@dataclass(frozen=True)
 class WindowState:
     number: int
     since_sequence: int
@@ -110,6 +120,10 @@ class HistoryStore(Protocol):
     def latest_messages(self, agent_id: int) -> str: ...
 
     def runs(self, agent_id: int, *, limit: int = 50) -> tuple[AgentRun, ...]: ...
+
+    def run_summaries(
+        self, agent_id: int, *, limit: int = 50
+    ) -> tuple[RunSummary, ...]: ...
 
     def record_effect(
         self, agent_id: int, sequence: int, tool: str, summary: str

@@ -264,7 +264,7 @@ class Api:
 
         def agent_detail(params: dict[str, Any]) -> Any:
             agent_id = int(params["agent_id"])
-            runs = self._scheduler.history.runs(agent_id, limit=30)
+            runs = self._scheduler.history.run_summaries(agent_id, limit=30)
             effects = self._scheduler.history.effects(
                 agent_id, sequences=[run.sequence for run in runs]
             )
