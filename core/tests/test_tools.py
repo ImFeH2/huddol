@@ -1039,19 +1039,19 @@ def test_ui_pages_do_not_read_or_ack(world, params) -> None:
     assert human.mark_read(room, 1)["read_through"] == 3
 
 
-def test_ui_entry_skips_own_unread_messages_and_send_does_not_advance(world) -> None:
+def test_ui_entry_includes_own_unread_messages_and_send_does_not_advance(world) -> None:
     human = tools_for(world, HUMAN)
     agent = tools_for(world, MAIN)
     room = human.create_discussion("page", [MAIN])["id"]
     human.send_message(room, "own", mark_read=False)
-    assert human.discussion_page(room, entry=True)["first_unread_id"] is None
+    assert human.discussion_page(room, entry=True)["first_unread_id"] == 1
     agent.send_message(room, "@You new")
     human.send_message(room, "own newer", mark_read=False)
     page = human.discussion_page(room, entry=True, limit=1)
-    assert page["first_unread_id"] == 2
-    assert [m["id"] for m in page["messages"]] == [2]
-    assert page["previous_sender_id"] == HUMAN
-    assert page["has_before"] and page["has_after"]
+    assert page["first_unread_id"] == 1
+    assert [m["id"] for m in page["messages"]] == [1]
+    assert page["previous_sender_id"] is None
+    assert not page["has_before"] and page["has_after"]
     assert world.store.watermark(room, HUMAN) == 0
     with pytest.raises(DomainError, match="before acknowledging"):
         human.ack(room, [2])
@@ -1059,6 +1059,59 @@ def test_ui_entry_skips_own_unread_messages_and_send_does_not_advance(world) -> 
     assert human.ack(room, [2])["acked"] == 1
     human.send_message(room, "old default")
     assert world.store.watermark(room, HUMAN) == 4
+
+
+def test_ui_entry_pages_own_messages_after_the_read_boundary(world) -> None:
+    human = tools_for(world, HUMAN)
+    room = human.create_discussion("own pages", [MAIN])["id"]
+    human.send_message(room, "read")
+    for index in range(120):
+        human.send_message(room, f"own {index}", mark_read=False)
+    page = human.discussion_page(room, entry=True, limit=50)
+    assert page["first_unread_id"] == 2
+    assert page["read_through"] == world.store.watermark(room, HUMAN) == 1
+    assert [message["id"] for message in page["messages"]] == list(range(2, 52))
+    assert page["previous_sender_id"] == HUMAN
+    assert page["has_before"] and page["has_after"]
+    assert page["pending_count"] == 0
+    assert world.store.unread_counts(HUMAN).get(room, 0) == 0
+
+
+def test_ui_entry_uses_latest_read_boundary_with_earlier_pending(world) -> None:
+    human = tools_for(world, HUMAN)
+    agent = tools_for(world, MAIN)
+    room = human.create_discussion("pending", [MAIN])["id"]
+    for _ in range(4):
+        agent.send_message(room, "@You pending")
+    human.mark_read(room, 3)
+    human.mark_read(room, 1)
+    page = human.discussion_page(room, entry=True, limit=2)
+    assert page["read_through"] == 3
+    assert page["first_unread_id"] == 4
+    assert [message["id"] for message in page["messages"]] == [4]
+    assert page["pending_count"] == 4
+    assert world.store.watermark(room, HUMAN) == 3
+    human.mark_read(room, 4)
+    human.send_message(room, "own next", mark_read=False)
+    entered = human.discussion_page(room, entry=True, limit=2)
+    assert entered["read_through"] == 4
+    assert entered["first_unread_id"] == 5
+    assert [message["id"] for message in entered["messages"]] == [5]
+    assert entered["pending_count"] == 4
+
+
+@pytest.mark.parametrize("count", [0, 4])
+def test_ui_entry_without_unread_returns_latest_page(world, count) -> None:
+    human = tools_for(world, HUMAN)
+    room = human.create_discussion("read", [MAIN])["id"]
+    for _ in range(count):
+        human.send_message(room, "read")
+    page = human.discussion_page(room, entry=True, limit=2)
+    assert page["first_unread_id"] is None
+    assert page["read_through"] == world.store.watermark(room, HUMAN) == count
+    assert [message["id"] for message in page["messages"]] == ([3, 4] if count else [])
+    assert page["has_before"] is bool(count)
+    assert not page["has_after"]
 
 
 def test_ui_bulk_handles_transaction_pending_up_to_chosen_boundary(world) -> None:

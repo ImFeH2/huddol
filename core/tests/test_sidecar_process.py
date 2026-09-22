@@ -1810,7 +1810,7 @@ def test_ui_pagination_read_and_bulk_contract_survive_real_websocket(
         request("discussion.send", discussion_id=room, body="own", mark_read=False)
         page = request("discussion.page", discussion_id=room, entry=True, limit=1)
         assert page["read_through"] == 0
-        assert page["first_unread_id"] is None
+        assert page["first_unread_id"] == 1
         assert page["messages"][0]["id"] == 1
         state = request("discussion.mark_read", discussion_id=room, message_id=1)
         assert state["read_through"] == 1
@@ -1842,4 +1842,5 @@ def test_ui_pagination_read_and_bulk_contract_survive_real_websocket(
             }
         )["result"]
         assert result["read_through"] == 1
+        assert result["first_unread_id"] is None
         assert result["messages"][0]["body"] == "own"

@@ -48,6 +48,33 @@ describe("thread pages", () => {
     expect(read.readThrough).toBe(20);
   });
 
+  it("retains an own-message divider while reading and renews it on entry", () => {
+    const own = page([6, 7, 8]);
+    own.messages = own.messages.map((message) => ({
+      ...message,
+      sender_id: 1,
+      sender_name: "You",
+    }));
+    const entered = mergePage(null, own, "entry");
+    expect(entered.divider).toBe(6);
+    const updated = {
+      ...own,
+      read_through: 7,
+      first_unread_id: 8,
+    };
+    const reading = mergePage(entered, updated, "refresh");
+    expect(reading.readThrough).toBe(7);
+    expect(reading.divider).toBe(6);
+    expect(mergePage(null, updated, "entry").divider).toBe(8);
+    expect(
+      mergePage(
+        null,
+        { ...updated, read_through: 8, first_unread_id: null },
+        "entry",
+      ).divider,
+    ).toBeNull();
+  });
+
   it("merges both directions without duplicates and refreshes only returned ack state", () => {
     const initial = mergePage(
       null,

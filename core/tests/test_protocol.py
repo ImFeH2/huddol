@@ -232,6 +232,45 @@ def test_full_human_flow_over_the_protocol(server) -> None:
     ]
 
 
+def test_ui_entry_tracks_read_boundary_across_own_messages(server) -> None:
+    dispatcher, output, deps = server
+    other = deps.store.create_member("human", "Other")
+    room = deps.store.create_discussion("Entry", [HUMAN_ID, other.id])
+    deps.store.append_message(room.id, other.id, "@You earlier pending")
+    call(
+        dispatcher, output, "discussion.mark_read", discussion_id=room.id, message_id=1
+    )
+    for index in range(55):
+        sent = call(
+            dispatcher,
+            output,
+            "discussion.send",
+            discussion_id=room.id,
+            body=f"Own message {index}",
+            mark_read=False,
+        )
+        assert "result" in sent
+    deps.store.append_message(room.id, other.id, "Later message")
+    page = call(
+        dispatcher, output, "discussion.page", discussion_id=room.id, entry=True
+    )["result"]
+    assert page["first_unread_id"] == 2
+    assert page["read_through"] == deps.store.watermark(room.id, HUMAN_ID) == 1
+    assert [message["id"] for message in page["messages"]] == list(range(2, 52))
+    assert page["pending_count"] == 1
+    assert page["has_before"] and page["has_after"]
+    marked = call(
+        dispatcher, output, "discussion.mark_read", discussion_id=room.id, message_id=20
+    )["result"]
+    assert marked["read_through"] == 20
+    entered = call(
+        dispatcher, output, "discussion.page", discussion_id=room.id, entry=True
+    )["result"]
+    assert entered["first_unread_id"] == 21
+    assert entered["messages"][0]["id"] == 21
+    assert entered["pending_count"] == 1
+
+
 def test_human_ack_and_revoke_round_trip(server) -> None:
     dispatcher, output, deps = server
     agent = call(dispatcher, output, "organization.create_agent", name="Main")["result"]

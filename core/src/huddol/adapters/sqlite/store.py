@@ -696,8 +696,8 @@ class SqliteStore:
             unread = first(
                 db.execute(
                     "SELECT id FROM messages WHERE discussion_id = ? AND id > ?"
-                    " AND sender_id <> ? ORDER BY id LIMIT 1",
-                    (discussion_id, read_through, member_id),
+                    " ORDER BY id LIMIT 1",
+                    (discussion_id, read_through),
                 )
             )
             first_unread_id = int(unread["id"]) if unread else None
