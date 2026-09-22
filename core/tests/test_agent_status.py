@@ -118,6 +118,56 @@ def test_error_preparation_consumption_and_restart_continuation(
         assert restarted.runnable_agents() == (MAIN,)
 
 
+@pytest.mark.parametrize("change", ["archive", "remove", "ack"])
+@pytest.mark.parametrize("stage", ["error", "preparation", "continuation"])
+def test_start_rechecks_pending_eligibility(world, monkeypatch, change, stage):
+    room = mention(world)
+    if stage != "error":
+        world.settings.set_settings("agent", {"context_window_tokens": 100})
+
+    def respond(request, tools):
+        if request.sequence == 1:
+            return TurnOutcome(
+                "[]", usage_json='{"last_input_tokens":100}', error="initial failure"
+            )
+        assert request.reminder is None
+        return TurnOutcome("[]")
+
+    runner = RecordingRunner(respond)
+    scheduler = Scheduler(world, runner)
+    assert scheduler.run_turn(MAIN).status == "failed"
+    new_room = mention(world)
+    if stage == "continuation":
+        world.store.ack(room, [1], MAIN)
+        assert scheduler.run_turn(MAIN).status == "completed"
+        world.store.revoke_ack(room, [1], MAIN)
+    before = world.history.runs(MAIN)
+    lifecycle = world.history.lifecycle(MAIN)
+    original = scheduler._eligible
+
+    def change_after_check(agent_id):
+        eligible = original(agent_id)
+        assert eligible
+        if change == "archive":
+            world.store.set_archived(new_room, True)
+        elif change == "remove":
+            world.store.set_discussion_members(new_room, [HUMAN])
+        else:
+            world.store.ack(new_room, [1], MAIN)
+        return eligible
+
+    monkeypatch.setattr(scheduler, "_eligible", change_after_check)
+    assert scheduler.run_turn(MAIN) is None
+    assert len(runner.requests) == len(before)
+    assert world.history.runs(MAIN) == before
+    assert world.history.lifecycle(MAIN) == lifecycle
+    assert scheduler.pending_keys(MAIN) == {(room, 1)}
+    assert scheduler._reserved == set()
+    assert scheduler._active == {}
+    monkeypatch.setattr(scheduler, "_eligible", original)
+    assert scheduler.runnable_agents() == ()
+
+
 def test_pause_allows_current_model_and_tool_to_finish(model_settings):
     world = model_settings
     room = mention(world)

@@ -338,6 +338,8 @@ export function useApplication() {
         return;
       }
       if (
+        event.type === "organization.changed" ||
+        event.type === "settings.updated" ||
         event.type.startsWith("member.") ||
         event.type.startsWith("turn.") ||
         event.type === "message.created" ||

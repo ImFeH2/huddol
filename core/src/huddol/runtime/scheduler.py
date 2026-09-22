@@ -428,9 +428,17 @@ class Scheduler:
         state = self.agent_status(agent_id)["state"]
         if state not in ("idle", "error"):
             return False
-        keys = self.pending_keys(agent_id)
-        lifecycle = self.history.lifecycle(agent_id)
-        if state == "error":
+        return self._pending_eligible(
+            agent_id, self.pending_keys(agent_id), self.history.lifecycle(agent_id)
+        )
+
+    def _pending_eligible(
+        self,
+        agent_id: int,
+        keys: frozenset[tuple[int, int]],
+        lifecycle: AgentLifecycle,
+    ) -> bool:
+        if lifecycle.error is not None:
             return bool(self.history.new_mentions(agent_id, tuple(keys)))
         if lifecycle.prepared_sequence is not None:
             return bool(
@@ -518,6 +526,8 @@ class Scheduler:
                 with self.history.transaction():
                     lifecycle = self.history.lifecycle(agent_id)
                     pending = self.pending_keys(agent_id)
+                    if not self._pending_eligible(agent_id, pending, lifecycle):
+                        return None
                     prepared_from_error = (
                         lifecycle.error is not None and self.preparation_due(agent_id)
                     )

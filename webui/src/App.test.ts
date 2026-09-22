@@ -125,6 +125,52 @@ afterEach(() => {
 });
 
 describe("application recovery with controlled hook effects", () => {
+  it.each([
+    ["organization.changed", "scheduler_stopped", 10],
+    ["settings.updated", "model_unavailable", 10],
+    ["settings.updated", "token_limit", 1],
+  ] as const)("refreshes %s for %s", async (type, code, tokenLimit) => {
+    mount();
+    await settle();
+    const members = [
+      {
+        id: 2,
+        name: "Main",
+        type: "agent" as const,
+        state: "blocked" as const,
+        pause_requested: false,
+        reasons: [{ code, message: code, recovery: "Review settings" }],
+      },
+    ];
+    vi.mocked(backend.organization).mockResolvedValueOnce({
+      ...organization,
+      members,
+      token_limit: tokenLimit,
+    });
+    emit({ type });
+    await settle();
+    expect(backend.organization).toHaveBeenCalledTimes(2);
+    expect(render().loaded?.members).toEqual(members);
+    expect(render().loaded?.tokenLimit).toBe(tokenLimit);
+  });
+
+  it("merges organization and settings changes during an active read", async () => {
+    const first = deferred<typeof organization>();
+    vi.mocked(backend.organization)
+      .mockReturnValueOnce(first.promise)
+      .mockResolvedValueOnce({ ...organization, token_limit: 20 });
+    mount();
+    await settle();
+    emit({ type: "organization.changed" });
+    emit({ type: "settings.updated" });
+    emit({ type: "organization.changed" });
+    expect(backend.organization).toHaveBeenCalledTimes(1);
+    first.resolve(organization);
+    await settle();
+    expect(backend.organization).toHaveBeenCalledTimes(2);
+    expect(render().loaded?.tokenLimit).toBe(20);
+  });
+
   it.each(["internal_error", "timeout"])(
     "retries an initial %s on an open connection",
     async (code) => {
