@@ -1251,6 +1251,171 @@ def test_sqlite_progress_failure_preserves_history_and_stops_execution(
     assert scheduler.run_turn(MAIN) is None
 
 
+@pytest.mark.parametrize(
+    "failure_stage", [None, "snapshot", "response", "middle", "finish"]
+)
+def test_turn_model_snapshot_survives_history_saving_and_failure(
+    world, monkeypatch, failure_stage
+):
+    from pydantic_ai import ModelMessagesTypeAdapter, models
+    from pydantic_ai.messages import ModelResponse, TextPart, ToolCallPart
+    from pydantic_ai.models.function import FunctionModel
+
+    from huddol.adapters.model.config import ModelCatalog
+    from huddol.adapters.model.prompt import SYSTEM_PROMPT
+    from huddol.adapters.model.runner import PydanticModelRunner
+
+    monkeypatch.setattr(models, "ALLOW_MODEL_REQUESTS", False)
+    first = ModelCatalog.model_validate(
+        {
+            "providers": [
+                {
+                    "id": "first-provider",
+                    "name": "First",
+                    "api_type": "openai-chat",
+                    "base_url": "https://first.invalid",
+                    "api_key": "unused-first",
+                }
+            ],
+            "models": [
+                {
+                    "id": "first-model",
+                    "provider_id": "first-provider",
+                    "name": "First",
+                    "model": "gpt-5",
+                }
+            ],
+            "default_model_id": "first-model",
+            "default_thinking": "high",
+        }
+    )
+    second = ModelCatalog.model_validate(
+        {
+            "providers": [
+                {
+                    "id": "second-provider",
+                    "name": "Second",
+                    "api_type": "openai-responses",
+                    "base_url": "https://second.invalid",
+                    "api_key": "unused-second",
+                }
+            ],
+            "models": [
+                {
+                    "id": "second-model",
+                    "provider_id": "second-provider",
+                    "name": "Second",
+                    "model": "gpt-5.2",
+                }
+            ],
+            "default_model_id": "second-model",
+            "default_thinking": "low",
+        }
+    )
+    world.settings.set_settings("model", first.model_dump())
+    world.library_tree.write("AGENTS.md", "window instructions\n ")
+    room = mention(world)
+    built = []
+    calls = []
+    executions = []
+    snapshots = []
+    saved = []
+    attempts = []
+    save = world.history.save_progress
+    list_members = AgentTools.list_members
+    fail_at = {"snapshot": 1, "response": 2, "middle": 3}.get(failure_stage)
+    window = world.history.window(MAIN)
+
+    def persist(agent_id, sequence, raw):
+        attempts.append(raw)
+        if len(attempts) == 1:
+            world.settings.set_settings("model", second.model_dump())
+        if len(attempts) == fail_at:
+            world.store._db.execute(
+                "CREATE TEMP TRIGGER fail_snapshot AFTER UPDATE OF messages_json"
+                " ON agent_runs WHEN NEW.status = 'running'"
+                " BEGIN SELECT RAISE(ABORT, 'snapshot write failed'); END"
+            )
+        save(agent_id, sequence, raw)
+        saved.append(raw)
+
+    def track_tools(self):
+        executions.append(1)
+        return list_members(self)
+
+    def build(config):
+        built.append(config)
+        requests = 0
+
+        def respond(messages, info):
+            nonlocal requests
+            requests += 1
+            calls.append(config)
+            snapshots.append(info.model_request_parameters.instruction_parts[0].content)
+            if config == first.resolve(MAIN) and requests < 3:
+                return ModelResponse(
+                    parts=[
+                        ToolCallPart(
+                            "organization",
+                            {"action": "list_members"},
+                            tool_call_id=f"{requests}-{index}",
+                        )
+                        for index in range(3)
+                    ]
+                )
+            if config == first.resolve(MAIN) and failure_stage == "finish":
+                world.store._db.execute(
+                    "CREATE TEMP TRIGGER fail_snapshot AFTER UPDATE OF completed_at"
+                    " ON agent_runs WHEN NEW.status = 'completed'"
+                    " BEGIN SELECT RAISE(ABORT, 'final write failed'); END"
+                )
+            return ModelResponse(parts=[TextPart("done")])
+
+        return FunctionModel(respond)
+
+    monkeypatch.setattr(world.history, "save_progress", persist)
+    monkeypatch.setattr(AgentTools, "list_members", track_tools)
+    scheduler = Scheduler(world, PydanticModelRunner(world.settings, build_model=build))
+    result = scheduler.run_turn(MAIN)
+    expected_calls, expected_tools = {
+        None: (3, 6),
+        "snapshot": (0, 0),
+        "response": (1, 0),
+        "middle": (2, 3),
+        "finish": (3, 6),
+    }[failure_stage]
+    assert result.status == ("completed" if failure_stage is None else "failed"), (
+        result.error
+    )
+    assert calls == [first.resolve(MAIN)] * expected_calls
+    assert len(executions) == expected_tools
+    assert built == ([first.resolve(MAIN)] if expected_calls else [])
+    assert world.history.window(MAIN) == window
+    history = world.history.latest_messages(MAIN)
+    assert history == (saved[-1] if saved else "[]")
+    if saved:
+        assert (
+            ModelMessagesTypeAdapter.validate_json(history)[0].metadata["huddol"][
+                "agents_instructions"
+            ]
+            == "window instructions\n "
+        )
+    if failure_stage is not None:
+        assert world.history.pause_reason(MAIN) == "runtime_error"
+        assert scheduler.run_turn(MAIN) is None
+        world.store._db.execute("DROP TRIGGER fail_snapshot")
+        scheduler.tools_for(HUMAN).resume_agent(MAIN)
+    world.store.append_message(room, HUMAN, "@Main continue")
+    assert scheduler.run_turn(MAIN).status == "completed"
+    assert built[-1] == second.resolve(MAIN)
+    assert calls == [first.resolve(MAIN)] * expected_calls + [second.resolve(MAIN)]
+    assert len(executions) == expected_tools
+    assert snapshots == [SYSTEM_PROMPT + "\n\nwindow instructions\n "] * (
+        expected_calls + 1
+    )
+    assert world.history.window(MAIN) == window
+
+
 @pytest.mark.parametrize("invalid_json", [False, True])
 def test_invalid_history_preserves_sqlite_records_and_window(
     world, monkeypatch, invalid_json
