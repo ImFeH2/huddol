@@ -92,7 +92,7 @@ def test_distinct_discussion_identity_and_deleted_mention(world):
     assert world.store.pending(MAIN) == ()
 
 
-@pytest.mark.parametrize("stage", range(9))
+@pytest.mark.parametrize("stage", range(10))
 def test_migration_failure_rolls_back_and_reopens(tmp_path, monkeypatch, stage):
     path = tmp_path / "legacy.sqlite3"
     with closing(sqlite3.connect(path)) as legacy:
@@ -109,7 +109,10 @@ def test_migration_failure_rolls_back_and_reopens(tmp_path, monkeypatch, stage):
 
     def fail_at_stage(connection, sql, parameters=()):
         if sql in PENDING_REVISION_SCHEMA or sql.startswith(
-            "ALTER TABLE agent_runs ADD COLUMN pending_revision"
+            (
+                "ALTER TABLE agent_runs ADD COLUMN pending_revision",
+                "CREATE INDEX IF NOT EXISTS agent_runs_summary",
+            )
         ):
             seen.append(sql)
             if len(seen) == stage + 1:
@@ -126,7 +129,8 @@ def test_migration_failure_rolls_back_and_reopens(tmp_path, monkeypatch, stage):
         }
         assert (
             check.execute(
-                "SELECT name FROM sqlite_master WHERE name = 'pending_revisions'"
+                "SELECT name FROM sqlite_master WHERE name LIKE 'pending_revision%'"
+                " OR name = 'agent_runs_summary'"
             ).fetchall()
             == []
         )

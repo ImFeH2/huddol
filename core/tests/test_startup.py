@@ -230,6 +230,13 @@ def test_database_initialization_failure_closes_connection_before_ready(
         7, run.sequence, status="completed", messages_json='[{"text":"preserved"}]'
     )
     base._db.execute("DROP INDEX agent_runs_summary")
+    for row in base._db.execute(
+        "SELECT name FROM sqlite_schema WHERE type = 'trigger'"
+        " AND name LIKE 'pending_revision_%'"
+    ):
+        base._db.execute(f'DROP TRIGGER "{row[0]}"')
+    base._db.execute("DROP TABLE pending_revisions")
+    base._db.execute("ALTER TABLE agent_runs DROP COLUMN pending_revision")
     base._db.execute("ALTER TABLE mentions DROP COLUMN length")
     base._db.execute("ALTER TABLE agent_runs DROP COLUMN reminded_json")
     base._db.commit()
@@ -309,6 +316,15 @@ def test_database_initialization_failure_closes_connection_before_ready(
             "SELECT name FROM sqlite_schema WHERE name='agent_runs_summary'"
         ).fetchall()
         assert indexes == []
+        assert "pending_revision" not in {
+            row[1] for row in connection.execute("PRAGMA table_info(agent_runs)")
+        }
+        assert (
+            connection.execute(
+                "SELECT name FROM sqlite_schema WHERE name LIKE 'pending_revision%'"
+            ).fetchall()
+            == []
+        )
         assert connection.execute(
             "SELECT messages_json FROM agent_runs"
         ).fetchall() == [('[{"text":"preserved"}]',)]

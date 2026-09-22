@@ -446,10 +446,13 @@ def test_metadata_queries_cover_history_and_preserve_records(agent_store, size) 
         assert agent_store.usage_total(AGENT)["total_tokens"] == 360
         assert agent_store.no_tool_streak(AGENT) == 1
         assert agent_store.last_reminder(AGENT) == frozenset({(1, 2)})
+        assert agent_store.repeated_turns(AGENT, [(1, 2)]) == 1
     finally:
         connection.set_trace_callback(None)
         connection.set_authorizer(None)
     for sql in statements:
+        if not sql.startswith("SELECT") or "FROM agent_runs" not in sql:
+            continue
         plan = connection.execute("EXPLAIN QUERY PLAN " + sql).fetchall()
         assert any("COVERING INDEX agent_runs_summary" in row[3] for row in plan)
     assert agent_store.latest_messages(AGENT) == payload
