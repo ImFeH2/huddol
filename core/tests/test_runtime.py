@@ -11,6 +11,7 @@ from huddol.adapters.execution.manager import ExecutionManager
 from huddol.adapters.files.tree import DirectoryTree
 from huddol.adapters.sqlite.agent import SqliteAgentStore
 from huddol.adapters.sqlite.store import SqliteStore
+from huddol.core.errors import DomainError
 from huddol.ports.agent import WindowState
 from huddol.runtime.reminder import (
     PREPARATION_PROMPT,
@@ -1468,8 +1469,9 @@ def test_invalid_history_preserves_sqlite_records_and_window(
 
 @pytest.mark.parametrize("mode", ["normal", "overflow", "preparation"])
 @pytest.mark.parametrize("continuous", [False, True])
+@pytest.mark.parametrize("invalid_parameters", [False, True])
 def test_final_sqlite_failure_protects_progress_and_window(
-    world, mode, continuous, caplog
+    world, mode, continuous, invalid_parameters, caplog
 ):
     original = '[{"text":"original"}]'
     progress = '[{"text":"saved progress"}]'
@@ -1492,6 +1494,8 @@ def test_final_sqlite_failure_protects_progress_and_window(
     def respond(request, tools):
         calls.append(1)
         request.persist(progress)
+        if invalid_parameters:
+            world.settings.set_settings("agent", {"no_tool_turns_before_pause": False})
         world.store._db.execute(
             "CREATE TEMP TRIGGER fail_finish AFTER UPDATE OF completed_at ON agent_runs"
             + (
@@ -1533,8 +1537,9 @@ def test_final_sqlite_failure_protects_progress_and_window(
     assert calls == [1]
 
 
+@pytest.mark.parametrize("invalid_parameters", [False, True])
 def test_progress_finish_and_safety_failures_remain_diagnostic_and_stop_agent(
-    world, monkeypatch, caplog
+    world, monkeypatch, caplog, invalid_parameters
 ):
     from pydantic_ai import models
     from pydantic_ai.messages import ModelResponse, ToolCallPart
@@ -1554,6 +1559,8 @@ def test_progress_finish_and_safety_failures_remain_diagnostic_and_stop_agent(
 
     def respond(messages, info):
         calls.append(1)
+        if invalid_parameters:
+            world.settings.set_settings("agent", {"no_tool_turns_before_pause": False})
         world.store._db.executescript(
             "CREATE TEMP TRIGGER fail_history AFTER UPDATE ON agent_runs"
             " BEGIN SELECT RAISE(ABORT, 'history unavailable'); END;"
@@ -1591,7 +1598,11 @@ def test_progress_finish_and_safety_failures_remain_diagnostic_and_stop_agent(
     assert world.store.get_member(MAIN).state == "running"
     assert world.history.window(MAIN).number == 1
     mention(world)
-    assert MAIN not in scheduler.runnable_agents()
+    if invalid_parameters:
+        with pytest.raises(DomainError, match="no_tool_turns_before_pause"):
+            scheduler.runnable_agents()
+    else:
+        assert MAIN not in scheduler.runnable_agents()
     assert scheduler.run_turn(MAIN) is None
     assert calls == [1]
     assert tools == []
@@ -2072,6 +2083,68 @@ def test_parameter_failure_after_a_turn_preserves_history_and_pauses(world) -> N
         "turn.finished",
         {"agent_id": MAIN, "sequence": 1, "status": "failed"},
     )
+
+
+@pytest.mark.parametrize("finish_failure", [False, True])
+@pytest.mark.parametrize("safety_failure", [False, True])
+def test_invalid_parameters_during_finalization_preserve_saved_result(
+    world, finish_failure, safety_failure, caplog
+):
+    mention(world)
+    events = []
+    messages = '[{"text":"completed response"}]'
+    usage = '{"tool_calls":1,"input_tokens":10,"output_tokens":2}'
+
+    def respond(request, tools):
+        request.persist('[{"text":"earlier progress"}]')
+        world.settings.set_settings("agent", {"no_tool_turns_before_pause": False})
+        if finish_failure:
+            world.store._db.execute(
+                "CREATE TEMP TRIGGER fail_error_record AFTER UPDATE ON agent_runs"
+                " WHEN NEW.status = 'failed'"
+                " BEGIN SELECT RAISE(ABORT, 'error record unavailable'); END"
+            )
+        if safety_failure:
+            world.store._db.execute(
+                "CREATE TEMP TRIGGER fail_safety BEFORE INSERT ON agent_safety"
+                " BEGIN SELECT RAISE(ABORT, 'safety unavailable'); END"
+            )
+        return TurnOutcome(messages_json=messages, usage_json=usage)
+
+    runner = RecordingRunner(respond)
+    scheduler = Scheduler(world, runner, on_event=lambda *event: events.append(event))
+    if finish_failure or safety_failure:
+        message = "safety unavailable" if safety_failure else "error record unavailable"
+        with pytest.raises(sqlite3.IntegrityError, match=message) as caught:
+            scheduler.run_turn(MAIN)
+        original = caught.value.__context__
+        if finish_failure and safety_failure:
+            assert isinstance(original, sqlite3.IntegrityError)
+            original = original.__context__
+        if finish_failure:
+            assert isinstance(original, DomainError)
+            assert "no_tool_turns_before_pause" in str(original)
+    else:
+        result = scheduler.run_turn(MAIN)
+        assert result.status == "failed"
+    stored = world.history.runs(MAIN)[0]
+    assert stored.messages_json == messages
+    assert stored.usage_json == usage
+    assert stored.status == ("completed" if finish_failure else "failed")
+    assert "no_tool_turns_before_pause" in caplog.text
+    assert world.history.window(MAIN).number == 1
+    assert not any(name == "window.reset" for name, _ in events)
+    if safety_failure:
+        assert world.history.pause_reason(MAIN) is None
+        assert world.store.get_member(MAIN).state == "running"
+        assert not any(name == "turn.finished" for name, _ in events)
+    else:
+        assert world.history.pause_reason(MAIN) == "runtime_error"
+        assert world.store.get_member(MAIN).state == "paused"
+        assert events[-1][0] == "turn.finished"
+        assert events[-1][1]["status"] == "failed"
+    assert scheduler.run_turn(MAIN) is None
+    assert len(runner.requests) == 1
 
 
 def test_scheduler_failure_logs_and_finishes_inflight_turns(

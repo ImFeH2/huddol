@@ -496,6 +496,30 @@ def test_settings_update_requires_an_object(server, values) -> None:
     assert not any(frame["type"] == "settings.updated" for frame in output.frames())
 
 
+@pytest.mark.parametrize("section", ["agent", "model", "observability"])
+@pytest.mark.parametrize("raw", ["null", "[]", '{"private-value":'])
+def test_corrupt_settings_reject_reads_and_updates_without_changes(
+    server, section, raw
+):
+    dispatcher, output, deps = server
+    with deps.store._db:
+        deps.store._db.execute(
+            "INSERT INTO settings (section, values_json) VALUES (?, ?)"
+            " ON CONFLICT (section) DO UPDATE SET values_json = excluded.values_json",
+            (section, raw),
+        )
+    for method in ("settings.get", "settings.update"):
+        result = call(dispatcher, output, method, section=section, values={})
+        assert result["error"]["code"] == "invalid_setting"
+        assert section in result["error"]["message"]
+        assert "private-value" not in result["error"]["message"]
+    stored = deps.store._db.execute(
+        "SELECT values_json FROM settings WHERE section = ?", (section,)
+    )
+    assert stored[0]["values_json"] == raw
+    assert not any(frame["type"] == "settings.updated" for frame in output.frames())
+
+
 def test_agent_settings_validate_the_complete_update_before_saving(server) -> None:
     dispatcher, output, deps = server
     original = {"request_limit": -1, "token_limit": "1000"}

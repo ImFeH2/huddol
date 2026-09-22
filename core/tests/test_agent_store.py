@@ -313,16 +313,20 @@ def test_invalid_settings_preserve_stored_data_across_restarts(
 ) -> None:
     path = tmp_path / "huddol.sqlite3"
     base = SqliteStore(path)
-    SqliteAgentStore(base._db)
-    with base._db:
-        base._db.execute(
-            "INSERT INTO settings (section, values_json) VALUES (?, ?)", (section, raw)
-        )
-    base.close()
+    try:
+        SqliteAgentStore(base._db)
+        with base._db:
+            base._db.execute(
+                "INSERT INTO settings (section, values_json) VALUES (?, ?)"
+                " ON CONFLICT (section) DO UPDATE SET values_json = excluded.values_json",
+                (section, raw),
+            )
+    finally:
+        base.close()
     base = SqliteStore(path)
     try:
-        store = SqliteAgentStore(base._db)
         with pytest.raises(DomainError) as error:
+            store = SqliteAgentStore(base._db)
             store.get_settings(section)
         assert error.value.code == "invalid_setting"
         assert section in str(error.value)

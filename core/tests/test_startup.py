@@ -33,7 +33,8 @@ def stored_setting(directory: Path, section: str, raw: str) -> None:
         SqliteAgentStore(store._db)
         with store._db:
             store._db.execute(
-                "INSERT INTO settings (section, values_json) VALUES (?, ?)",
+                "INSERT INTO settings (section, values_json) VALUES (?, ?)"
+                " ON CONFLICT (section) DO UPDATE SET values_json = excluded.values_json",
                 (section, raw),
             )
     finally:
@@ -68,7 +69,8 @@ def test_invalid_settings_fail_before_ready(tmp_path, raw, transport) -> None:
 
 
 @pytest.mark.parametrize(
-    "section,raw", [("agent", '{"token_limit":-1}'), ("execution", "null")]
+    "section,raw",
+    [("agent", '{"token_limit":-1}'), ("execution", "null"), ("model", "null")],
 )
 def test_startup_failure_releases_created_resources(
     tmp_path, monkeypatch, section, raw
