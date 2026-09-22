@@ -2025,12 +2025,114 @@ def test_no_limit_configured_means_no_ceiling(world, values) -> None:
     assert scheduler.runnable_agents() == (MAIN,)
 
 
-def test_a_malformed_limit_is_treated_as_no_limit(world) -> None:
-    mention(world)
+@pytest.mark.parametrize("pending", [False, True])
+@pytest.mark.parametrize("method", ["start", "tick", "run_turn"])
+def test_invalid_parameters_prevent_scheduling(world, pending, method) -> None:
+    from huddol.core.errors import DomainError
+
+    if pending:
+        mention(world)
     world.settings.set_settings("agent", {"token_limit": "not a number"})
-    scheduler = Scheduler(world, RecordingRunner())
-    assert scheduler.token_limit() == 0
-    assert scheduler.runnable_agents() == (MAIN,)
+    runner = RecordingRunner()
+    scheduler = Scheduler(world, runner)
+    with pytest.raises(DomainError, match="token_limit"):
+        getattr(scheduler, method)(*([MAIN] if method == "run_turn" else []))
+    assert scheduler._loop is None
+    assert scheduler._threads == {}
+    assert runner.requests == []
+    assert world.history.runs(MAIN) == ()
+    assert world.store.get_member(MAIN).state == "idle"
+
+
+def test_parameter_failure_after_a_turn_preserves_history_and_pauses(world) -> None:
+    mention(world)
+    messages = '[{"kind":"response","text":"saved progress"}]'
+    usage = '{"tool_calls":1,"input_tokens":10,"output_tokens":2}'
+
+    def respond(request, tools):
+        world.settings.set_settings("agent", {"no_tool_turns_before_pause": False})
+        return TurnOutcome(messages_json=messages, usage_json=usage)
+
+    events = []
+    scheduler = Scheduler(
+        world,
+        RecordingRunner(respond),
+        on_event=lambda name, payload: events.append((name, payload)),
+    )
+    result = scheduler.run_turn(MAIN)
+    assert result.status == "failed"
+    assert "no_tool_turns_before_pause" in result.error
+    stored = world.history.runs(MAIN)[0]
+    assert stored.messages_json == messages
+    assert stored.usage_json == usage
+    assert world.history.pause_reason(MAIN) == "runtime_error"
+    assert world.store.get_member(MAIN).state == "paused"
+    assert world.history.window(MAIN).number == 1
+    assert events[-1] == (
+        "turn.finished",
+        {"agent_id": MAIN, "sequence": 1, "status": "failed"},
+    )
+
+
+def test_scheduler_failure_logs_and_finishes_inflight_turns(
+    world, tmp_path, monkeypatch
+) -> None:
+    import logging
+    import threading
+
+    from huddol.__main__ import configure_logging
+
+    entered = threading.Event()
+    release = threading.Event()
+    failures = []
+    monkeypatch.setattr(threading, "excepthook", failures.append)
+    handlers = configure_logging(tmp_path)
+    mention(world)
+
+    def respond(request, tools):
+        entered.set()
+        assert release.wait(5)
+        return TurnOutcome(
+            messages_json='[{"kind":"response"}]', usage_json='{"tool_calls":1}'
+        )
+
+    runner = RecordingRunner(respond)
+    scheduler = Scheduler(world, runner)
+    try:
+        scheduler.start(poll_seconds=0.01)
+        assert entered.wait(5)
+        loop = scheduler._loop
+        world.settings.set_settings("agent", {"max_concurrent_turns": 0})
+        scheduler.wake()
+        loop.join(5)
+        assert not loop.is_alive()
+        assert len(failures) == 1
+        assert "max_concurrent_turns" in str(failures[0].exc_value)
+        log = (tmp_path / "logs" / "huddol.log").read_text()
+        assert "Scheduler stopped after a runtime failure" in log
+        assert "Agent parameter max_concurrent_turns" in log
+        room = world.store.create_discussion("waiting", [HUMAN, HELPER])
+        world.store.append_message(room.id, HUMAN, "@Helper please help")
+        assert world.store.get_member(HELPER).state == "idle"
+        assert world.history.runs(HELPER) == ()
+        release.set()
+        scheduler._threads[MAIN].join(5)
+        assert not scheduler._threads[MAIN].is_alive()
+        assert world.history.runs(MAIN)[0].status == "failed"
+        assert world.history.pause_reason(MAIN) == "runtime_error"
+        assert world.store.get_member(MAIN).state == "paused"
+        world.settings.set_settings("agent", {"max_concurrent_turns": 1})
+        scheduler.wake()
+        scheduler.start()
+        assert scheduler._loop is loop
+        assert not loop.is_alive()
+        assert len(runner.requests) == 1
+    finally:
+        release.set()
+        scheduler.stop()
+        for handler in handlers:
+            logging.getLogger().removeHandler(handler)
+            handler.close()
 
 
 def test_legacy_limits_do_not_control_scheduling(world) -> None:

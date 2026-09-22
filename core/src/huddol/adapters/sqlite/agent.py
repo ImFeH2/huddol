@@ -7,6 +7,7 @@ from collections.abc import Callable, Sequence
 
 from huddol.adapters.model.config import ModelCatalog
 from huddol.adapters.sqlite.store import LockedConnection, first
+from huddol.core.errors import DomainError
 from huddol.ports.agent import AgentRun, TurnEffect, WindowState
 
 SCHEMA = """
@@ -392,8 +393,17 @@ class SqliteAgentStore:
         )
         if row is None:
             return None
-        loaded = json.loads(str(row["values_json"]))
-        return loaded if isinstance(loaded, dict) else None
+        try:
+            loaded = json.loads(str(row["values_json"]))
+        except json.JSONDecodeError as error:
+            raise DomainError(
+                "invalid_setting", f"Settings section {section} contains invalid JSON"
+            ) from error
+        if not isinstance(loaded, dict):
+            raise DomainError(
+                "invalid_setting", f"Settings section {section} must be a JSON object"
+            )
+        return loaded
 
     def update_settings(
         self,

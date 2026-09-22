@@ -330,7 +330,11 @@ class Api:
 
         def settings_update(params: dict[str, Any]) -> Any:
             section = str(params.get("section", "model"))
-            values = dict(params.get("values", {}))
+            values = params.get("values", {})
+            if not isinstance(values, dict):
+                raise DomainError(
+                    "invalid_setting", "Settings values must be an object"
+                )
             if section == "model":
 
                 def update_model(stored: dict[str, object] | None) -> dict[str, object]:
@@ -357,6 +361,8 @@ class Api:
                 self._dispatcher.emit("settings.updated", {"section": section})
                 return result
             merged = {**(settings.get_settings(section) or {}), **values}
+            if section == "agent":
+                validate_parameters(merged)
             settings.set_settings(section, merged)
             self._dispatcher.emit("settings.updated", {"section": section})
             return settings_get({"section": section})

@@ -7,6 +7,7 @@ import os
 import secrets
 import sys
 import threading
+from contextlib import ExitStack
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -222,107 +223,119 @@ def main(argv: list[str] | None = None) -> int:
         sys.stderr.write(f"Huddol is already running{where} for {directory}\n")
         return ALREADY_RUNNING
     directory.mkdir(parents=True, exist_ok=True)
-    handlers = configure_logging(directory)
-    log = logging.getLogger("huddol")
-    store = SqliteStore(directory / "huddol.sqlite3")
-    agent_store = SqliteAgentStore(store._db)
-    agent_store.mark_interrupted()
-    agent_store.mark_session_start()
+    with ExitStack() as resources:
+        handlers = configure_logging(directory)
+        for handler in handlers:
+            resources.callback(handler.close)
+            resources.callback(logging.getLogger().removeHandler, handler)
+        log = logging.getLogger("huddol")
+        announced = False
 
-    if store.get_member(HUMAN_ID) is None:
-        store.create_member("human", "You")
-    for member in store.list_members():
-        if member.is_agent and member.state == "running":
-            store.set_agent_state(member.id, "idle")
+        def remove_run_file() -> None:
+            if announced:
+                run_file.unlink(missing_ok=True)
 
-    def agent_directory_for(member_id: int) -> Path:
-        path = directory / "agents" / str(member_id)
-        path.mkdir(parents=True, exist_ok=True)
-        return path
+        resources.callback(remove_run_file)
+        store = SqliteStore(directory / "huddol.sqlite3")
+        resources.callback(store.close)
+        agent_store = SqliteAgentStore(store._db)
+        agent_store.mark_interrupted()
+        agent_store.mark_session_start()
 
-    execution = ExecutionManager(
-        settings=agent_store.get_settings("execution"), tolerant=True
-    )
-    deps = Dependencies(
-        store=store,
-        history=agent_store,
-        settings=agent_store,
-        execution=execution,
-        agent_directory_for=agent_directory_for,
-        library_tree=DirectoryTree(directory / "library"),
-        workspace_tree_for=lambda member_id: DirectoryTree(
-            directory / "agents" / str(member_id) / "workspace"
-        ),
-    )
+        if store.get_member(HUMAN_ID) is None:
+            store.create_member("human", "You")
+        for member in store.list_members():
+            if member.is_agent and member.state == "running":
+                store.set_agent_state(member.id, "idle")
 
-    dispatcher = Dispatcher()
+        def agent_directory_for(member_id: int) -> Path:
+            path = directory / "agents" / str(member_id)
+            path.mkdir(parents=True, exist_ok=True)
+            return path
 
-    scheduler = Scheduler(
-        deps,
-        PydanticModelRunner(agent_store),
-        on_event=lambda name, payload: dispatcher.emit(name, payload),
-    )
-    Api(scheduler, dispatcher)
-
-    stop = Stop()
-    dispatch_lock = threading.Lock()
-    server: WebServer | None = None
-    install_signal_handlers(stop.stop)
-    scheduler.start()
-
-    if stdio:
-        sink = stdio_sink(stop)
-        dispatcher.attach(sink)
-        write_run_file(run_file, None, None)
-        log.info("Reading stdio requests with data directory %s", directory)
-        announce({"type": "ready", "transport": STDIO})
-        threading.Thread(
-            target=read_requests,
-            args=(dispatcher, sink, stop, dispatch_lock),
-            name="huddol-stdio",
-            daemon=True,
-        ).start()
-    else:
-        token = load_token(directory, options.token)
-        server = WebServer(
-            dispatcher,
-            token,
-            webui_directory(options.webui_dir),
-            port=options.port,
+        execution = ExecutionManager(
+            settings=agent_store.get_settings("execution"), tolerant=True
         )
-        server.start()
-        write_run_file(run_file, server.port, token)
-        log.info(
-            "Listening on http://127.0.0.1:%d with data directory %s",
-            server.port,
-            directory,
+        scheduler: Scheduler | None = None
+        dispatch_lock = threading.Lock()
+
+        def stop_execution() -> None:
+            with dispatch_lock:
+                if scheduler is None:
+                    execution.close()
+                else:
+                    scheduler.stop()
+
+        resources.callback(stop_execution)
+        deps = Dependencies(
+            store=store,
+            history=agent_store,
+            settings=agent_store,
+            execution=execution,
+            agent_directory_for=agent_directory_for,
+            library_tree=DirectoryTree(directory / "library"),
+            workspace_tree_for=lambda member_id: DirectoryTree(
+                directory / "agents" / str(member_id) / "workspace"
+            ),
         )
-        announce(
-            {
-                "type": "ready",
-                "port": server.port,
-                "token": token,
-                "url": f"http://127.0.0.1:{server.port}/?token={quote(token, safe='')}",
-            }
+
+        dispatcher = Dispatcher()
+        scheduler = Scheduler(
+            deps,
+            PydanticModelRunner(agent_store),
+            on_event=lambda name, payload: dispatcher.emit(name, payload),
         )
-        if stdin_is_piped():
+        Api(scheduler, dispatcher)
+
+        stop = Stop()
+        install_signal_handlers(stop.stop)
+        scheduler.start()
+
+        if stdio:
+            sink = stdio_sink(stop)
+            dispatcher.attach(sink)
+            write_run_file(run_file, None, None)
+            announced = True
+            log.info("Reading stdio requests with data directory %s", directory)
+            announce({"type": "ready", "transport": STDIO})
             threading.Thread(
-                target=wait_for_stdin_shutdown, args=(stop,), daemon=True
+                target=read_requests,
+                args=(dispatcher, sink, stop, dispatch_lock),
+                name="huddol-stdio",
+                daemon=True,
             ).start()
+        else:
+            token = load_token(directory, options.token)
+            server = WebServer(
+                dispatcher,
+                token,
+                webui_directory(options.webui_dir),
+                port=options.port,
+            )
+            resources.callback(server.stop)
+            server.start()
+            write_run_file(run_file, server.port, token)
+            announced = True
+            log.info(
+                "Listening on http://127.0.0.1:%d with data directory %s",
+                server.port,
+                directory,
+            )
+            announce(
+                {
+                    "type": "ready",
+                    "port": server.port,
+                    "token": token,
+                    "url": f"http://127.0.0.1:{server.port}/?token={quote(token, safe='')}",
+                }
+            )
+            if stdin_is_piped():
+                threading.Thread(
+                    target=wait_for_stdin_shutdown, args=(stop,), daemon=True
+                ).start()
 
-    try:
         reason = stop.wait()
         log.info("Shutting down (%s)", reason)
-    finally:
-        with dispatch_lock:
-            if server is not None:
-                server.stop()
-            scheduler.stop()
-            store.close()
-            run_file.unlink(missing_ok=True)
-            for handler in handlers:
-                logging.getLogger().removeHandler(handler)
-                handler.close()
     return 0
 
 

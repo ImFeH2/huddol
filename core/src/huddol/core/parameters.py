@@ -17,15 +17,7 @@ class AgentParameters:
 
 
 def agent_parameters(values: Mapping[str, object] | None) -> AgentParameters:
-    stored = values or {}
-    return AgentParameters(
-        **{
-            field.name: value
-            for field in fields(AgentParameters)
-            if type(value := stored.get(field.name)) is int
-            and value >= (0 if field.name in ("token_limit", "request_limit") else 1)
-        }
-    )
+    return AgentParameters(**validate_parameters({} if values is None else values))
 
 
 def validate_parameters(values: Mapping[str, object]) -> dict[str, int]:
@@ -37,6 +29,8 @@ def validate_parameters(values: Mapping[str, object]) -> dict[str, int]:
         minimum = 0 if key in ("token_limit", "request_limit") else 1
         if type(value) is not int or value < minimum:
             kind = "non-negative" if minimum == 0 else "positive"
-            raise DomainError("invalid_parameter", f"{key} must be a {kind} integer")
+            raise DomainError(
+                "invalid_parameter", f"Agent parameter {key} must be a {kind} integer"
+            )
         validated[key] = value
     return validated

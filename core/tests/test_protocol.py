@@ -421,10 +421,6 @@ def test_agent_settings_fill_defaults_merge_and_emit_events(server) -> None:
     assert (
         call(dispatcher, output, "settings.get", section="agent")["result"] == defaults
     )
-    deps.settings.set_settings("agent", {"legacy": 10, "context_window_tokens": False})
-    assert (
-        call(dispatcher, output, "settings.get", section="agent")["result"] == defaults
-    )
     values = {
         "context_window_tokens": 12345,
         "exchange_nudge_after": 3,
@@ -446,7 +442,7 @@ def test_agent_settings_fill_defaults_merge_and_emit_events(server) -> None:
     assert (
         call(dispatcher, output, "settings.get", section="agent")["result"] == updated
     )
-    assert deps.settings.get_settings("agent") == {"legacy": 10, **updated}
+    assert deps.settings.get_settings("agent") == updated
     assert [
         frame for frame in output.frames() if frame["type"] == "settings.updated"
     ] == [{"type": "settings.updated", "section": "agent"}]
@@ -487,6 +483,44 @@ def test_agent_settings_validation_is_atomic(server, values, code) -> None:
     assert rejected["error"]["code"] == code
     assert deps.settings.get_settings("agent") == original
     assert not any(frame["type"] == "settings.updated" for frame in output.frames())
+
+
+@pytest.mark.parametrize("values", [None, False, 1, "", [], [["token_limit", 0]]])
+def test_settings_update_requires_an_object(server, values) -> None:
+    dispatcher, output, deps = server
+    rejected = call(
+        dispatcher, output, "settings.update", section="agent", values=values
+    )
+    assert rejected["error"]["code"] == "invalid_setting"
+    assert deps.settings.get_settings("agent") is None
+    assert not any(frame["type"] == "settings.updated" for frame in output.frames())
+
+
+def test_agent_settings_validate_the_complete_update_before_saving(server) -> None:
+    dispatcher, output, deps = server
+    original = {"request_limit": -1, "token_limit": "1000"}
+    deps.settings.set_settings("agent", original)
+    rejected = call(dispatcher, output, "settings.get", section="agent")
+    assert rejected["error"]["code"] == "invalid_parameter"
+    assert "request_limit" in rejected["error"]["message"]
+    rejected = call(
+        dispatcher,
+        output,
+        "settings.update",
+        section="agent",
+        values={"request_limit": 5},
+    )
+    assert rejected["error"]["code"] == "invalid_parameter"
+    assert "token_limit" in rejected["error"]["message"]
+    assert deps.settings.get_settings("agent") == original
+    assert not any(frame["type"] == "settings.updated" for frame in output.frames())
+    corrected = {"request_limit": 5, "token_limit": 1000}
+    result = call(
+        dispatcher, output, "settings.update", section="agent", values=corrected
+    )["result"]
+    assert result == {**asdict(AgentParameters()), **corrected}
+    assert deps.settings.get_settings("agent") == corrected
+    assert call(dispatcher, output, "settings.get", section="agent")["result"] == result
 
 
 @pytest.mark.parametrize("configured", [False, True])

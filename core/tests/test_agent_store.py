@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from pathlib import Path
@@ -9,6 +10,7 @@ import pytest
 from huddol.adapters.model.config import ModelCatalog
 from huddol.adapters.sqlite.agent import SqliteAgentStore
 from huddol.adapters.sqlite.store import SqliteStore
+from huddol.core.errors import DomainError
 from huddol.ports.agent import WindowState
 from huddol.services.history import History
 
@@ -300,6 +302,41 @@ def test_settings_round_trip_without_a_directory_table(
         )
     }
     assert "write_directories" not in tables
+
+
+@pytest.mark.parametrize("section", ["agent", "model", "execution", "observability"])
+@pytest.mark.parametrize(
+    "raw", ["null", "[]", "false", "0", '"private-value"', '{"private-value":']
+)
+def test_invalid_settings_preserve_stored_data_across_restarts(
+    tmp_path, section, raw
+) -> None:
+    path = tmp_path / "huddol.sqlite3"
+    base = SqliteStore(path)
+    SqliteAgentStore(base._db)
+    with base._db:
+        base._db.execute(
+            "INSERT INTO settings (section, values_json) VALUES (?, ?)", (section, raw)
+        )
+    base.close()
+    base = SqliteStore(path)
+    try:
+        store = SqliteAgentStore(base._db)
+        with pytest.raises(DomainError) as error:
+            store.get_settings(section)
+        assert error.value.code == "invalid_setting"
+        assert section in str(error.value)
+        assert "private-value" not in str(error.value)
+        if raw.startswith("{"):
+            assert isinstance(error.value.__cause__, json.JSONDecodeError)
+        assert (
+            base._db.execute(
+                "SELECT values_json FROM settings WHERE section = ?", (section,)
+            )[0]["values_json"]
+            == raw
+        )
+    finally:
+        base.close()
 
 
 def test_effects_are_numbered_per_turn_and_read_back_in_order(

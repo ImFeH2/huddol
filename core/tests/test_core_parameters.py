@@ -10,8 +10,8 @@ from huddol.core.parameters import (
 )
 
 
-@pytest.mark.parametrize("values", [None, {}, {"unknown": 10}])
-def test_parameters_fill_defaults_and_ignore_unknown_keys(values) -> None:
+@pytest.mark.parametrize("values", [None, {}])
+def test_parameters_fill_defaults(values) -> None:
     assert asdict(agent_parameters(values)) == {
         "context_window_tokens": 200_000,
         "exchange_nudge_after": 6,
@@ -32,33 +32,41 @@ def test_parameters_accept_positive_integers() -> None:
 
 
 @pytest.mark.parametrize("key", [field.name for field in fields(AgentParameters)])
-@pytest.mark.parametrize("value", [-1, True, False, "100", 1.5, None])
-def test_invalid_parameters_are_ignored_on_read_and_rejected_on_write(
-    key, value
+@pytest.mark.parametrize("value", [-1, True, False, "100", 1.5, None, [], {}])
+@pytest.mark.parametrize("validate", [agent_parameters, validate_parameters])
+def test_invalid_parameters_are_rejected_on_read_and_write(
+    key, value, validate
 ) -> None:
-    values = {key: value}
-    assert agent_parameters(values) == AgentParameters()
     with pytest.raises(DomainError) as error:
-        validate_parameters(values)
+        validate({key: value})
     assert error.value.code == "invalid_parameter"
     kind = "non-negative" if key in ("token_limit", "request_limit") else "positive"
-    assert str(error.value) == f"{key} must be a {kind} integer"
+    assert str(error.value) == f"Agent parameter {key} must be a {kind} integer"
 
 
 @pytest.mark.parametrize("key", [field.name for field in fields(AgentParameters)])
 def test_limits_accept_zero(key) -> None:
     values = {key: 0}
-    assert agent_parameters(values) == AgentParameters()
     if key in ("token_limit", "request_limit"):
+        assert agent_parameters(values) == AgentParameters()
         assert validate_parameters(values) == values
     else:
-        with pytest.raises(DomainError) as error:
-            validate_parameters(values)
-        assert error.value.code == "invalid_parameter"
+        for validate in (agent_parameters, validate_parameters):
+            with pytest.raises(DomainError) as error:
+                validate(values)
+            assert error.value.code == "invalid_parameter"
 
 
-def test_unknown_parameters_are_rejected_on_write() -> None:
+@pytest.mark.parametrize("key", [field.name for field in fields(AgentParameters)])
+def test_missing_fields_use_defaults(key) -> None:
+    values = {field.name: 100 for field in fields(AgentParameters) if field.name != key}
+    expected = {**values, key: getattr(AgentParameters(), key)}
+    assert asdict(agent_parameters(values)) == expected
+
+
+@pytest.mark.parametrize("validate", [agent_parameters, validate_parameters])
+def test_unknown_parameters_are_rejected_on_read_and_write(validate) -> None:
     with pytest.raises(DomainError) as error:
-        validate_parameters({"unknown": 100})
+        validate({"unknown": 100})
     assert error.value.code == "invalid_setting"
     assert str(error.value) == "Unknown Agent parameter: unknown"

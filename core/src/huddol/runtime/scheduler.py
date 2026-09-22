@@ -84,6 +84,7 @@ class Scheduler:
     def start(self, poll_seconds: float = 0.2) -> None:
         if self._loop is not None:
             return
+        self.parameters()
         self._loop = threading.Thread(
             target=self.serve,
             args=(poll_seconds,),
@@ -268,6 +269,7 @@ class Scheduler:
         )
         status = "completed"
         error: str | None = None
+        usage_json: str | None = None
         context_exceeded = False
         finalized = False
         pause_reason: str | None = None
@@ -291,6 +293,7 @@ class Scheduler:
                     TurnBinding(agent_id, run.sequence),
                 ),
             )
+            usage_json = outcome.usage_json
             context_exceeded = outcome.context_exceeded
             if outcome.error:
                 status = "failed"
@@ -303,8 +306,16 @@ class Scheduler:
                 usage_json=outcome.usage_json,
                 error=error,
             )
+            persisted_history = outcome.messages_json
             finalized = True
+            if (
+                status == "completed"
+                and self.history.no_tool_streak(agent_id)
+                >= self.parameters().no_tool_turns_before_pause
+            ):
+                pause_reason = "no_tool_calls"
         except Exception as failure:
+            finalized = False
             context_exceeded = False
             pause_reason = "runtime_error"
             status = "failed"
@@ -315,17 +326,11 @@ class Scheduler:
                 run.sequence,
                 status=status,
                 messages_json=persisted_history,
+                usage_json=usage_json,
                 error=error,
             )
             finalized = True
         finally:
-            if (
-                finalized
-                and status == "completed"
-                and self.history.no_tool_streak(agent_id)
-                >= self.parameters().no_tool_turns_before_pause
-            ):
-                pause_reason = "no_tool_calls"
             if pause_reason is not None:
                 self.history.pause_for_safety(agent_id, pause_reason)
                 self.store.set_agent_state(agent_id, "paused")
@@ -335,6 +340,7 @@ class Scheduler:
                 reason = "prepared"
             elif (
                 reminder is not None
+                and pause_reason != "runtime_error"
                 and context_exceeded
                 and run.sequence != self.history.window(agent_id).since_sequence
             ):
@@ -356,6 +362,7 @@ class Scheduler:
         return TurnRecord(agent_id, run.sequence, status, error)
 
     def tick(self) -> tuple[int, ...]:
+        self.parameters()
         started: list[int] = []
         for agent_id in self.runnable_agents():
             with self._lock:
@@ -381,7 +388,11 @@ class Scheduler:
         return tuple(started)
 
     def serve(self, poll_seconds: float = 0.2) -> None:
-        while not self._stop.is_set():
-            self.tick()
-            self._wake.wait(timeout=poll_seconds)
-            self._wake.clear()
+        try:
+            while not self._stop.is_set():
+                self.tick()
+                self._wake.wait(timeout=poll_seconds)
+                self._wake.clear()
+        except Exception:
+            logger.exception("Scheduler stopped after a runtime failure")
+            raise
