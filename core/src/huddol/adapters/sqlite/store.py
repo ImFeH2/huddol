@@ -88,6 +88,104 @@ CREATE TABLE IF NOT EXISTS agent_runs (
 """
 
 
+PENDING_REVISION_SCHEMA = (
+    (
+        "CREATE TABLE IF NOT EXISTS pending_revisions "
+        "(member_id INTEGER PRIMARY KEY, revision INTEGER NOT NULL)"
+    ),
+    """
+    CREATE TRIGGER IF NOT EXISTS pending_revision_mention_insert AFTER INSERT ON mentions
+    WHEN EXISTS (
+        SELECT 1 FROM discussion_members dm JOIN discussions d ON d.id = dm.discussion_id
+        WHERE dm.discussion_id = NEW.discussion_id AND dm.member_id = NEW.member_id AND d.archived = 0
+    ) AND NOT EXISTS (
+        SELECT 1 FROM acks WHERE discussion_id = NEW.discussion_id
+        AND message_id = NEW.message_id AND member_id = NEW.member_id
+    )
+    BEGIN
+        INSERT INTO pending_revisions VALUES (NEW.member_id, 1)
+        ON CONFLICT(member_id) DO UPDATE SET revision = revision + 1;
+    END
+    """,
+    """
+    CREATE TRIGGER IF NOT EXISTS pending_revision_mention_delete AFTER DELETE ON mentions
+    WHEN EXISTS (
+        SELECT 1 FROM discussion_members dm JOIN discussions d ON d.id = dm.discussion_id
+        WHERE dm.discussion_id = OLD.discussion_id AND dm.member_id = OLD.member_id AND d.archived = 0
+    ) AND NOT EXISTS (
+        SELECT 1 FROM acks WHERE discussion_id = OLD.discussion_id
+        AND message_id = OLD.message_id AND member_id = OLD.member_id
+    )
+    BEGIN
+        INSERT INTO pending_revisions VALUES (OLD.member_id, 1)
+        ON CONFLICT(member_id) DO UPDATE SET revision = revision + 1;
+    END
+    """,
+    """
+    CREATE TRIGGER IF NOT EXISTS pending_revision_ack_insert AFTER INSERT ON acks
+    WHEN EXISTS (
+        SELECT 1 FROM mentions m JOIN discussion_members dm
+        ON dm.discussion_id = m.discussion_id AND dm.member_id = m.member_id
+        JOIN discussions d ON d.id = m.discussion_id AND d.archived = 0
+        WHERE m.discussion_id = NEW.discussion_id AND m.message_id = NEW.message_id AND m.member_id = NEW.member_id
+    )
+    BEGIN
+        INSERT INTO pending_revisions VALUES (NEW.member_id, 1)
+        ON CONFLICT(member_id) DO UPDATE SET revision = revision + 1;
+    END
+    """,
+    """
+    CREATE TRIGGER IF NOT EXISTS pending_revision_ack_delete AFTER DELETE ON acks
+    WHEN EXISTS (
+        SELECT 1 FROM mentions m JOIN discussion_members dm
+        ON dm.discussion_id = m.discussion_id AND dm.member_id = m.member_id
+        JOIN discussions d ON d.id = m.discussion_id AND d.archived = 0
+        WHERE m.discussion_id = OLD.discussion_id AND m.message_id = OLD.message_id AND m.member_id = OLD.member_id
+    )
+    BEGIN
+        INSERT INTO pending_revisions VALUES (OLD.member_id, 1)
+        ON CONFLICT(member_id) DO UPDATE SET revision = revision + 1;
+    END
+    """,
+    """
+    CREATE TRIGGER IF NOT EXISTS pending_revision_member_insert AFTER INSERT ON discussion_members
+    WHEN EXISTS (
+        SELECT 1 FROM mentions m JOIN discussions d ON d.id = m.discussion_id AND d.archived = 0
+        LEFT JOIN acks a ON a.discussion_id = m.discussion_id AND a.message_id = m.message_id AND a.member_id = m.member_id
+        WHERE m.discussion_id = NEW.discussion_id AND m.member_id = NEW.member_id AND a.member_id IS NULL
+    )
+    BEGIN
+        INSERT INTO pending_revisions VALUES (NEW.member_id, 1)
+        ON CONFLICT(member_id) DO UPDATE SET revision = revision + 1;
+    END
+    """,
+    """
+    CREATE TRIGGER IF NOT EXISTS pending_revision_member_delete AFTER DELETE ON discussion_members
+    WHEN EXISTS (
+        SELECT 1 FROM mentions m JOIN discussions d ON d.id = m.discussion_id AND d.archived = 0
+        LEFT JOIN acks a ON a.discussion_id = m.discussion_id AND a.message_id = m.message_id AND a.member_id = m.member_id
+        WHERE m.discussion_id = OLD.discussion_id AND m.member_id = OLD.member_id AND a.member_id IS NULL
+    )
+    BEGIN
+        INSERT INTO pending_revisions VALUES (OLD.member_id, 1)
+        ON CONFLICT(member_id) DO UPDATE SET revision = revision + 1;
+    END
+    """,
+    """
+    CREATE TRIGGER IF NOT EXISTS pending_revision_archive AFTER UPDATE OF archived ON discussions
+    WHEN OLD.archived != NEW.archived
+    BEGIN
+        INSERT INTO pending_revisions
+        SELECT DISTINCT m.member_id, 1 FROM mentions m JOIN discussion_members dm
+        ON dm.discussion_id = m.discussion_id AND dm.member_id = m.member_id
+        LEFT JOIN acks a ON a.discussion_id = m.discussion_id AND a.message_id = m.message_id AND a.member_id = m.member_id
+        WHERE m.discussion_id = NEW.id AND a.member_id IS NULL
+        ON CONFLICT(member_id) DO UPDATE SET revision = revision + 1;
+    END
+    """,
+)
+
+
 def first(rows: list[sqlite3.Row]) -> sqlite3.Row | None:
     return rows[0] if rows else None
 
@@ -224,6 +322,20 @@ class SqliteStore:
                 "ALTER TABLE agent_runs ADD COLUMN reminded_json TEXT NOT NULL DEFAULT '[]'"
             )
         self._db.commit()
+        try:
+            with self._db:
+                if "pending_revision" not in {
+                    row["name"]
+                    for row in self._db.execute("PRAGMA table_info(agent_runs)")
+                }:
+                    self._db.execute(
+                        "ALTER TABLE agent_runs ADD COLUMN pending_revision INTEGER NOT NULL DEFAULT -1"
+                    )
+                for statement in PENDING_REVISION_SCHEMA:
+                    self._db.execute(statement)
+        except BaseException:
+            self._db.close()
+            raise
 
     def close(self) -> None:
         self._db.close()
@@ -373,18 +485,21 @@ class SqliteStore:
         self, discussion_id: int, member_ids: Sequence[int]
     ) -> Discussion:
         with self._write() as db:
-            if self.get_discussion(discussion_id) is None:
+            discussion = self.get_discussion(discussion_id)
+            if discussion is None:
                 raise DomainError(
                     "not_found", f"Discussion {discussion_id} does not exist"
                 )
             self._active_member_ids(member_ids)
-            db.execute(
-                "DELETE FROM discussion_members WHERE discussion_id = ?",
-                (discussion_id,),
+            current = set(discussion.member_ids)
+            desired = set(member_ids)
+            db.executemany(
+                "DELETE FROM discussion_members WHERE discussion_id = ? AND member_id = ?",
+                [(discussion_id, member_id) for member_id in sorted(current - desired)],
             )
             db.executemany(
                 "INSERT INTO discussion_members (discussion_id, member_id) VALUES (?, ?)",
-                [(discussion_id, member_id) for member_id in dict.fromkeys(member_ids)],
+                [(discussion_id, member_id) for member_id in sorted(desired - current)],
             )
             discussion = self.get_discussion(discussion_id)
             assert discussion is not None

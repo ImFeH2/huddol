@@ -1350,7 +1350,7 @@ def wait_for_persisted_turn(data: Path, agent_id: int, sequence: int) -> None:
     raise AssertionError(f"Agent {agent_id} did not finish Turn {sequence}")
 
 
-def test_a_restart_reminds_agents_about_unhandled_mentions_once(
+def test_restart_preserves_completed_count_and_reminder_identity(
     tmp_path: Path, local_model
 ) -> None:
     from huddol.adapters.sqlite.agent import SqliteAgentStore
@@ -1358,68 +1358,35 @@ def test_a_restart_reminds_agents_about_unhandled_mentions_once(
     from huddol.runtime.reminder import build_reminder
 
     data = tmp_path / "data"
-    configure_local_model(data, local_model)
-    with Kernel(data) as kernel:
-        with kernel.connect() as connection:
-            client = Client(connection)
-            client.call(
-                {
-                    "id": 1,
-                    "method": "organization.create_agent",
-                    "params": {"name": "Main"},
-                }
-            )
-            client.call(
-                {
-                    "id": 2,
-                    "method": "discussion.create",
-                    "params": {"topic": "restart", "member_ids": [2]},
-                }
-            )
-            client.send(
-                {
-                    "id": 3,
-                    "method": "discussion.send",
-                    "params": {"discussion_id": 1, "body": "@Main keep going"},
-                }
-            )
-            started = client.wait_for(lambda frame: frame.get("type") == "turn.started")
-            assert started["agent_id"] == 2
-            assert started["sequence"] == 1
-            assert started["kind"] == "reminder"
-            assert started["items"] == 1
-            frame = client.wait_for(lambda frame: frame.get("type") == "turn.finished")
-            assert frame["status"] == "completed"
-        assert kernel.shutdown() == 0, kernel.stderr
-
-    store = SqliteStore(data / "huddol.sqlite3")
-    try:
-        agent_store = SqliteAgentStore(store._db)
-        assert [(run.sequence, run.status) for run in agent_store.runs(2)] == [
-            (1, "completed")
-        ]
-        assert agent_store.last_reminder(2) == frozenset({(1, 1)})
+    with closing(SqliteStore(data / "huddol.sqlite3")) as store:
+        history = SqliteAgentStore(store._db)
+        history.set_settings("model", local_model)
+        store.create_member("human", "You")
+        store.create_member("agent", "Main")
+        store.create_discussion("restart", [1, 2])
+        store.append_message(1, 1, "@Main keep going")
+        run = history.start_run(2, reminded=[(1, 1)])
+        history.finish_run(2, run.sequence, status="completed", messages_json="[]")
         first_reminded_at = store._db.execute(
             "SELECT first_reminded_at FROM reminded WHERE agent_id = 2"
         )[0]["first_reminded_at"]
-    finally:
-        store.close()
 
-    with Kernel(data) as kernel:
-        wait_for_persisted_turn(data, 2, 2)
-        time.sleep(1)
-        with closing(sqlite3.connect(data / "huddol.sqlite3")) as connection:
-            runs = connection.execute(
-                "SELECT sequence, reminded_json FROM agent_runs WHERE agent_id = 2"
-                " ORDER BY sequence"
-            ).fetchall()
-        assert runs == [(1, "[[1, 1]]"), (2, "[[1, 1]]")]
-        assert kernel.shutdown() == 0, kernel.stderr
+    for _ in range(2):
+        with Kernel(data) as kernel:
+            wait_for_persisted_turn(data, 2, 3)
+            with kernel.connect() as connection:
+                detail = Client(connection).call(
+                    {"id": 1, "method": "agent.detail", "params": {"agent_id": 2}}
+                )["result"]
+                assert detail["state"] == "blocked"
+                assert detail["pause_reason"] == "repeated_mentions"
+                assert len(detail["runs"]) == 3
+            assert kernel.shutdown() == 0, kernel.stderr
 
-    store = SqliteStore(data / "huddol.sqlite3")
-    try:
-        agent_store = SqliteAgentStore(store._db)
-        assert [(run.sequence, run.status) for run in agent_store.runs(2)] == [
+    with closing(SqliteStore(data / "huddol.sqlite3")) as store:
+        history = SqliteAgentStore(store._db)
+        assert [(run.sequence, run.status) for run in history.runs(2)] == [
+            (3, "completed"),
             (2, "completed"),
             (1, "completed"),
         ]
@@ -1430,12 +1397,10 @@ def test_a_restart_reminds_agents_about_unhandled_mentions_once(
             )[0]["first_reminded_at"]
             == first_reminded_at
         )
-        reminder = build_reminder(store, agent_store, 2, "Main")
+        reminder = build_reminder(store, history, 2, "Main")
         assert reminder is not None
         assert [item.previously_reminded for item in reminder.items] == [True]
         assert "[previously reminded]" in reminder.render()
-    finally:
-        store.close()
 
 
 def test_startup_continues_an_interrupted_turn_without_new_mentions(
@@ -1465,7 +1430,7 @@ def test_startup_continues_an_interrupted_turn_without_new_mentions(
         store.close()
 
     with Kernel(data) as kernel:
-        wait_for_persisted_turn(data, 2, 2)
+        wait_for_persisted_turn(data, 2, 4)
         time.sleep(1)
         assert kernel.shutdown() == 0, kernel.stderr
 
@@ -1474,6 +1439,8 @@ def test_startup_continues_an_interrupted_turn_without_new_mentions(
         history = SqliteAgentStore(store._db)
         runs = history.runs(2)
         assert [(run.sequence, run.status) for run in runs] == [
+            (4, "completed"),
+            (3, "completed"),
             (2, "completed"),
             (1, "interrupted"),
         ]
@@ -1481,7 +1448,8 @@ def test_startup_continues_an_interrupted_turn_without_new_mentions(
             json.loads(run.messages_json)[0]["parts"][0]["content"] == "partial"
             for run in runs
         )
-        assert store.get_member(2).state == "idle"
+        assert store.get_member(2).state == "blocked"
+        assert history.pause_reason(2) == "repeated_mentions"
         assert [(item.discussion_id, item.message_id) for item in store.pending(2)] == [
             (1, 1)
         ]
@@ -1526,14 +1494,14 @@ def test_a_restart_starts_only_agents_with_unhandled_mentions(
         store.close()
 
     with Kernel(data) as kernel:
-        wait_for_persisted_turn(data, 2, 1)
+        wait_for_persisted_turn(data, 2, 3)
         time.sleep(1)
         with closing(sqlite3.connect(data / "huddol.sqlite3")) as connection:
             runs = connection.execute(
                 "SELECT agent_id, COUNT(*) FROM agent_runs GROUP BY agent_id"
                 " ORDER BY agent_id"
             ).fetchall()
-        assert runs == [(2, 1), (6, 1)]
+        assert runs == [(2, 3), (6, 1)]
         assert kernel.shutdown() == 0, kernel.stderr
 
 

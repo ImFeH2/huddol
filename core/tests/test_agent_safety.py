@@ -79,7 +79,9 @@ def test_soft_failures_do_not_count_and_tools_reset_the_streak(world):
         assert world.store.get_member(MAIN).state == (
             "error" if result.status == "failed" else "idle"
         )
-        assert scheduler.run_turn(MAIN) is None
+        assert scheduler.runnable_agents() == (
+            () if result.status == "failed" else (MAIN,)
+        )
 
 
 def test_runtime_exception_records_error(world):

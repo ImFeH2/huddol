@@ -190,12 +190,17 @@ class Scheduler:
                 "runtime_error": "A previous runtime failure requires Human recovery",
                 "history_invalid": "Stored model history is invalid",
                 "storage_unavailable": "Turn state could not be saved",
+                "repeated_mentions": "Three completed Turns left the same mentions pending",
             }
             found.append(
                 {
                     "code": reason,
                     "message": descriptions[reason],
-                    "recovery": "A Human must repair the condition and Resume",
+                    "recovery": (
+                        "A Human must review the Turns and Resume to start a new three-Turn cycle"
+                        if reason == "repeated_mentions"
+                        else "A Human must repair the condition and Resume"
+                    ),
                 }
             )
         if self._scheduler_stopped is not None:
@@ -432,9 +437,7 @@ class Scheduler:
                 keys
                 & self.history.prepared_mentions(agent_id, lifecycle.prepared_sequence)
             ) or bool(self.history.new_mentions(agent_id, tuple(keys)))
-        return self.preparation_due(agent_id) or bool(
-            keys and keys != self.history.last_reminder(agent_id)
-        )
+        return self.preparation_due(agent_id) or bool(keys)
 
     def runnable_agents(self) -> tuple[int, ...]:
         return tuple(
@@ -695,7 +698,19 @@ class Scheduler:
                             usage_json=usage_json,
                             error=error,
                         )
+                        keys = frozenset(
+                            (item.discussion_id, item.message_id) for item in items
+                        )
                         if (
+                            status == "completed"
+                            and keys
+                            and self.pending_keys(agent_id) == keys
+                            and self.history.pending_revision(agent_id)
+                            == run.pending_revision
+                            and self.history.repeated_turns(agent_id, tuple(keys)) >= 3
+                        ):
+                            self.history.pause_for_safety(agent_id, "repeated_mentions")
+                        elif (
                             status == "completed"
                             and threshold is not None
                             and self.history.no_tool_streak(agent_id) >= threshold

@@ -149,7 +149,7 @@ def test_backup_repair_and_restart_preserve_safety_state(
     with Kernel(
         directory, env={name: str(tmp_path) for name in ("TMPDIR", "TEMP", "TMP")}
     ) as kernel:
-        wait_for_persisted_turn(directory, ready.id, 1)
+        wait_for_persisted_turn(directory, ready.id, 3)
         with kernel.connect() as connection:
             client = Client(connection)
             result = client.call(
@@ -168,7 +168,8 @@ def test_backup_repair_and_restart_preserve_safety_state(
     store = SqliteStore(directory / "huddol.sqlite3")
     try:
         history = SqliteAgentStore(store._db)
-        assert len(history.runs(ready.id)) == 1
+        assert len(history.runs(ready.id)) == 3
+        assert history.pause_reason(ready.id) == "repeated_mentions"
         assert history.runs(paused.id) == ()
         assert history.pause_reason(paused.id) == "runtime_error"
         assert store.get_member(paused.id).state == "paused"

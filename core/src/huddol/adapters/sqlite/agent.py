@@ -75,6 +75,37 @@ class SqliteAgentStore:
     def transaction(self) -> LockedConnection:
         return self._db
 
+    def pending_revision(self, agent_id: int) -> int:
+        row = first(
+            self._db.execute(
+                "SELECT revision FROM pending_revisions WHERE member_id = ?",
+                (agent_id,),
+            )
+        )
+        return int(row["revision"]) if row is not None else 0
+
+    def repeated_turns(self, agent_id: int, keys: Sequence[tuple[int, int]]) -> int:
+        if not keys:
+            return 0
+        with self._db:
+            row = first(
+                self._db.execute(
+                    "SELECT COUNT(*) AS total FROM (SELECT 1 FROM agent_runs"
+                    " WHERE agent_id = ? AND pending_revision = ?"
+                    " AND status = 'completed' AND reminded_json = ?"
+                    " AND sequence > COALESCE((SELECT resumed_after FROM agent_safety"
+                    " WHERE agent_id = ?), 0) ORDER BY sequence DESC LIMIT 3)",
+                    (
+                        agent_id,
+                        self.pending_revision(agent_id),
+                        json.dumps(sorted(set(keys))),
+                        agent_id,
+                    ),
+                )
+            )
+            assert row is not None
+            return int(row["total"])
+
     def lifecycle(self, agent_id: int) -> AgentLifecycle:
         row = first(
             self._db.execute(
@@ -155,6 +186,7 @@ class SqliteAgentStore:
             messages_json=str(row["messages_json"]),
             usage_json=row["usage_json"],
             error=row["error"],
+            pending_revision=int(row["pending_revision"]),
         )
 
     def previously_reminded(
@@ -255,15 +287,18 @@ class SqliteAgentStore:
         identifier = run_id or uuid.uuid4().hex
         started = self._now()
         with self._db:
+            revision = self.pending_revision(agent_id)
             self._db.execute(
                 "INSERT INTO agent_runs (agent_id, sequence, run_id, status, started_at,"
-                " messages_json, reminded_json) VALUES (?, ?, ?, 'running', ?, '[]', ?)",
+                " messages_json, reminded_json, pending_revision)"
+                " VALUES (?, ?, ?, 'running', ?, '[]', ?, ?)",
                 (
                     agent_id,
                     sequence,
                     identifier,
                     started,
                     json.dumps(sorted(set(reminded))),
+                    revision,
                 ),
             )
             self._db.executemany(
@@ -282,7 +317,16 @@ class SqliteAgentStore:
                 ],
             )
         return AgentRun(
-            agent_id, sequence, identifier, "running", started, None, "[]", None, None
+            agent_id,
+            sequence,
+            identifier,
+            "running",
+            started,
+            None,
+            "[]",
+            None,
+            None,
+            revision,
         )
 
     def save_progress(self, agent_id: int, sequence: int, messages_json: str) -> None:

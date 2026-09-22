@@ -114,7 +114,8 @@ def test_error_preparation_consumption_and_restart_continuation(
         assert restarted.runnable_agents() == (MAIN,)
         assert restarted.run_turn(MAIN).status == "completed"
         assert world.history.prepared_mentions(MAIN, 2) == frozenset()
-        assert restarted.runnable_agents() == ()
+        assert world.history.lifecycle(MAIN).prepared_sequence is None
+        assert restarted.runnable_agents() == (MAIN,)
 
 
 def test_pause_allows_current_model_and_tool_to_finish(model_settings):

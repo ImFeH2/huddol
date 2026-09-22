@@ -17,6 +17,7 @@ class AgentRun:
     messages_json: str
     usage_json: str | None
     error: str | None
+    pending_revision: int = -1
 
 
 @dataclass(frozen=True)
@@ -45,6 +46,10 @@ class AgentLifecycle:
 
 class HistoryStore(Protocol):
     def transaction(self) -> AbstractContextManager[object]: ...
+
+    def pending_revision(self, agent_id: int) -> int: ...
+
+    def repeated_turns(self, agent_id: int, keys: Sequence[tuple[int, int]]) -> int: ...
 
     def lifecycle(self, agent_id: int) -> AgentLifecycle: ...
 
