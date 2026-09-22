@@ -3,11 +3,11 @@ from __future__ import annotations
 import hashlib
 import os
 import shutil
-import tempfile
 from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath, PureWindowsPath
 
 from huddol.adapters.execution.editing import edit_file
+from huddol.adapters.file_writes import directory_lock, replace_file
 from huddol.core.errors import DomainError
 from huddol.ports.files import ConflictError, TreeEntry
 
@@ -95,42 +95,43 @@ class DirectoryTree:
         if not isinstance(content, str):
             raise DomainError("invalid_content", "Content must be a string")
         target = self._resolve(path)
-        if target.is_dir():
-            raise DomainError("invalid_path", "Path is a directory")
-        if target.exists():
-            current = content_hash(self._content(target))
-            if expected_hash is None:
-                raise DomainError(
-                    "expected_hash_required",
-                    "expected_hash is required when overwriting an existing document",
-                )
-            if expected_hash != current:
-                raise ConflictError(path, expected_hash, current)
         target.parent.mkdir(parents=True, exist_ok=True)
-        temporary = None
-        try:
-            with tempfile.NamedTemporaryFile(dir=target.parent, delete=False) as stream:
-                temporary = Path(stream.name)
-                stream.write(content.encode("utf-8"))
-            os.replace(temporary, target)
-        finally:
-            if temporary is not None:
-                temporary.unlink(missing_ok=True)
-        return self._entry(target)
+        with directory_lock(target):
+            if target.is_dir():
+                raise DomainError("invalid_path", "Path is a directory")
+            if target.exists():
+                current = content_hash(self._content(target))
+                if expected_hash is None:
+                    raise DomainError(
+                        "expected_hash_required",
+                        "expected_hash is required when overwriting an existing document",
+                    )
+                if expected_hash != current:
+                    raise ConflictError(path, expected_hash, current)
+            with replace_file(target, content):
+                return self._entry(target)
 
     def edit(
         self, path: str, old_text: str, new_text: str, *, replace_all: bool = False
     ) -> tuple[TreeEntry, str]:
-        self.read(path)
         target = self._resolve(path)
-        result = edit_file(
-            str(target),
-            old_text,
-            new_text,
-            directories=[str(self._root)],
-            replace_all=replace_all,
-        )
-        return self._entry(target), result.diff
+        if not target.parent.is_dir():
+            raise DomainError("not_found", f"{path} does not exist")
+        with directory_lock(target):
+            self.read(path)
+            result = edit_file(
+                str(target),
+                old_text,
+                new_text,
+                directories=[str(self._root)],
+                replace_all=replace_all,
+            )
+            try:
+                return self._entry(target), result.diff
+            except Exception as error:
+                raise DomainError(
+                    "write_published", f"File already published at {target}: {error}"
+                ) from error
 
     def mkdir(self, path: str) -> TreeEntry:
         target = self._resolve(path, allow_root=True)

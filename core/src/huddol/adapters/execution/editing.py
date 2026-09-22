@@ -1,10 +1,9 @@
 from __future__ import annotations
 
 import difflib
-import os
-import tempfile
 from pathlib import Path
 
+from huddol.adapters.file_writes import directory_lock, replace_file
 from huddol.adapters.sandbox.paths import is_within
 from huddol.core.errors import DomainError
 from huddol.ports.execution import EditResult
@@ -30,49 +29,41 @@ def edit_file(
         raise DomainError(
             "not_writable", "Path is outside the configured writable directories"
         )
-    if not target.is_file():
+    if not target.parent.is_dir():
         raise DomainError("not_found", f"{path} does not exist")
-    try:
-        original = target.read_bytes().decode("utf-8")
-    except UnicodeDecodeError as error:
-        raise DomainError("not_text", f"{path} is not valid UTF-8") from error
-    occurrences = original.count(old_text)
-    if not occurrences:
-        raise DomainError("no_match", "old_text does not appear in the file")
-    if occurrences > 1 and not replace_all:
-        raise DomainError(
-            "ambiguous_match",
-            "old_text appears multiple times; pass replace_all to change all",
-        )
-    updated = (
-        original.replace(old_text, new_text)
-        if replace_all
-        else original.replace(old_text, new_text, 1)
-    )
-    temporary: str | None = None
-    try:
-        with tempfile.NamedTemporaryFile(
-            dir=target.parent,
-            prefix=".huddol-edit-",
-            delete=False,
-        ) as stream:
-            temporary = stream.name
-            stream.write(updated.encode("utf-8"))
-        os.chmod(temporary, target.stat().st_mode)
-        os.replace(temporary, target)
-    finally:
-        if temporary is not None:
-            Path(temporary).unlink(missing_ok=True)
-    return EditResult(
-        str(target),
-        "".join(
-            difflib.unified_diff(
-                original.splitlines(keepends=True),
-                updated.splitlines(keepends=True),
-                fromfile=str(target),
-                tofile=str(target),
-                n=3,
+    with directory_lock(target):
+        if not target.is_file():
+            raise DomainError("not_found", f"{path} does not exist")
+        try:
+            original = target.read_bytes().decode("utf-8")
+        except UnicodeDecodeError as error:
+            raise DomainError("not_text", f"{path} is not valid UTF-8") from error
+        occurrences = original.count(old_text)
+        if not occurrences:
+            raise DomainError("no_match", "old_text does not appear in the file")
+        if occurrences > 1 and not replace_all:
+            raise DomainError(
+                "ambiguous_match",
+                "old_text appears multiple times; pass replace_all to change all",
             )
-        ),
-        occurrences if replace_all else 1,
-    )
+        updated = (
+            original.replace(old_text, new_text)
+            if replace_all
+            else original.replace(old_text, new_text, 1)
+        )
+        with replace_file(
+            target, updated, mode=target.stat().st_mode, prefix=".huddol-edit-"
+        ):
+            return EditResult(
+                str(target),
+                "".join(
+                    difflib.unified_diff(
+                        original.splitlines(keepends=True),
+                        updated.splitlines(keepends=True),
+                        fromfile=str(target),
+                        tofile=str(target),
+                        n=3,
+                    )
+                ),
+                occurrences if replace_all else 1,
+            )
