@@ -25,6 +25,9 @@ function actualVirtualizer() {
     ownerDocument: { defaultView: targetWindow },
   } as unknown as HTMLElement;
   const writes: number[] = [];
+  let observeOffset:
+    | ((offset: number, isScrolling: boolean) => void)
+    | undefined;
   const virtual = new Virtualizer<HTMLElement, HTMLElement>({
     count: 3,
     getScrollElement: () => scrollElement,
@@ -34,11 +37,13 @@ function actualVirtualizer() {
       callback({ width: 100, height: 100 });
     },
     observeElementOffset: (instance, callback) => {
+      observeOffset = callback;
       callback(instance.scrollElement?.scrollTop ?? 0, false);
     },
     scrollToFn: (offset, { adjustments }) => {
       const target = offset + (adjustments ?? 0);
       scrollElement.scrollTop = target;
+      observeOffset?.(target, false);
       writes.push(target);
     },
   });
@@ -59,6 +64,7 @@ function actualVirtualizer() {
         time += 16;
         entry[1](time);
       }
+      expect(frames.size).toBe(0);
     },
   };
 }
