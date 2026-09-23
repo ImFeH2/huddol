@@ -25,7 +25,10 @@ import { Tooltip } from "@/components/ui/tooltip";
 import { Composer } from "@/features/discussions/composer";
 import { DiscussionMembersDialog } from "@/features/discussions/members";
 import { useThreadData } from "@/features/discussions/thread-data";
-import { centeredScrollTop } from "@/features/discussions/thread-position";
+import {
+  centeredScrollTop,
+  shouldStopPositioningForKey,
+} from "@/features/discussions/thread-position";
 import { renderMentions } from "@/features/mentions";
 import { BackendError, backend, type Message } from "@/lib/backend";
 import { formatTime, relativeTime } from "@/lib/format";
@@ -48,6 +51,7 @@ function ThreadSession({ id }: { id: number }) {
   const ready = useRef(false);
   const preserveBottom = useRef(false);
   const positioning = useRef(false);
+  const positioningInterrupted = useRef(false);
   const positionStableFrames = useRef(0);
   const frame = useRef(0);
   const messages = detail?.messages ?? [];
@@ -123,10 +127,33 @@ function ThreadSession({ id }: { id: number }) {
   const stopPositioning = useCallback(() => {
     if (!positioning.current) return;
     positioning.current = false;
+    positioningInterrupted.current = true;
     cancelAnimationFrame(frame.current);
     ready.current = true;
     thread.positioned();
-  }, [thread.positioned]);
+    const root = scroll.current;
+    if (root) virtual.scrollToOffset(root.scrollTop);
+    frame.current = requestAnimationFrame(() => {
+      const currentRoot = scroll.current;
+      if (currentRoot) virtual.scrollToOffset(currentRoot.scrollTop);
+      positioningInterrupted.current = false;
+    });
+  }, [thread.positioned, virtual]);
+
+  useEffect(() => {
+    if (!thread.position || !detail || detail.divider === null) return;
+    const onKeyDown = (event: globalThis.KeyboardEvent) => {
+      const target = event.target;
+      if (
+        target instanceof Element &&
+        scroll.current?.contains(target) &&
+        shouldStopPositioningForKey(event.key, target)
+      )
+        stopPositioning();
+    };
+    document.addEventListener("keydown", onKeyDown);
+    return () => document.removeEventListener("keydown", onKeyDown);
+  }, [thread.position, detail, stopPositioning]);
 
   useLayoutEffect(() => {
     if (!thread.position || !detail || !scroll.current) return;
@@ -176,6 +203,7 @@ function ThreadSession({ id }: { id: number }) {
         bounds.top,
         bounds.bottom - composerSize - 16,
       );
+      virtual.scrollToOffset(target);
       if (Math.abs(target - root.scrollTop) >= 0.5) {
         root.scrollTop = target;
         positionStableFrames.current = 0;
@@ -183,6 +211,7 @@ function ThreadSession({ id }: { id: number }) {
         positionStableFrames.current += 1;
       }
       if (positionStableFrames.current >= 2) {
+        virtual.scrollToOffset(root.scrollTop);
         positioning.current = false;
         ready.current = true;
         thread.positioned();
@@ -373,7 +402,11 @@ function ThreadSession({ id }: { id: number }) {
           <div
             ref={scroll}
             className="min-h-0 flex-1 overflow-y-auto border-t border-line px-8 max-[940px]:px-6 [overflow-anchor:none]"
-            onScroll={() => sample(true)}
+            onScroll={() => {
+              if (positioningInterrupted.current && scroll.current)
+                virtual.scrollToOffset(scroll.current.scrollTop);
+              sample(true);
+            }}
             onWheel={stopPositioning}
             onTouchStart={stopPositioning}
             onPointerDown={stopPositioning}

@@ -15,6 +15,9 @@ const harness = vi.hoisted(() => ({
   request: vi.fn(),
   read: vi.fn().mockResolvedValue(undefined),
   position: vi.fn(),
+  offset: vi.fn((offset: number) => {
+    harness.root.scrollTop = offset;
+  }),
   disconnect: vi.fn(),
 }));
 vi.mock("react", async (original) => ({
@@ -67,6 +70,7 @@ vi.mock("@tanstack/react-virtual", () => ({
     getTotalSize: () => harness.total,
     isAtEnd: () => true,
     scrollToIndex: harness.position,
+    scrollToOffset: harness.offset,
     scrollToEnd: harness.position,
   }),
 }));
@@ -166,6 +170,7 @@ describe("short thread backfill sampling", () => {
       expect(harness.request).not.toHaveBeenCalled();
       frame();
       expect(harness.position).toHaveBeenCalledWith(0, { align: "center" });
+      expect(harness.offset).toHaveBeenLastCalledWith(32);
       expect(harness.root.scrollTop).toBe(32);
       expect(harness.request).toHaveBeenCalledWith("before");
       expect(harness.read).not.toHaveBeenCalled();
