@@ -18,6 +18,10 @@ const harness = vi.hoisted(() => ({
   offset: vi.fn((offset: number) => {
     harness.root.scrollTop = offset;
   }),
+  positioned: vi.fn(),
+  markerTop: 300,
+  layoutChanges: [] as number[],
+  visibleMessages: [] as HTMLElement[],
   disconnect: vi.fn(),
 }));
 vi.mock("react", async (original) => ({
@@ -58,7 +62,7 @@ vi.mock("@/features/discussions/thread-data", async (original) => ({
       return harness.loading;
     },
     position: "entry",
-    positioned: vi.fn(),
+    positioned: harness.positioned,
     request: harness.request,
     markRead: harness.read,
     view: vi.fn(),
@@ -112,15 +116,20 @@ beforeEach(() => {
   harness.loading = false;
   harness.total = 200;
   harness.data = data();
+  harness.markerTop = 300;
+  harness.layoutChanges = [];
+  harness.visibleMessages = [];
   harness.root = {
     clientHeight: 600,
     scrollHeight: 2000,
     scrollTop: 0,
     getBoundingClientRect: () => ({ top: 0, bottom: 600 }),
     querySelector: () => ({
-      getBoundingClientRect: () => ({ top: 300 - harness.root.scrollTop }),
+      getBoundingClientRect: () => ({
+        top: harness.markerTop - harness.root.scrollTop,
+      }),
     }),
-    querySelectorAll: () => [],
+    querySelectorAll: () => harness.visibleMessages,
   } as unknown as HTMLDivElement;
   cleanups = [];
   vi.stubGlobal("document", {
@@ -154,10 +163,13 @@ function mount() {
     if (cleanup) cleanups.push(cleanup);
   }
 }
+function nextFrame(timestamp: number) {
+  harness.markerTop += harness.layoutChanges.shift() ?? 0;
+  for (const callback of harness.frames.splice(0)) callback(timestamp);
+}
 function frame() {
-  for (let index = 0; harness.frames.length && index < 10; index++) {
-    for (const callback of harness.frames.splice(0)) callback(index);
-  }
+  for (let index = 0; harness.frames.length && index < 10; index++)
+    nextFrame(index);
 }
 
 describe("short thread backfill sampling", () => {
@@ -176,6 +188,28 @@ describe("short thread backfill sampling", () => {
       expect(harness.read).not.toHaveBeenCalled();
     },
   );
+
+  it("waits for two stable frames after three changing layout frames", () => {
+    harness.layoutChanges = [20, 20, 20, 0, 0];
+    harness.visibleMessages = [
+      {
+        dataset: { messageId: "148" },
+        getBoundingClientRect: () => ({ top: 100, bottom: 200 }),
+      } as unknown as HTMLElement,
+    ];
+    mount();
+
+    nextFrame(0);
+    nextFrame(1);
+    nextFrame(2);
+    nextFrame(3);
+    expect(harness.positioned).not.toHaveBeenCalled();
+    expect(harness.read).not.toHaveBeenCalled();
+
+    nextFrame(4);
+    expect(harness.positioned).toHaveBeenCalledOnce();
+    expect(harness.read).toHaveBeenCalledWith(148);
+  });
 
   it("waits for a readable viewport before sampling the entry page", () => {
     Object.defineProperty(harness.root, "clientHeight", {

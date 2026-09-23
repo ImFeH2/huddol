@@ -203,13 +203,10 @@ function ThreadSession({ id }: { id: number }) {
         bounds.top,
         bounds.bottom - composerSize - 16,
       );
+      const needsCorrection = Math.abs(target - root.scrollTop) >= 0.5;
       virtual.scrollToOffset(target);
-      if (Math.abs(target - root.scrollTop) >= 0.5) {
-        root.scrollTop = target;
-        positionStableFrames.current = 0;
-      } else {
-        positionStableFrames.current += 1;
-      }
+      if (needsCorrection) positionStableFrames.current = 0;
+      else positionStableFrames.current += 1;
       if (positionStableFrames.current >= 2) {
         virtual.scrollToOffset(root.scrollTop);
         positioning.current = false;
