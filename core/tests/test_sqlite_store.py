@@ -473,9 +473,10 @@ def test_ui_pages_only_materialize_the_requested_bodies(store, monkeypatch) -> N
     monkeypatch.setattr(store, "_messages", measured)
     page = store.discussion_page(room.id, human.id, entry=True, limit=50)
     assert len(page.messages) == 50
+    assert [message.id for message in page.messages] == list(range(1, 51))
     assert len(page.awaiting_ack) == 50
     assert page.pending_count == 1000
-    assert counts == [50]
+    assert counts == [0, 50]
     counts.clear()
     result = store.ack_pending(room.id, human.id, 900)
     assert result.acked == 900
@@ -483,7 +484,12 @@ def test_ui_pages_only_materialize_the_requested_bodies(store, monkeypatch) -> N
     assert counts == []
     page = store.discussion_page(room.id, human.id, entry=True, limit=50)
     assert page.first_unread_id == 901
-    assert [m.id for m in page.messages] == list(range(901, 951))
+    assert [m.id for m in page.messages] == list(range(876, 926))
+    assert page.has_before
+    assert page.previous_sender_id == agent.id
+    assert list(page.acknowledged) == list(range(876, 901))
+    assert list(page.awaiting_ack) == list(range(901, 926))
+    assert counts == [25, 25]
 
 
 def test_ui_page_read_snapshot_is_one_database_transaction(store, monkeypatch) -> None:
@@ -494,12 +500,17 @@ def test_ui_page_read_snapshot_is_one_database_transaction(store, monkeypatch) -
     other = sqlite3.connect(store._path)
     original = store.messages
 
+    inserted = False
+
     def append_then_read(*args, **kwargs):
-        with other:
-            other.execute(
-                "INSERT INTO messages VALUES (?, 2, ?, 'Helper', 'second', 'now')",
-                (room.id, agent.id),
-            )
+        nonlocal inserted
+        if not inserted:
+            with other:
+                other.execute(
+                    "INSERT INTO messages VALUES (?, 2, ?, 'Helper', 'second', 'now')",
+                    (room.id, agent.id),
+                )
+            inserted = True
         return original(*args, **kwargs)
 
     try:

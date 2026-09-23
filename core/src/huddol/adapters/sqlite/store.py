@@ -702,14 +702,26 @@ class SqliteStore:
             )
             first_unread_id = int(unread["id"]) if unread else None
             if entry and first_unread_id is not None:
-                after = first_unread_id - 1
-            selected = self.messages(
-                discussion_id,
-                before=before,
-                after=after,
-                limit=limit,
-                latest=after is None,
-            )
+                context = self.messages(
+                    discussion_id,
+                    before=first_unread_id,
+                    limit=limit // 2,
+                    latest=True,
+                )
+                remaining = limit - len(context)
+                selected = context + self.messages(
+                    discussion_id,
+                    after=first_unread_id - 1,
+                    limit=remaining,
+                )
+            else:
+                selected = self.messages(
+                    discussion_id,
+                    before=before,
+                    after=after,
+                    limit=limit,
+                    latest=after is None,
+                )
             previous = first(
                 db.execute(
                     "SELECT sender_id FROM messages WHERE discussion_id = ?"

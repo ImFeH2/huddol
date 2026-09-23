@@ -1070,9 +1070,9 @@ def test_ui_entry_pages_own_messages_after_the_read_boundary(world) -> None:
     page = human.discussion_page(room, entry=True, limit=50)
     assert page["first_unread_id"] == 2
     assert page["read_through"] == world.store.watermark(room, HUMAN) == 1
-    assert [message["id"] for message in page["messages"]] == list(range(2, 52))
-    assert page["previous_sender_id"] == HUMAN
-    assert page["has_before"] and page["has_after"]
+    assert [message["id"] for message in page["messages"]] == list(range(1, 51))
+    assert page["previous_sender_id"] is None
+    assert not page["has_before"] and page["has_after"]
     assert page["pending_count"] == 0
     assert world.store.unread_counts(HUMAN).get(room, 0) == 0
 
@@ -1088,7 +1088,8 @@ def test_ui_entry_uses_latest_read_boundary_with_earlier_pending(world) -> None:
     page = human.discussion_page(room, entry=True, limit=2)
     assert page["read_through"] == 3
     assert page["first_unread_id"] == 4
-    assert [message["id"] for message in page["messages"]] == [4]
+    assert [message["id"] for message in page["messages"]] == [3, 4]
+    assert page["awaiting_ack"] == [3, 4]
     assert page["pending_count"] == 4
     assert world.store.watermark(room, HUMAN) == 3
     human.mark_read(room, 4)
@@ -1096,8 +1097,53 @@ def test_ui_entry_uses_latest_read_boundary_with_earlier_pending(world) -> None:
     entered = human.discussion_page(room, entry=True, limit=2)
     assert entered["read_through"] == 4
     assert entered["first_unread_id"] == 5
-    assert [message["id"] for message in entered["messages"]] == [5]
+    assert [message["id"] for message in entered["messages"]] == [4, 5]
+    assert entered["awaiting_ack"] == [4]
     assert entered["pending_count"] == 4
+
+
+def test_ui_entry_context_keeps_id_gaps_and_page_cursors_contiguous(world) -> None:
+    human = tools_for(world, HUMAN)
+    agent = tools_for(world, MAIN)
+    room = human.create_discussion("entry gap", [MAIN])["id"]
+    for index in range(7):
+        agent.send_message(room, f"message {index}")
+    with world.store._db:
+        world.store._db.execute(
+            "DELETE FROM messages WHERE discussion_id = ? AND id = 2", (room,)
+        )
+    human.mark_read(room, 1)
+    one = human.discussion_page(room, entry=True, limit=1)
+    assert one["first_unread_id"] == 3
+    assert [message["id"] for message in one["messages"]] == [3]
+    assert one["read_through"] == 1
+    page = human.discussion_page(room, entry=True, limit=5)
+    assert page["first_unread_id"] == 3
+    assert [message["id"] for message in page["messages"]] == [1, 3, 4, 5, 6]
+    assert page["previous_sender_id"] is None
+    assert not page["has_before"] and page["has_after"]
+    after = human.discussion_page(room, after=6, limit=3)
+    assert [message["id"] for message in after["messages"]] == [7]
+    before = human.discussion_page(room, before=7, limit=5)
+    assert [message["id"] for message in before["messages"]] == [1, 3, 4, 5, 6]
+    assert world.store.watermark(room, HUMAN) == 1
+
+
+def test_ui_entry_returns_short_page_when_newer_messages_are_insufficient(
+    world,
+) -> None:
+    human = tools_for(world, HUMAN)
+    agent = tools_for(world, MAIN)
+    room = human.create_discussion("short context", [MAIN])["id"]
+    for _ in range(3):
+        agent.send_message(room, "unread")
+    human.mark_read(room, 2)
+    page = human.discussion_page(room, entry=True, limit=5)
+    assert page["first_unread_id"] == 3
+    assert [message["id"] for message in page["messages"]] == [1, 2, 3]
+    assert page["has_before"] is False
+    assert page["has_after"] is False
+    assert world.store.watermark(room, HUMAN) == 2
 
 
 @pytest.mark.parametrize("count", [0, 4])

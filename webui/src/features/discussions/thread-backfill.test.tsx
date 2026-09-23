@@ -110,8 +110,12 @@ beforeEach(() => {
   harness.data = data();
   harness.root = {
     clientHeight: 600,
+    scrollHeight: 2000,
     scrollTop: 0,
     getBoundingClientRect: () => ({ top: 0, bottom: 600 }),
+    querySelector: () => ({
+      getBoundingClientRect: () => ({ top: 300 - harness.root.scrollTop }),
+    }),
     querySelectorAll: () => [],
   } as unknown as HTMLDivElement;
   cleanups = [];
@@ -147,7 +151,9 @@ function mount() {
   }
 }
 function frame() {
-  for (const callback of harness.frames.splice(0)) callback(0);
+  for (let index = 0; harness.frames.length && index < 10; index++) {
+    for (const callback of harness.frames.splice(0)) callback(index);
+  }
 }
 
 describe("short thread backfill sampling", () => {
@@ -159,11 +165,30 @@ describe("short thread backfill sampling", () => {
       harness.resize();
       expect(harness.request).not.toHaveBeenCalled();
       frame();
-      expect(harness.position).toHaveBeenCalledWith(0, { align: "start" });
+      expect(harness.position).toHaveBeenCalledWith(0, { align: "center" });
+      expect(harness.root.scrollTop).toBe(32);
       expect(harness.request).toHaveBeenCalledWith("before");
       expect(harness.read).not.toHaveBeenCalled();
     },
   );
+
+  it("waits for a readable viewport before sampling the entry page", () => {
+    Object.defineProperty(harness.root, "clientHeight", {
+      value: 0,
+      configurable: true,
+    });
+    mount();
+    frame();
+    expect(harness.request).not.toHaveBeenCalled();
+    expect(harness.read).not.toHaveBeenCalled();
+    Object.defineProperty(harness.root, "clientHeight", {
+      value: 600,
+      configurable: true,
+    });
+    frame();
+    expect(harness.request).toHaveBeenCalledWith("before");
+    expect(harness.read).not.toHaveBeenCalled();
+  });
 
   it("backfills a short no-unread entry positioned at the end", () => {
     harness.data = data(3, true, null);

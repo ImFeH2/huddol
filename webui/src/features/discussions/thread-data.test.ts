@@ -49,7 +49,7 @@ describe("thread pages", () => {
   });
 
   it("retains an own-message divider while reading and renews it on entry", () => {
-    const own = page([6, 7, 8]);
+    const own = page([4, 5, 6, 7, 8]);
     own.messages = own.messages.map((message) => ({
       ...message,
       sender_id: 1,
@@ -57,6 +57,9 @@ describe("thread pages", () => {
     }));
     const entered = mergePage(null, own, "entry");
     expect(entered.divider).toBe(6);
+    expect(entered.messages.map((message) => message.id)).toEqual([
+      4, 5, 6, 7, 8,
+    ]);
     const updated = {
       ...own,
       read_through: 7,

@@ -256,9 +256,10 @@ def test_ui_entry_tracks_read_boundary_across_own_messages(server) -> None:
     )["result"]
     assert page["first_unread_id"] == 2
     assert page["read_through"] == deps.store.watermark(room.id, HUMAN_ID) == 1
-    assert [message["id"] for message in page["messages"]] == list(range(2, 52))
+    assert [message["id"] for message in page["messages"]] == list(range(1, 51))
+    assert page["awaiting_ack"] == [1]
     assert page["pending_count"] == 1
-    assert page["has_before"] and page["has_after"]
+    assert not page["has_before"] and page["has_after"]
     marked = call(
         dispatcher, output, "discussion.mark_read", discussion_id=room.id, message_id=20
     )["result"]
@@ -267,7 +268,8 @@ def test_ui_entry_tracks_read_boundary_across_own_messages(server) -> None:
         dispatcher, output, "discussion.page", discussion_id=room.id, entry=True
     )["result"]
     assert entered["first_unread_id"] == 21
-    assert entered["messages"][0]["id"] == 21
+    assert [message["id"] for message in entered["messages"]] == list(range(1, 51))
+    assert entered["awaiting_ack"] == [1]
     assert entered["pending_count"] == 1
 
 

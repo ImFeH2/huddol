@@ -25,6 +25,7 @@ import { Tooltip } from "@/components/ui/tooltip";
 import { Composer } from "@/features/discussions/composer";
 import { DiscussionMembersDialog } from "@/features/discussions/members";
 import { useThreadData } from "@/features/discussions/thread-data";
+import { centeredScrollTop } from "@/features/discussions/thread-position";
 import { renderMentions } from "@/features/mentions";
 import { BackendError, backend, type Message } from "@/lib/backend";
 import { formatTime, relativeTime } from "@/lib/format";
@@ -46,6 +47,8 @@ function ThreadSession({ id }: { id: number }) {
   const scroll = useRef<HTMLDivElement>(null);
   const ready = useRef(false);
   const preserveBottom = useRef(false);
+  const positioning = useRef(false);
+  const positionStableFrames = useRef(0);
   const frame = useRef(0);
   const messages = detail?.messages ?? [];
   const virtual = useVirtualizer({
@@ -117,25 +120,87 @@ function ThreadSession({ id }: { id: number }) {
     [composerSize, thread, virtual],
   );
 
+  const stopPositioning = useCallback(() => {
+    if (!positioning.current) return;
+    positioning.current = false;
+    cancelAnimationFrame(frame.current);
+    ready.current = true;
+    thread.positioned();
+  }, [thread.positioned]);
+
   useLayoutEffect(() => {
     if (!thread.position || !detail || !scroll.current) return;
     ready.current = false;
-    if (thread.position === "latest" || detail.divider === null)
+    positioning.current = false;
+    if (thread.position === "latest" || detail.divider === null) {
       virtual.scrollToEnd();
-    else
-      virtual.scrollToIndex(
-        Math.max(
-          0,
-          messages.findIndex((message) => message.id === detail.divider),
-        ),
-        { align: "start" },
+      frame.current = requestAnimationFrame(() => {
+        ready.current = true;
+        thread.positioned();
+      });
+      return () => cancelAnimationFrame(frame.current);
+    }
+
+    const index = messages.findIndex(
+      (message) => message.id === detail.divider,
+    );
+    if (index < 0) throw new Error("Entry divider is missing from its page");
+    positioning.current = true;
+    positionStableFrames.current = 0;
+    let missingMarkerFrames = 0;
+    virtual.scrollToIndex(index, { align: "center" });
+
+    const positionNewMarker = () => {
+      if (!positioning.current) return;
+      const root = scroll.current;
+      if (!root) return;
+      const bounds = root.getBoundingClientRect();
+      if (root.clientHeight === 0 || bounds.height === 0) {
+        frame.current = requestAnimationFrame(positionNewMarker);
+        return;
+      }
+      const marker = root.querySelector<HTMLElement>("[data-new-divider]");
+      if (!marker) {
+        missingMarkerFrames += 1;
+        if (missingMarkerFrames > 10)
+          throw new Error("New divider did not render after entry positioning");
+        virtual.scrollToIndex(index, { align: "center" });
+        frame.current = requestAnimationFrame(positionNewMarker);
+        return;
+      }
+      missingMarkerFrames = 0;
+      const target = centeredScrollTop(
+        root.scrollTop,
+        root.scrollHeight - root.clientHeight,
+        marker.getBoundingClientRect().top,
+        bounds.top,
+        bounds.bottom - composerSize - 16,
       );
-    frame.current = requestAnimationFrame(() => {
-      ready.current = true;
-      thread.positioned();
-    });
+      if (Math.abs(target - root.scrollTop) >= 0.5) {
+        root.scrollTop = target;
+        positionStableFrames.current = 0;
+      } else {
+        positionStableFrames.current += 1;
+      }
+      if (positionStableFrames.current >= 2) {
+        positioning.current = false;
+        ready.current = true;
+        thread.positioned();
+        sample();
+      } else {
+        frame.current = requestAnimationFrame(positionNewMarker);
+      }
+    };
+    frame.current = requestAnimationFrame(positionNewMarker);
     return () => cancelAnimationFrame(frame.current);
-  }, [thread.position, detail, messages, virtual, thread.positioned]);
+  }, [
+    thread.position,
+    detail?.divider,
+    messages,
+    virtual,
+    thread.positioned,
+    composerSize,
+  ]);
 
   useEffect(() => {
     const tick = requestAnimationFrame(() => sample());
@@ -309,6 +374,9 @@ function ThreadSession({ id }: { id: number }) {
             ref={scroll}
             className="min-h-0 flex-1 overflow-y-auto border-t border-line px-8 max-[940px]:px-6 [overflow-anchor:none]"
             onScroll={() => sample(true)}
+            onWheel={stopPositioning}
+            onTouchStart={stopPositioning}
+            onPointerDown={stopPositioning}
             aria-busy={thread.loading}
           >
             {detail && messages.length === 0 ? (
@@ -336,7 +404,10 @@ function ThreadSession({ id }: { id: number }) {
                     }}
                   >
                     {divider ? (
-                      <div className="mb-4 flex items-center gap-3 text-xs font-medium uppercase tracking-caps text-primary before:content-[''] before:h-px before:flex-1 before:bg-blue-500/40 after:content-[''] after:h-px after:flex-1 after:bg-blue-500/40">
+                      <div
+                        data-new-divider
+                        className="mb-4 flex items-center gap-3 text-xs font-medium uppercase tracking-caps text-primary before:content-[''] before:h-px before:flex-1 before:bg-blue-500/40 after:content-[''] after:h-px after:flex-1 after:bg-blue-500/40"
+                      >
                         <span>New</span>
                       </div>
                     ) : null}
