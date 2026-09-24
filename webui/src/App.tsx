@@ -44,6 +44,10 @@ import { MemberPage } from "@/features/members/detail";
 import { MembersPage } from "@/features/members/list";
 import { SettingsPage } from "@/features/settings/page";
 import {
+  SettingsSaveProvider,
+  useSettingsSaving,
+} from "@/features/settings/saver";
+import {
   BackendError,
   backend,
   type DiscussionSummary,
@@ -113,6 +117,7 @@ function Chrome({ loaded }: { loaded: Loaded }) {
   const { route } = useRouter();
   const navigate = useNavigate();
   const [creating, setCreating] = useState(false);
+  const settingsSaving = useSettingsSaving();
   const active = navIdOf(route);
   const unlisted =
     route.name === "discussion" &&
@@ -131,6 +136,7 @@ function Chrome({ loaded }: { loaded: Loaded }) {
     <Shell
       sidebar={
         <Sidebar
+          inert={settingsSaving}
           footer={
             <Nav label="Settings">
               <NavItem
@@ -420,7 +426,9 @@ export default function App() {
             refresh,
           }}
         >
-          <Chrome loaded={loaded} />
+          <SettingsSaveProvider>
+            <Chrome loaded={loaded} />
+          </SettingsSaveProvider>
         </OrganizationProvider>
       </RouterProvider>
     );

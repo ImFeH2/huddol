@@ -11,7 +11,10 @@ import {
   toast,
 } from "@/components/ui/index";
 import { Segmented } from "@/components/ui/segmented";
-import { reportLoadFailure } from "@/features/settings/saver";
+import {
+  reportLoadFailure,
+  useReportSettingsSave,
+} from "@/features/settings/saver";
 import {
   type AgentModelConfig,
   backend,
@@ -315,6 +318,9 @@ export function ModelPanel() {
   const [busy, setBusy] = useState(false);
   const [failed, setFailed] = useState(false);
   const [providerId, setProviderId] = useState<string | null>(null);
+  const [expandedModels, setExpandedModels] = useState<string[]>([]);
+  const selectionId = useId();
+  useReportSettingsSave("model", busy);
   const loadGeneration = useRef(0);
   const load = useCallback(async () => {
     const generation = ++loadGeneration.current;
@@ -367,9 +373,24 @@ export function ModelPanel() {
     }
   };
   const provider = catalog?.providers.find((item) => item.id === providerId);
+  const models =
+    catalog?.models.filter((item) => item.provider_id === provider?.id) ?? [];
+  const chooseProvider = (id: string | null) => {
+    if (busy) return;
+    setProviderId(id);
+    setExpandedModels([]);
+  };
+  const toggleModel = (id: string) => {
+    if (busy) return;
+    setExpandedModels((current) =>
+      current.includes(id)
+        ? current.filter((item) => item !== id)
+        : [...current, id],
+    );
+  };
   return (
     <fieldset
-      className="m-0 flex min-w-0 max-w-[720px] flex-col gap-6 border-0 p-0"
+      className="model-settings m-0 flex min-w-0 flex-col gap-6 border-0 p-0"
       aria-label="Model settings"
       disabled={!catalog || busy || failed}
     >
@@ -378,48 +399,102 @@ export function ModelPanel() {
       ) : (
         <>
           <DefaultModelForm catalog={catalog} save={save} />
-          <section className="flex flex-col gap-4">
-            <h2 className="text-base font-medium">Providers</h2>
-            <div className="flex flex-wrap gap-2">
-              {catalog.providers.map((item) => (
-                <Button
-                  key={item.id}
-                  variant={providerId === item.id ? "primary" : undefined}
-                  onClick={() => setProviderId(item.id)}
+          <section className="provider-card">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <h2 className="text-base font-medium">Provider connection</h2>
+              <Field label="Provider" htmlFor={`${selectionId}-provider`}>
+                <select
+                  id={`${selectionId}-provider`}
+                  className={selectClass}
+                  value={provider?.id ?? ""}
+                  onChange={(event) =>
+                    chooseProvider(event.target.value || null)
+                  }
                 >
-                  {item.name}
-                  {item.enabled ? "" : " · disabled"}
-                </Button>
-              ))}
-              <Button onClick={() => setProviderId(null)}>Add provider</Button>
+                  <option value="">Add provider</option>
+                  {catalog.providers.map((item) => (
+                    <option key={item.id} value={item.id}>
+                      {item.name}
+                      {item.enabled ? "" : " · disabled"}
+                    </option>
+                  ))}
+                </select>
+              </Field>
             </div>
             <ProviderForm
               key={provider?.id ?? "new"}
               provider={provider}
               save={save}
-              onDeleted={() => setProviderId(null)}
+              onDeleted={() => chooseProvider(null)}
             />
           </section>
           {provider ? (
-            <section className="flex flex-col gap-4">
-              <h2 className="text-base font-medium">
-                Models · {provider.name}
-              </h2>
-              {catalog.models
-                .filter((model) => model.provider_id === provider.id)
-                .map((model) => (
-                  <ModelForm
-                    key={model.id}
-                    provider={provider}
-                    model={model}
-                    save={save}
-                  />
-                ))}
-              <ModelForm
-                key={`new-${provider.id}`}
-                provider={provider}
-                save={save}
-              />
+            <section className="models-section">
+              <div className="flex flex-wrap items-baseline justify-between gap-2">
+                <h2 className="text-base font-medium">Models</h2>
+                <p className="text-sm text-fg-muted">{provider.name}</p>
+              </div>
+              {models.length === 0 ? (
+                <p className="text-sm text-fg-muted">No models configured.</p>
+              ) : null}
+              {models.map((model) => {
+                const expanded = expandedModels.includes(model.id);
+                return (
+                  <section className="model-item" key={model.id}>
+                    <button
+                      className="model-summary"
+                      type="button"
+                      aria-expanded={expanded}
+                      aria-controls={`${selectionId}-model-${model.id}`}
+                      onClick={() => toggleModel(model.id)}
+                    >
+                      <span className="min-w-0 flex flex-col gap-1">
+                        <span className="font-medium wrap-anywhere">
+                          {model.name}
+                        </span>
+                        <span className="text-xs text-fg-muted wrap-anywhere">
+                          {model.model}
+                        </span>
+                      </span>
+                      <span className="flex items-center gap-2 flex-none">
+                        <Chip>{model.enabled ? "Enabled" : "Disabled"}</Chip>
+                        <span>{expanded ? "Close" : "Edit"}</span>
+                      </span>
+                    </button>
+                    <div
+                      id={`${selectionId}-model-${model.id}`}
+                      className="model-editor"
+                      hidden={!expanded}
+                      inert={!expanded}
+                    >
+                      <ModelForm
+                        provider={provider}
+                        model={model}
+                        save={save}
+                      />
+                    </div>
+                  </section>
+                );
+              })}
+              <section className="model-item">
+                <button
+                  className="model-add"
+                  type="button"
+                  aria-expanded={expandedModels.includes("new")}
+                  aria-controls={`${selectionId}-model-new`}
+                  onClick={() => toggleModel("new")}
+                >
+                  Add model
+                </button>
+                <div
+                  id={`${selectionId}-model-new`}
+                  className="model-editor"
+                  hidden={!expandedModels.includes("new")}
+                  inert={!expandedModels.includes("new")}
+                >
+                  <ModelForm provider={provider} save={save} />
+                </div>
+              </section>
             </section>
           ) : null}
         </>
@@ -450,7 +525,7 @@ function DefaultModelForm({
   }, [catalog.default_model_id, catalog.default_thinking]);
   return (
     <form
-      className="flex flex-col gap-4"
+      className="default-model-card flex flex-col gap-4"
       onChangeCapture={() => {
         dirty.current = true;
       }}
@@ -501,7 +576,7 @@ function ProviderForm({
   }, [provider]);
   return (
     <form
-      className="flex flex-col gap-4 rounded-md border border-line p-4"
+      className="provider-form flex flex-col gap-4"
       onChangeCapture={() => {
         dirty.current = true;
       }}
@@ -686,7 +761,7 @@ function ModelForm({
   };
   return (
     <form
-      className="flex flex-col gap-4 rounded-md border border-line p-4"
+      className="model-form flex flex-col gap-4"
       onChangeCapture={() => {
         dirty.current = true;
       }}

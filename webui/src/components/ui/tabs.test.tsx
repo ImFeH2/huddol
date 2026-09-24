@@ -48,4 +48,19 @@ describe("Tabs", () => {
     );
     expect(html).toContain("0 means no ceiling.");
   });
+
+  it("disables section controls while a save is active", () => {
+    const html = renderToStaticMarkup(
+      <Tabs
+        label="Settings"
+        tabs={[...tabs]}
+        value="agent"
+        disabled
+        onChange={() => {}}
+      >
+        <p>Saving</p>
+      </Tabs>,
+    );
+    expect(html.match(/role="tab"[^>]*disabled=""/g)).toHaveLength(3);
+  });
 });

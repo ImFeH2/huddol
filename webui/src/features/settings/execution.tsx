@@ -1,6 +1,9 @@
 import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { Button, Chip, Field, Textarea, toast } from "@/components/ui/index";
-import { reportLoadFailure } from "@/features/settings/saver";
+import {
+  reportLoadFailure,
+  useReportSettingsSave,
+} from "@/features/settings/saver";
 import { backend } from "@/lib/backend";
 
 export type ExecutionSettings = {
@@ -47,6 +50,7 @@ export function ExecutionForm({
   const [info, setInfo] = useState(initial);
   const [draft, setDraft] = useState(() => directoryDraft(initial));
   const [busy, setBusy] = useState(false);
+  useReportSettingsSave("execution", busy);
   const previous = useRef(initial);
   useEffect(() => {
     const old = previous.current;

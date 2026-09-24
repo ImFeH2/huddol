@@ -32,12 +32,14 @@ export function Tabs<T extends string>({
   tabs,
   value,
   onChange,
+  disabled = false,
   children,
 }: {
   label: string;
   tabs: TabItem<T>[];
   value: T;
   onChange: (id: T) => void;
+  disabled?: boolean;
   children: ReactNode;
 }) {
   const id = useId();
@@ -72,6 +74,7 @@ export function Tabs<T extends string>({
         aria-label={label}
         ref={list}
         onKeyDown={(event) => {
+          if (disabled) return;
           const next = tabIndexAfterKey(event.key, index, tabs.length);
           if (next === null) return;
           event.preventDefault();
@@ -91,6 +94,7 @@ export function Tabs<T extends string>({
               aria-selected={selected}
               aria-controls={`${id}-panel-${tab.id}`}
               tabIndex={selected ? 0 : -1}
+              disabled={disabled}
               onClick={() => onChange(tab.id)}
             >
               {tab.label}

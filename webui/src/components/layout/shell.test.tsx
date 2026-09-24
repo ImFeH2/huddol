@@ -28,6 +28,22 @@ describe("Shell", () => {
     expect(html).not.toContain("banner");
     expect(html).not.toContain('role="status"');
   });
+
+  it("removes sidebar navigation from interaction while settings save", () => {
+    const html = renderToStaticMarkup(
+      <Sidebar inert>
+        <Nav label="Sections">
+          <NavItem
+            icon={<span>i</span>}
+            label="Members"
+            active={false}
+            onSelect={() => {}}
+          />
+        </Nav>
+      </Sidebar>,
+    );
+    expect(html).toMatch(/<div[^>]*inert=""/);
+  });
 });
 
 describe("SidebarBrand", () => {

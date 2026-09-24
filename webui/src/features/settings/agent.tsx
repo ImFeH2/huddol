@@ -8,7 +8,11 @@ import {
   useState,
 } from "react";
 import { Button, Field, Input } from "@/components/ui/index";
-import { reportLoadFailure, useSaver } from "@/features/settings/saver";
+import {
+  reportLoadFailure,
+  useReportSettingsSave,
+  useSaver,
+} from "@/features/settings/saver";
 import { backend } from "@/lib/backend";
 
 const FIELDS = [
@@ -60,6 +64,11 @@ export function AgentForm({
 }) {
   const id = useId();
   const update = agentUpdate(drafts);
+  const groups = [
+    { title: "Context", fields: FIELDS.slice(0, 2) },
+    { title: "Run limits", fields: FIELDS.slice(5) },
+    { title: "Reminders and pausing", fields: FIELDS.slice(2, 5) },
+  ];
   return (
     <form
       noValidate
@@ -69,42 +78,53 @@ export function AgentForm({
       }}
     >
       <fieldset
-        className="m-0 flex min-w-0 max-w-[560px] flex-col gap-4 border-0 p-0"
+        className="agent-form m-0 flex min-w-0 flex-col gap-4 border-0 p-0"
         aria-label="Agent settings"
         disabled={disabled}
       >
-        {FIELDS.map(({ key, label }, index) => (
-          <Field
-            key={key}
-            label={label}
-            htmlFor={`${id}-${key}`}
-            hint={
-              key === "request_limit"
-                ? "0 means unlimited. Changes apply to new Turns."
-                : key === "token_limit"
-                  ? "0 means no ceiling."
-                  : undefined
-            }
-          >
-            <Input
-              ref={index === 0 ? first : undefined}
-              id={`${id}-${key}`}
-              type="number"
-              inputMode="numeric"
-              min={key === "token_limit" || key === "request_limit" ? 0 : 1}
-              step={1}
-              max={Number.MAX_SAFE_INTEGER}
-              required
-              aria-invalid={
-                key in drafts && agentInteger(key, drafts[key]) === null
-              }
-              value={drafts[key] ?? ""}
-              onChange={(event) =>
-                onChange({ ...drafts, [key]: event.target.value })
-              }
-            />
-          </Field>
-        ))}
+        <div className="agent-groups">
+          {groups.map((group) => (
+            <section className="agent-group" key={group.title}>
+              <h3>{group.title}</h3>
+              <div className="agent-fields">
+                {group.fields.map(({ key, label }) => (
+                  <Field
+                    key={key}
+                    label={label}
+                    htmlFor={`${id}-${key}`}
+                    hint={
+                      key === "request_limit"
+                        ? "0 means unlimited. Changes apply to new Turns."
+                        : key === "token_limit"
+                          ? "0 means no ceiling."
+                          : undefined
+                    }
+                  >
+                    <Input
+                      ref={key === FIELDS[0].key ? first : undefined}
+                      id={`${id}-${key}`}
+                      type="number"
+                      inputMode="numeric"
+                      min={
+                        key === "token_limit" || key === "request_limit" ? 0 : 1
+                      }
+                      step={1}
+                      max={Number.MAX_SAFE_INTEGER}
+                      required
+                      aria-invalid={
+                        key in drafts && agentInteger(key, drafts[key]) === null
+                      }
+                      value={drafts[key] ?? ""}
+                      onChange={(event) =>
+                        onChange({ ...drafts, [key]: event.target.value })
+                      }
+                    />
+                  </Field>
+                ))}
+              </div>
+            </section>
+          ))}
+        </div>
         <div className="flex items-center gap-3 pt-1">
           <Button
             variant="primary"
@@ -158,6 +178,7 @@ export function AgentPanel() {
   }, [load]);
 
   const { saving, save } = useSaver(load, first);
+  useReportSettingsSave("agent", saving);
   return (
     <AgentForm
       drafts={drafts}

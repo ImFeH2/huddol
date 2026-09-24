@@ -34,12 +34,17 @@ export function Shell({
 export function Sidebar({
   children,
   footer,
+  inert = false,
 }: {
   children: ReactNode;
   footer?: ReactNode;
+  inert?: boolean;
 }) {
   return (
-    <div className="flex flex-col min-h-0 border-r border-line bg-app">
+    <div
+      className="flex flex-col min-h-0 border-r border-line bg-app"
+      inert={inert}
+    >
       <div className="flex flex-col flex-1 min-h-0 overflow-y-auto">
         {children}
       </div>

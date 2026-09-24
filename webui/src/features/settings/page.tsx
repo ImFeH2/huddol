@@ -5,6 +5,7 @@ import { AgentPanel } from "@/features/settings/agent";
 import { ExecutionPanel } from "@/features/settings/execution";
 import { LangfusePanel } from "@/features/settings/langfuse";
 import { ModelPanel } from "@/features/settings/model";
+import { useSettingsSaving } from "@/features/settings/saver";
 
 const SECTIONS: TabItem<SettingsSection>[] = [
   { id: "model", label: "Model" },
@@ -26,21 +27,29 @@ function Panel({ section }: { section: SettingsSection }) {
   }
 }
 
-export function SettingsPage({ section }: { section: SettingsSection }) {
+function SettingsPageContent({ section }: { section: SettingsSection }) {
   const navigate = useNavigate();
+  const saving = useSettingsSaving();
   return (
     <Page>
       <PageHeader title="Settings" />
       <PageBody>
-        <Tabs
-          label="Settings"
-          tabs={SECTIONS}
-          value={section}
-          onChange={(next) => navigate({ name: "settings", section: next })}
-        >
-          <Panel section={section} />
-        </Tabs>
+        <div className="settings-layout">
+          <Tabs
+            label="Settings"
+            tabs={SECTIONS}
+            value={section}
+            disabled={saving}
+            onChange={(next) => navigate({ name: "settings", section: next })}
+          >
+            <Panel section={section} />
+          </Tabs>
+        </div>
       </PageBody>
     </Page>
   );
+}
+
+export function SettingsPage({ section }: { section: SettingsSection }) {
+  return <SettingsPageContent section={section} />;
 }

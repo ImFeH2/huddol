@@ -1,6 +1,49 @@
-import { type RefObject, useState } from "react";
+import {
+  createContext,
+  createElement,
+  type ReactNode,
+  type RefObject,
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useState,
+} from "react";
 import { toast } from "@/components/ui/index";
 import { backend } from "@/lib/backend";
+
+export function isSettingsSaving(sections: Record<string, boolean>): boolean {
+  return Object.values(sections).some(Boolean);
+}
+
+const SettingsSaveContext = createContext<{
+  saving: boolean;
+  report: (section: string, saving: boolean) => void;
+} | null>(null);
+
+export function SettingsSaveProvider({ children }: { children: ReactNode }) {
+  const [sections, setSections] = useState<Record<string, boolean>>({});
+  const report = useCallback((section: string, saving: boolean) => {
+    setSections((current) =>
+      current[section] === saving ? current : { ...current, [section]: saving },
+    );
+  }, []);
+  const saving = isSettingsSaving(sections);
+  const value = useMemo(() => ({ saving, report }), [saving, report]);
+  return createElement(SettingsSaveContext.Provider, { value }, children);
+}
+
+export function useSettingsSaving() {
+  return useContext(SettingsSaveContext)?.saving ?? false;
+}
+
+export function useReportSettingsSave(section: string, saving: boolean) {
+  const report = useContext(SettingsSaveContext)?.report;
+  useEffect(() => {
+    report?.(section, saving);
+    return () => report?.(section, false);
+  }, [report, section, saving]);
+}
 
 export function useSaver(
   load: () => Promise<void>,

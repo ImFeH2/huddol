@@ -1,6 +1,9 @@
 import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { Button, Chip, Field, Input, toast } from "@/components/ui/index";
-import { reportLoadFailure } from "@/features/settings/saver";
+import {
+  reportLoadFailure,
+  useReportSettingsSave,
+} from "@/features/settings/saver";
 import { backend } from "@/lib/backend";
 
 export function langfuseUpdate(
@@ -24,6 +27,8 @@ export function LangfusePanel() {
   const [publicKey, setPublicKey] = useState("");
   const [secretKey, setSecretKey] = useState("");
   const [busy, setBusy] = useState(false);
+  const [saving, setSaving] = useState(false);
+  useReportSettingsSave("langfuse", saving);
 
   const load = useCallback(async () => {
     setBusy(true);
@@ -43,6 +48,7 @@ export function LangfusePanel() {
   const save = async () => {
     if (!values || busy) return;
     setBusy(true);
+    setSaving(true);
     try {
       const updated = await backend.updateSettings(
         "observability",
@@ -61,6 +67,7 @@ export function LangfusePanel() {
       });
     } finally {
       setBusy(false);
+      setSaving(false);
       requestAnimationFrame(() => {
         if (document.activeElement === document.body) first.current?.focus();
       });

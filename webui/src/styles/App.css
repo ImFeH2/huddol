@@ -130,6 +130,137 @@
   }
 }
 
+.settings-layout {
+  container: settings / inline-size;
+  min-width: 0;
+}
+
+.model-settings {
+  width: 100%;
+  max-width: 920px;
+}
+
+.default-model-card,
+.provider-card {
+  min-width: 0;
+  padding: 20px;
+  border: 1px solid var(--color-line);
+  border-radius: 6px;
+  background: var(--color-app);
+}
+
+.provider-card,
+.models-section {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.provider-card > form {
+  width: 100%;
+}
+
+.provider-form,
+.model-form {
+  min-width: 0;
+}
+
+.models-section {
+  max-width: 920px;
+}
+
+.model-item {
+  min-width: 0;
+  overflow: hidden;
+  border: 1px solid var(--color-line);
+  border-radius: 6px;
+  background: var(--color-app);
+}
+
+.model-summary,
+.model-add {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  width: 100%;
+  min-height: 52px;
+  padding: 12px 16px;
+  border: 0;
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+}
+
+.model-summary:hover:enabled,
+.model-add:hover:enabled {
+  background: var(--color-surface-hover);
+}
+
+.model-summary:disabled,
+.model-add:disabled {
+  cursor: not-allowed;
+}
+
+.model-summary[aria-expanded="true"] {
+  border-bottom: 1px solid var(--color-line);
+}
+
+.model-add {
+  justify-content: flex-start;
+  color: var(--color-primary);
+  font-weight: 600;
+}
+
+.model-editor {
+  min-width: 0;
+  padding: 16px;
+}
+
+.model-editor[hidden] {
+  display: none;
+}
+
+.model-form > div:last-child {
+  flex-wrap: wrap;
+}
+
+.agent-form {
+  width: 100%;
+  max-width: 920px;
+}
+
+.agent-groups,
+.agent-group,
+.agent-fields {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  gap: 16px;
+}
+
+.agent-group {
+  padding: 20px;
+  border: 1px solid var(--color-line);
+  border-radius: 6px;
+  background: var(--color-app);
+}
+
+@container settings (min-width: 900px) {
+  .agent-groups {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    align-items: start;
+  }
+}
+
+@container settings (min-width: 760px) {
+  .agent-fields {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,

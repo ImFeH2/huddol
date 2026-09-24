@@ -14,6 +14,7 @@ const lifecycle = vi.hoisted(() => ({
 }));
 vi.mock("react", async (original) => ({
   ...(await original<typeof import("react")>()),
+  useContext: () => null,
   useState: (initial: unknown) => {
     const setter = vi.fn();
     const value = lifecycle.initial.get(lifecycle.setters.length) ?? initial;
