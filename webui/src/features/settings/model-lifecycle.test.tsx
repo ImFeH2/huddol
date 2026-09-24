@@ -5,16 +5,20 @@ import {
   AgentModelPanel,
   ModelPanel,
 } from "@/features/settings/model";
+import { useReportSettingsSave, useSaver } from "@/features/settings/saver";
 import { type BackendEvent, backend, type ModelCatalog } from "@/lib/backend";
 
 const lifecycle = vi.hoisted(() => ({
   effects: [] as (() => undefined | (() => void))[],
   setters: [] as ReturnType<typeof vi.fn>[],
   initial: new Map<number, unknown>(),
+  context: null as {
+    report: (section: string, saving: boolean) => void;
+  } | null,
 }));
 vi.mock("react", async (original) => ({
   ...(await original<typeof import("react")>()),
-  useContext: () => null,
+  useContext: () => lifecycle.context,
   useState: (initial: unknown) => {
     const setter = vi.fn();
     const value = lifecycle.initial.get(lifecycle.setters.length) ?? initial;
@@ -31,7 +35,24 @@ vi.mock("react", async (original) => ({
 
 const catalog: ModelCatalog = {
   version: 1,
-  providers: [],
+  providers: [
+    {
+      id: "provider-a",
+      name: "Provider A",
+      api_type: "openai-chat",
+      base_url: "https://a.test",
+      api_key_set: false,
+      enabled: true,
+    },
+    {
+      id: "provider-b",
+      name: "Provider B",
+      api_type: "openai-chat",
+      base_url: "https://b.test",
+      api_key_set: false,
+      enabled: true,
+    },
+  ],
   models: [],
   default_model_id: null,
   default_thinking: "default",
@@ -42,9 +63,11 @@ let cleanups: (() => void)[];
 const off = vi.fn();
 
 beforeEach(() => {
+  vi.stubGlobal("requestAnimationFrame", vi.fn());
   lifecycle.effects = [];
   lifecycle.setters = [];
   lifecycle.initial.clear();
+  lifecycle.context = null;
   cleanups = [];
   off.mockClear();
   clearToasts();
@@ -58,6 +81,7 @@ afterEach(() => {
   for (const cleanup of cleanups) cleanup();
   clearToasts();
   vi.restoreAllMocks();
+  vi.unstubAllGlobals();
 });
 async function mountEffects() {
   for (const effect of lifecycle.effects.splice(0)) {
@@ -82,6 +106,35 @@ const updated: ModelCatalog = {
   default_thinking: "low",
   agent_configs: { "2": { model_id: null, thinking: "low" } },
 };
+
+function findNewModelForm(node: unknown): { key: string | null } | null {
+  if (Array.isArray(node)) {
+    for (const child of node) {
+      const result = findNewModelForm(child);
+      if (result) return result;
+    }
+    return null;
+  }
+  if (!node || typeof node !== "object") return null;
+  const element = node as {
+    type?: { name?: string };
+    key?: string | null;
+    props?: { children?: unknown; model?: unknown };
+  };
+  if (element.type?.name === "ModelForm" && !element.props?.model) {
+    return { key: element.key ?? null };
+  }
+  return findNewModelForm(element.props?.children);
+}
+
+function newModelFormKey(providerId: string, expanded: boolean): string | null {
+  lifecycle.setters = [];
+  lifecycle.initial.clear();
+  lifecycle.initial.set(0, catalog);
+  lifecycle.initial.set(3, providerId);
+  lifecycle.initial.set(4, expanded ? ["new"] : []);
+  return findNewModelForm(ModelPanel())?.key ?? null;
+}
 
 function mountPanel(agent: boolean) {
   lifecycle.initial.set(0, catalog);
@@ -191,6 +244,77 @@ describe.each([false, true])("model read ordering: Agent %s", (agent) => {
         updated.agent_configs["2"],
       );
     }
+  });
+});
+
+describe("new Model form identity", () => {
+  it("resets the draft when switching providers and returning", () => {
+    const providerA = newModelFormKey("provider-a", true);
+    const providerB = newModelFormKey("provider-b", true);
+    const returnedA = newModelFormKey("provider-a", true);
+
+    expect(providerA).toBe("provider-a");
+    expect(providerB).toBe("provider-b");
+    expect(returnedA).toBe(providerA);
+  });
+
+  it("keeps the same Provider form identity while collapsing and expanding", () => {
+    const expanded = newModelFormKey("provider-a", true);
+    const collapsed = newModelFormKey("provider-a", false);
+
+    expect(collapsed).toBe(expanded);
+  });
+});
+
+describe("settings save lifecycle", () => {
+  it("passes Panel saving state to the shared navigation tracker", async () => {
+    const report = vi.fn();
+    lifecycle.context = { report };
+
+    useReportSettingsSave("execution", true);
+    await mountEffects();
+    expect(report).toHaveBeenLastCalledWith("execution", true);
+
+    cleanups.pop()?.();
+    expect(report).toHaveBeenLastCalledWith("execution", false);
+  });
+
+  it("reports saving through the completed post-save read", async () => {
+    const updating = deferred<Record<string, unknown>>();
+    const reading = deferred<void>();
+    const update = vi
+      .spyOn(backend, "updateSettings")
+      .mockReturnValueOnce(updating.promise);
+    const load = vi.fn(() => reading.promise);
+    lifecycle.setters = [];
+    const saver = useSaver(load, { current: null });
+
+    const saved = saver.save("execution", {});
+    expect(lifecycle.setters[0]).toHaveBeenCalledWith(true);
+    updating.resolve({});
+    await Promise.resolve();
+    expect(load).toHaveBeenCalledOnce();
+    expect(lifecycle.setters[0]).not.toHaveBeenCalledWith(false);
+    reading.resolve();
+
+    await expect(saved).resolves.toBe(true);
+    expect(lifecycle.setters[0]).toHaveBeenLastCalledWith(false);
+    update.mockRestore();
+  });
+
+  it("releases saving state after a failed write", async () => {
+    lifecycle.setters = [];
+    vi.spyOn(backend, "updateSettings").mockRejectedValueOnce(
+      new Error("offline"),
+    );
+    const saver = useSaver(
+      vi.fn(async () => {}),
+      { current: null },
+    );
+
+    await expect(saver.save("execution", {})).resolves.toBe(false);
+    expect(lifecycle.setters[0]).toHaveBeenNthCalledWith(1, true);
+    expect(lifecycle.setters[0]).toHaveBeenLastCalledWith(false);
   });
 });
 

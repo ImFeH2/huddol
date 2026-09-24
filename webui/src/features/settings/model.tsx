@@ -492,7 +492,11 @@ export function ModelPanel() {
                   hidden={!expandedModels.includes("new")}
                   inert={!expandedModels.includes("new")}
                 >
-                  <ModelForm provider={provider} save={save} />
+                  <ModelForm
+                    key={provider.id}
+                    provider={provider}
+                    save={save}
+                  />
                 </div>
               </section>
             </section>
