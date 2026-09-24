@@ -1,14 +1,286 @@
+// @vitest-environment jsdom
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import App from "@/App";
 import { RouterProvider } from "@/app/router";
 import { SettingsPage } from "@/features/settings/page";
 import { isSettingsSaving } from "@/features/settings/saver";
+import { backend, type ModelCatalog } from "@/lib/backend";
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (error: Error) => void;
+  const promise = new Promise<T>((yes, no) => {
+    resolve = yes;
+    reject = no;
+  });
+  return { promise, resolve, reject };
+}
+
+const modelCatalog: ModelCatalog = {
+  version: 1,
+  providers: [
+    {
+      id: "provider-a",
+      name: "Provider A",
+      api_type: "openai-chat",
+      base_url: "http://127.0.0.1:1",
+      api_key_set: false,
+      enabled: false,
+    },
+    {
+      id: "provider-b",
+      name: "Provider B",
+      api_type: "openai-chat",
+      base_url: "http://127.0.0.1:1",
+      api_key_set: false,
+      enabled: false,
+    },
+  ],
+  models: [],
+  default_model_id: null,
+  default_thinking: "default",
+  agent_configs: {},
+};
+
+const agentSettings = {
+  context_window_tokens: 8192,
+  memory_index_bytes: 64000,
+  exchange_nudge_after: 24,
+  idle_streak_after: 3,
+  no_tool_turns_before_pause: 5,
+  max_concurrent_turns: 4,
+  token_limit: 100000,
+  request_limit: 0,
+};
+
+class ResizeObserverStub {
+  observe() {}
+
+  unobserve() {}
+
+  disconnect() {}
+}
+
+function getModelForm(element: HTMLElement): HTMLFormElement {
+  const form = element.closest("form");
+  if (!form) throw new Error("Model form is missing");
+  return form;
+}
+
+function getAddModelToggle(): HTMLElement {
+  const toggle = screen
+    .getAllByRole("button", { name: /^Add model$/ })
+    .find((button) => button.hasAttribute("aria-controls"));
+  if (!toggle) throw new Error("Add model toggle is missing");
+  return toggle;
+}
+
+function prepareApplication() {
+  vi.spyOn(backend, "connect").mockResolvedValue();
+  vi.spyOn(backend, "onEvent").mockReturnValue(vi.fn());
+  vi.spyOn(backend, "onFailure").mockReturnValue(vi.fn());
+  vi.spyOn(backend, "organization").mockResolvedValue({
+    id: 1,
+    members: [],
+    human_id: 1,
+    token_limit: null,
+  });
+  vi.spyOn(backend, "discussions").mockResolvedValue([]);
+  vi.spyOn(backend, "modelCatalog").mockResolvedValue(modelCatalog);
+  vi.spyOn(backend, "settings").mockImplementation(async (section) => {
+    if (section === "agent") return agentSettings;
+    if (section === "observability") {
+      return {
+        enabled: false,
+        base_url: "https://cloud.langfuse.com",
+        keys_set: true,
+      };
+    }
+    return {};
+  });
+  vi.stubGlobal("ResizeObserver", ResizeObserverStub);
+  vi.stubGlobal("requestAnimationFrame", vi.fn());
+  render(<App />);
+}
+
+async function openSettings(section: "model" | "agent") {
+  await screen.findByRole("button", { name: "Settings" });
+  fireEvent.click(screen.getByRole("button", { name: "Settings" }));
+  const tab = await screen.findByRole("tab", { name: "Model" });
+  if (section === "agent") {
+    fireEvent.click(screen.getByRole("tab", { name: "Agent" }));
+    await screen.findByLabelText("Model requests per Turn");
+  }
+  return tab;
+}
+
+afterEach(() => {
+  cleanup();
+  vi.restoreAllMocks();
+  vi.unstubAllGlobals();
+});
 
 describe("Settings save navigation", () => {
   it("stays blocked until every active save finishes", () => {
     expect(isSettingsSaving({})).toBe(false);
     expect(isSettingsSaving({ model: true, agent: false })).toBe(true);
     expect(isSettingsSaving({ model: false, agent: false })).toBe(false);
+  });
+});
+
+describe("mounted Settings interactions", () => {
+  beforeEach(prepareApplication);
+
+  it("resets new Model fields between Providers and retains them on collapse", async () => {
+    await openSettings("model");
+    const provider = await screen.findByLabelText("Provider");
+    fireEvent.change(provider, { target: { value: "provider-a" } });
+
+    fireEvent.click(await screen.findByRole("button", { name: /^Add model$/ }));
+    const name = await screen.findByLabelText("Model name");
+    const form = getModelForm(name);
+    const remote = within(form).getByRole("combobox", {
+      name: "Remote model ID",
+    });
+    const enabled = within(form).getByRole("checkbox", { name: "Enabled" });
+
+    fireEvent.change(name, { target: { value: "A draft" } });
+    fireEvent.change(remote, { target: { value: "remote-a" } });
+    fireEvent.click(enabled);
+
+    fireEvent.change(provider, { target: { value: "provider-b" } });
+    fireEvent.click(await screen.findByRole("button", { name: /^Add model$/ }));
+    const nameB = await screen.findByLabelText("Model name");
+    const formB = getModelForm(nameB);
+    expect((nameB as HTMLInputElement).value).toBe("");
+    expect(
+      (
+        within(formB).getByRole("combobox", {
+          name: "Remote model ID",
+        }) as HTMLInputElement
+      ).value,
+    ).toBe("");
+    expect(
+      (
+        within(formB).getByRole("checkbox", {
+          name: "Enabled",
+        }) as HTMLInputElement
+      ).checked,
+    ).toBe(true);
+
+    fireEvent.change(provider, { target: { value: "provider-a" } });
+    fireEvent.click(await screen.findByRole("button", { name: /^Add model$/ }));
+    const nameA = await screen.findByLabelText("Model name");
+    const formA = getModelForm(nameA);
+    expect((nameA as HTMLInputElement).value).toBe("");
+    expect(
+      (
+        within(formA).getByRole("combobox", {
+          name: "Remote model ID",
+        }) as HTMLInputElement
+      ).value,
+    ).toBe("");
+    const enabledA = within(formA).getByRole("checkbox", {
+      name: "Enabled",
+    }) as HTMLInputElement;
+    expect(enabledA.checked).toBe(true);
+
+    fireEvent.change(nameA, { target: { value: "Retained draft" } });
+    fireEvent.change(
+      within(formA).getByRole("combobox", { name: "Remote model ID" }),
+      { target: { value: "retained-remote" } },
+    );
+    fireEvent.click(enabledA);
+    fireEvent.click(getAddModelToggle());
+    fireEvent.click(getAddModelToggle());
+
+    expect(
+      ((await screen.findByLabelText("Model name")) as HTMLInputElement).value,
+    ).toBe("Retained draft");
+    expect(
+      (
+        within(formA).getByRole("combobox", {
+          name: "Remote model ID",
+        }) as HTMLInputElement
+      ).value,
+    ).toBe("retained-remote");
+    expect(enabledA.checked).toBe(false);
+  });
+
+  it("blocks Tabs and Sidebar through delayed write and readback", async () => {
+    const readback = deferred<Record<string, unknown>>();
+    const update = deferred<Record<string, unknown>>();
+    let agentReads = 0;
+    vi.spyOn(backend, "settings").mockImplementation(async (section) => {
+      if (section === "agent") {
+        agentReads += 1;
+        return agentReads === 1 ? agentSettings : readback.promise;
+      }
+      return {};
+    });
+    vi.spyOn(backend, "updateSettings").mockReturnValueOnce(update.promise);
+
+    await openSettings("agent");
+    const requestLimit = screen.getByLabelText("Model requests per Turn");
+    fireEvent.change(requestLimit, { target: { value: "7" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+
+    const agentTab = screen.getByRole("tab", { name: "Agent" });
+    const settingsNavigation = screen.getByRole("button", {
+      name: "Settings",
+    });
+    await waitFor(() => {
+      expect((agentTab as HTMLButtonElement).disabled).toBe(true);
+      expect(settingsNavigation.closest("[inert]")).not.toBeNull();
+    });
+
+    await act(async () => {
+      update.resolve({});
+      await update.promise;
+    });
+    await waitFor(() => expect(agentReads).toBe(2));
+    expect((agentTab as HTMLButtonElement).disabled).toBe(true);
+    expect(settingsNavigation.closest("[inert]")).not.toBeNull();
+
+    await act(async () => {
+      readback.resolve({ ...agentSettings, request_limit: 7 });
+      await readback.promise;
+    });
+    await waitFor(() => {
+      expect((agentTab as HTMLButtonElement).disabled).toBe(false);
+      expect(settingsNavigation.closest("[inert]")).toBeNull();
+    });
+    expect((requestLimit as HTMLInputElement).value).toBe("7");
+  });
+
+  it("restores navigation and preserves the draft after a failed write", async () => {
+    vi.spyOn(backend, "updateSettings").mockRejectedValueOnce(
+      new Error("offline"),
+    );
+    await openSettings("agent");
+    const requestLimit = screen.getByLabelText("Model requests per Turn");
+    fireEvent.change(requestLimit, { target: { value: "9" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+
+    await screen.findByText("Could not save");
+    expect(
+      (screen.getByRole("tab", { name: "Agent" }) as HTMLButtonElement)
+        .disabled,
+    ).toBe(false);
+    expect(
+      screen.getByRole("button", { name: "Settings" }).closest("[inert]"),
+    ).toBeNull();
+    expect((requestLimit as HTMLInputElement).value).toBe("9");
   });
 });
 
