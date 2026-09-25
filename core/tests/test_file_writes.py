@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import gc
+import multiprocessing
 import os
 import subprocess
 import sys
 import weakref
+from builtins import ExceptionGroup
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from pathlib import Path
@@ -22,6 +24,22 @@ from huddol.core.errors import DomainError
 from huddol.ports.files import ConflictError
 from huddol.services.library import Library
 from huddol.services.workspace import Workspace
+
+
+def _create_from_process(path: str, content: str, barrier, results) -> None:
+    barrier.wait()
+    try:
+        editing.edit_file(
+            path,
+            "",
+            content,
+            directories=[str(Path(path).parent)],
+            create=True,
+        )
+    except DomainError as error:
+        results.put(error.code)
+    else:
+        results.put("created")
 
 
 @pytest.fixture
@@ -141,6 +159,113 @@ def test_agent_edit_and_write_share_the_lock(tmp_path, ordered_writes, first_edi
         assert tree.read("same.txt")[0] == ("edited" if first_edit else "written")
     finally:
         execution.close()
+
+
+def test_edit_create_thread_race_has_one_winner(tmp_path):
+    target = tmp_path / "same.txt"
+    start = Barrier(2)
+
+    def create(content):
+        start.wait()
+        try:
+            editing.edit_file(
+                str(target), "", content, directories=[str(tmp_path)], create=True
+            )
+        except DomainError as error:
+            return error.code
+        return "created"
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        results = list(pool.map(create, ["first", "second"]))
+    assert sorted(results) == ["already_exists", "created"]
+    assert target.read_text(encoding="utf-8") in {"first", "second"}
+    assert not list(tmp_path.glob(".huddol-create-*"))
+
+
+def test_edit_create_process_race_has_one_winner(tmp_path):
+    target = tmp_path / "same.txt"
+    context = multiprocessing.get_context("spawn")
+    barrier = context.Barrier(2)
+    results = context.Queue()
+    processes = [
+        context.Process(
+            target=_create_from_process,
+            args=(str(target), content, barrier, results),
+        )
+        for content in ("first", "second")
+    ]
+    try:
+        for process in processes:
+            process.start()
+        outcomes = [results.get(timeout=20) for _ in processes]
+        for process in processes:
+            process.join(timeout=20)
+            assert process.exitcode == 0
+        assert sorted(outcomes) == ["already_exists", "created"]
+        assert target.read_text(encoding="utf-8") in {"first", "second"}
+        assert not list(tmp_path.glob(".huddol-create-*"))
+    finally:
+        for process in processes:
+            if process.is_alive():
+                process.terminate()
+                process.join()
+        results.close()
+
+
+def test_edit_create_publishes_only_complete_content(tmp_path, monkeypatch):
+    target = tmp_path / "new.txt"
+    publish = os.link
+
+    def observe(source, destination):
+        assert source.parent == destination.parent
+        assert source.read_text(encoding="utf-8") == "complete body"
+        assert not destination.exists()
+        publish(source, destination)
+        assert destination.read_text(encoding="utf-8") == "complete body"
+
+    monkeypatch.setattr(file_writes.os, "link", observe)
+    result = editing.edit_file(
+        str(target), "", "complete body", directories=[str(tmp_path)], create=True
+    )
+    assert result.replacements == 0
+    assert target.read_text(encoding="utf-8") == "complete body"
+    assert list(tmp_path.iterdir()) == [target]
+
+
+def test_edit_create_publish_failure_removes_temporary_file(tmp_path, monkeypatch):
+    target = tmp_path / "new.txt"
+    failure = PermissionError("hard links are unavailable")
+    monkeypatch.setattr(file_writes.os, "link", Mock(side_effect=failure))
+    with pytest.raises(PermissionError) as error:
+        editing.edit_file(
+            str(target), "", "complete", directories=[str(tmp_path)], create=True
+        )
+    assert error.value is failure
+    assert not target.exists()
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_edit_create_cleanup_failure_reports_published_file(tmp_path, monkeypatch):
+    target = tmp_path / "new.txt"
+    original_unlink = Path.unlink
+    failure = PermissionError("temporary cleanup failed")
+
+    def unlink(path, *args, **kwargs):
+        if path.name.startswith(".huddol-create-"):
+            raise failure
+        return original_unlink(path, *args, **kwargs)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(Path, "unlink", unlink)
+        with pytest.raises(DomainError) as error:
+            editing.edit_file(
+                str(target), "", "complete", directories=[str(tmp_path)], create=True
+            )
+    assert error.value.code == "write_published"
+    assert target.read_text(encoding="utf-8") == "complete"
+    assert len(list(tmp_path.glob(".huddol-create-*"))) == 1
+    for temporary in tmp_path.glob(".huddol-create-*"):
+        original_unlink(temporary)
 
 
 def test_tree_edit_holds_lock_through_metadata(tmp_path, ordered_writes):

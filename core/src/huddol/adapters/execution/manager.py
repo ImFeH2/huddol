@@ -57,6 +57,7 @@ class BoundExecution:
         *,
         replace_all: bool = False,
         write_directories: Sequence[str] | None = None,
+        create: bool = False,
     ) -> EditResult:
         return self._lookup().edit(
             path,
@@ -64,6 +65,7 @@ class BoundExecution:
             new_text,
             replace_all=replace_all,
             write_directories=write_directories,
+            create=create,
         )
 
 

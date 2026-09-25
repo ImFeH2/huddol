@@ -1260,7 +1260,17 @@ def test_every_call_extends_what_the_previous_call_sent(settings, start) -> None
                 "new_text": "",
                 "replace_all": True,
             },
-            ("workspace/MEMORY.md", "before", "", True),
+            ("workspace/MEMORY.md", "before", "", True, False),
+        ),
+        (
+            "edit",
+            {
+                "path": "/data/script.py",
+                "old_text": "",
+                "new_text": "print('ready')\\n",
+                "create": True,
+            },
+            ("/data/script.py", "", "print('ready')\\n", False, True),
         ),
     ],
 )
@@ -1282,6 +1292,13 @@ def test_model_file_tools_forward_arguments_without_tree_tools(
         names = {tool.name for tool in info.function_tools}
         assert {"run", "edit"} <= names
         assert names.isdisjoint({"workspace", "library"})
+        edit_schema = next(tool for tool in info.function_tools if tool.name == "edit")
+        assert "create=true" in edit_schema.description
+        assert (
+            edit_schema.parameters_json_schema["properties"]["create"]["type"]
+            == "boolean"
+        )
+        assert "create" not in edit_schema.parameters_json_schema["required"]
         if not calls:
             return ModelResponse(parts=[ToolCallPart(name, params)])
         return ModelResponse(parts=[TextPart("Done")])

@@ -637,6 +637,7 @@ class AgentTools:
         old_text: str,
         new_text: str,
         replace_all: bool = False,
+        create: bool = False,
     ) -> dict[str, Any]:
         self._check("edit", path)
         execution = self._deps.execution.snapshot()
@@ -651,6 +652,7 @@ class AgentTools:
                 new_text,
                 replace_all=replace_all,
                 write_directories=directories,
+                create=create,
             )
         self._record("edit", f"{result.path} ({result.replacements} replaced)")
         return {

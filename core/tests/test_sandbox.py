@@ -118,6 +118,104 @@ def test_edit_replaces_once_and_reports_a_diff(tmp_path: Path) -> None:
     assert "-beta" in result.diff and "+gamma" in result.diff
 
 
+def test_edit_creates_complete_file_and_allows_empty_content(tmp_path: Path) -> None:
+    sandbox = LocalExecution([str(tmp_path)], enforce=False)
+    target = tmp_path / "new.txt"
+    result = sandbox.edit(str(target), "", "alpha\nbeta\n", create=True)
+    assert target.read_text(encoding="utf-8") == "alpha\nbeta\n"
+    assert result.path == str(target)
+    assert result.replacements == 0
+    assert "+alpha" in result.diff and "+beta" in result.diff
+    empty = tmp_path / "empty.txt"
+    assert sandbox.edit(str(empty), "", "", create=True).replacements == 0
+    assert empty.read_bytes() == b""
+
+
+@pytest.mark.parametrize("kind", ["file", "directory", "symlink", "dangling_link"])
+def test_edit_create_protects_existing_paths(tmp_path: Path, kind: str) -> None:
+    target = tmp_path / "target"
+    if kind == "file":
+        target.write_text("preserved", encoding="utf-8")
+    elif kind == "directory":
+        target.mkdir()
+    elif kind == "symlink":
+        linked = tmp_path / "linked.txt"
+        linked.write_text("preserved", encoding="utf-8")
+        try:
+            target.symlink_to(linked)
+        except OSError as error:
+            pytest.skip(f"symlinks are unavailable: {error}")
+    else:
+        try:
+            target.symlink_to(tmp_path / "missing")
+        except OSError as error:
+            pytest.skip(f"symlinks are unavailable: {error}")
+    sandbox = LocalExecution([str(tmp_path)], enforce=False)
+    with pytest.raises(DomainError) as error:
+        sandbox.edit(str(target), "", "replacement", create=True)
+    assert error.value.code == "already_exists"
+    if kind == "file":
+        assert target.read_text(encoding="utf-8") == "preserved"
+    elif kind == "directory":
+        assert target.is_dir()
+    else:
+        assert target.is_symlink()
+        if kind == "symlink":
+            assert linked.read_text(encoding="utf-8") == "preserved"
+
+
+def test_edit_create_requires_existing_parent_and_writable_root(tmp_path: Path) -> None:
+    allowed = tmp_path / "allowed"
+    allowed.mkdir()
+    sandbox = LocalExecution([str(allowed)], enforce=False)
+    missing = allowed / "missing" / "file.txt"
+    with pytest.raises(DomainError) as error:
+        sandbox.edit(str(missing), "", "body", create=True)
+    assert error.value.code == "not_found"
+    outside = tmp_path / "outside.txt"
+    with pytest.raises(DomainError) as error:
+        sandbox.edit(str(outside), "", "body", create=True)
+    assert error.value.code == "not_writable"
+    assert not outside.exists()
+
+
+def test_edit_create_rejects_parent_symlink_outside_writable_roots(
+    tmp_path: Path,
+) -> None:
+    allowed = tmp_path / "allowed"
+    outside = tmp_path / "outside"
+    allowed.mkdir()
+    outside.mkdir()
+    alias = allowed / "alias"
+    try:
+        alias.symlink_to(outside, target_is_directory=True)
+    except OSError as error:
+        pytest.skip(f"directory symlinks are unavailable: {error}")
+    sandbox = LocalExecution([str(allowed)], enforce=False)
+    with pytest.raises(DomainError) as error:
+        sandbox.edit(str(alias / "file.txt"), "", "body", create=True)
+    assert error.value.code == "not_writable"
+    assert not (outside / "file.txt").exists()
+
+
+def test_edit_create_rejects_incompatible_parameters(tmp_path: Path) -> None:
+    target = tmp_path / "file.txt"
+    with pytest.raises(DomainError) as error:
+        edit_file(str(target), "old", "body", directories=[str(tmp_path)], create=True)
+    assert error.value.code == "invalid_edit"
+    with pytest.raises(DomainError) as error:
+        edit_file(
+            str(target),
+            "",
+            "body",
+            directories=[str(tmp_path)],
+            create=True,
+            replace_all=True,
+        )
+    assert error.value.code == "invalid_edit"
+    assert not target.exists()
+
+
 def test_edit_refuses_ambiguous_matches_unless_replace_all(tmp_path: Path) -> None:
     target = tmp_path / "file.txt"
     target.write_text("x\nx\n", encoding="utf-8")

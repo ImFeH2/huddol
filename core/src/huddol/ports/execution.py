@@ -48,6 +48,7 @@ class ExecutionEnvironment(Protocol):
         *,
         replace_all: bool = False,
         write_directories: Sequence[str] | None = None,
+        create: bool = False,
     ) -> EditResult: ...
 
 

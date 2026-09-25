@@ -581,8 +581,15 @@ class PydanticModelRunner:
             old_text: str,
             new_text: str,
             replace_all: bool = False,
+            create: bool = False,
         ) -> Any:
-            return _guard(lambda: ctx.deps.edit(path, old_text, new_text, replace_all))
+            """Edit a file or create an absent file with create=true and empty old_text.
+
+            Creation takes the complete file body from new_text.
+            """
+            return _guard(
+                lambda: ctx.deps.edit(path, old_text, new_text, replace_all, create)
+            )
 
         @tool(sequential=True)
         def history(

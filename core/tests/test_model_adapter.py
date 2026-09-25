@@ -382,6 +382,12 @@ def test_system_prompt_states_what_structure_cannot_enforce(phrase: str) -> None
     assert phrase in SYSTEM_PROMPT
 
 
+def test_system_prompt_documents_file_creation_arguments() -> None:
+    assert 'pass create=true, old_text=""' in SYSTEM_PROMPT
+    assert "complete file body as new_text" in SYSTEM_PROMPT
+    assert "parent directory must already exist" in SYSTEM_PROMPT
+
+
 def test_tool_errors_are_reported_as_retryable_guidance() -> None:
     from pydantic_ai import ModelRetry
 

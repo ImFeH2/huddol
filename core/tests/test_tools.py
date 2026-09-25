@@ -100,9 +100,9 @@ def test_tools_forward_absolute_paths_in_both_platform_formats(
         calls.append((argv, cwd, timeout))
         return RunResult(0, "", "", False)
 
-    def edit(path, old_text, new_text, *, replace_all, write_directories):
-        calls.append((path, old_text, new_text, replace_all))
-        return EditResult(path, "", 1)
+    def edit(path, old_text, new_text, *, replace_all, write_directories, create):
+        calls.append((path, old_text, new_text, replace_all, create))
+        return EditResult(path, "", 0 if create else 1)
 
     environment = world.execution.snapshot()
     monkeypatch.setattr(environment, "run", run)
@@ -110,7 +110,12 @@ def test_tools_forward_absolute_paths_in_both_platform_formats(
     monkeypatch.setattr(world.execution, "snapshot", lambda: environment)
     tools.run(["pwd"], cwd=path, timeout=7)
     tools.edit(path, "before", "after", replace_all=True)
-    assert calls == [(["pwd"], path, 7), (path, "before", "after", True)]
+    tools.edit(path, "", "complete body", create=True)
+    assert calls == [
+        (["pwd"], path, 7),
+        (path, "before", "after", True, False),
+        (path, "", "complete body", False, True),
+    ]
     assert (tmp_path / "agents" / str(MAIN) / "workspace").is_dir()
 
 
@@ -171,6 +176,26 @@ def test_edit_keeps_absolute_paths(world, tmp_path: Path) -> None:
     assert result["path"] == str(target)
     assert target.read_text(encoding="utf-8") == "after"
     assert (tmp_path / "agents" / str(MAIN) / "workspace").is_dir()
+
+
+def test_edit_tool_creates_file_then_uses_existing_edit_behavior(
+    world, tmp_path: Path
+) -> None:
+    directory = tmp_path / "writable"
+    directory.mkdir()
+    target = directory / "new.txt"
+    world.execution.configure(
+        {"write_directories": [str(directory)]}, lambda values: None
+    )
+    tools = tools_for(world, MAIN)
+    created = tools.edit(str(target), "", "before", create=True)
+    assert created["path"] == str(target)
+    assert created["replacements"] == 0
+    assert "+before" in created["diff"]
+    assert target.read_text(encoding="utf-8") == "before"
+    edited = tools.edit(str(target), "before", "after")
+    assert edited["replacements"] == 1
+    assert target.read_text(encoding="utf-8") == "after"
 
 
 @pytest.mark.parametrize("actor_id", [HUMAN, MAIN])
@@ -810,7 +835,11 @@ def test_run_and_edit_add_existing_implicit_roots_to_current_configuration(
             (
                 "edit",
                 str(workspace / "MEMORY.md"),
-                {"replace_all": True, "write_directories": expected},
+                {
+                    "replace_all": True,
+                    "write_directories": expected,
+                    "create": False,
+                },
             ),
         ]
         assert environment.write_directories == tuple(roots)

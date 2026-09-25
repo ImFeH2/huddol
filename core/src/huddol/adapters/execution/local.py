@@ -151,6 +151,7 @@ class LocalExecution:
         *,
         replace_all: bool = False,
         write_directories: Sequence[str] | None = None,
+        create: bool = False,
     ) -> EditResult:
         return edit_file(
             path,
@@ -162,4 +163,5 @@ class LocalExecution:
                 else write_directories
             ),
             replace_all=replace_all,
+            create=create,
         )
