@@ -187,14 +187,23 @@ def test_edit_tool_creates_file_then_uses_existing_edit_behavior(
     world.execution.configure(
         {"write_directories": [str(directory)]}, lambda values: None
     )
-    tools = tools_for(world, MAIN)
+    tools = tools_for(world, MAIN, turn=TurnBinding(MAIN, 1))
     created = tools.edit(str(target), "", "before", create=True)
     assert created["path"] == str(target)
     assert created["replacements"] == 0
+    assert created["created"] is True
     assert "+before" in created["diff"]
     assert target.read_text(encoding="utf-8") == "before"
+    empty = directory / "empty.txt"
+    empty_created = tools.edit(str(empty), "", "", create=True)
+    assert empty_created["created"] is True
+    assert empty_created["diff"] == ""
     edited = tools.edit(str(target), "before", "after")
     assert edited["replacements"] == 1
+    assert edited["created"] is False
+    recorded = world.history.effects(MAIN, sequences=[1])
+    assert ["created" in effect.summary for effect in recorded] == [True, True, False]
+    assert "1 replaced" in recorded[-1].summary
     assert target.read_text(encoding="utf-8") == "after"
 
 

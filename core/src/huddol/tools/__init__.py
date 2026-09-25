@@ -654,11 +654,17 @@ class AgentTools:
                 write_directories=directories,
                 create=create,
             )
-        self._record("edit", f"{result.path} ({result.replacements} replaced)")
+        summary = (
+            f"{result.path} (created)"
+            if create
+            else f"{result.path} ({result.replacements} replaced)"
+        )
+        self._record("edit", summary)
         return {
             "path": result.path,
             "diff": result.diff,
             "replacements": result.replacements,
+            "created": create,
         }
 
     def _workspace(self, agent_id: int | None = None) -> Workspace:
