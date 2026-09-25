@@ -743,11 +743,16 @@ class Scheduler:
                             lifecycle.pause_requested
                             or agent_id in self._pause_requested
                         )
+                        lifecycle_error = (
+                            None
+                            if window is not None and window.reason == "overflow"
+                            else error
+                        )
                         self.history.set_lifecycle(
                             agent_id,
                             AgentLifecycle(
                                 pause_requested=requested,
-                                error=error,
+                                error=lifecycle_error,
                                 prepared_sequence=lifecycle.prepared_sequence
                                 if reminder is None and status == "completed"
                                 else None,
@@ -760,7 +765,7 @@ class Scheduler:
                             else "paused"
                             if requested
                             else "error"
-                            if error
+                            if lifecycle_error
                             else "idle",
                         )
                     persisted_history = messages

@@ -456,7 +456,7 @@ def test_preparation_runs_without_pending_and_resets_after_completion(
 
 
 @pytest.mark.parametrize("fresh", [False, True])
-def test_overflow_resets_only_after_an_earlier_run_and_waits_for_changed_mentions(
+def test_overflow_resets_and_automatically_continues_pending_mentions(
     world, fresh
 ) -> None:
     mention(world)
@@ -469,38 +469,198 @@ def test_overflow_resets_only_after_an_earlier_run_and_waits_for_changed_mention
     )
     assert scheduler.run_turn(MAIN).status == "completed"
     prior = world.history.latest_messages(MAIN)
-    runner._behaviour = lambda request, tools: TurnOutcome(
-        messages_json=prior, error="too long", context_exceeded=True
-    )
+    overflow_calls = 0
+
+    def overflow_once(request, tools):
+        nonlocal overflow_calls
+        overflow_calls += 1
+        if overflow_calls == 1:
+            return TurnOutcome(
+                messages_json=prior, error="too long", context_exceeded=True
+            )
+        assert request.reminder is not None
+        for item in request.reminder.items:
+            world.store.ack(item.discussion_id, [item.message_id], MAIN)
+        return TurnOutcome(messages_json='[{"kind":"response"}]')
+
+    runner._behaviour = overflow_once
     previous = world.history.window(MAIN)
     mention(world)
     scheduler._wake.clear()
-    assert scheduler.run_turn(MAIN).status == "failed"
+    failed = scheduler.run_turn(MAIN)
+    assert failed.status == "failed"
     state = world.history.window(MAIN)
     assert state.number == previous.number + 1
     assert state.reason == "overflow" and state.since_sequence == 3
     assert world.history.latest_messages(MAIN) == "[]"
-    assert scheduler.run_turn(MAIN) is None
-    assert scheduler.tick() == ()
+    failed_run = world.history.runs(MAIN)[0]
+    assert failed_run.status == "failed"
+    assert failed_run.error == "too long"
+    assert world.history.lifecycle(MAIN).error is None
+    assert scheduler.agent_status(MAIN)["state"] == "idle"
     assert scheduler._wake.is_set()
     assert (
         "window.reset",
         {"agent_id": MAIN, "number": state.number, "reason": "overflow"},
     ) in events
     try:
-        mention(world)
+        pending_before = scheduler.pending_keys(MAIN)
+        assert pending_before
         assert scheduler.tick() == (MAIN,)
         scheduler._threads[MAIN].join(timeout=5)
         assert not scheduler._threads[MAIN].is_alive()
         following = runner.requests[-1]
+        assert following.sequence == failed_run.sequence + 1
         assert following.history_json == "[]"
         assert following.reminder is not None
+        assert following.reminder.items
         assert following.resident.endswith(reset_notice(state))
         assert world.history.window(MAIN) == state
-        assert world.history.last_reminder(MAIN) == scheduler.pending_keys(MAIN)
+        assert world.history.last_reminder(MAIN) == pending_before
+        assert [run.status for run in world.history.runs(MAIN)[:2]] == [
+            "completed",
+            "failed",
+        ]
         assert scheduler.tick() == ()
     finally:
         scheduler.stop()
+
+
+def test_overflow_does_not_continue_when_no_mentions_remain(world) -> None:
+    room = mention(world)
+    previous = world.history.start_run(MAIN)
+    world.history.finish_run(
+        MAIN, previous.sequence, status="completed", messages_json="[]"
+    )
+    runner = RecordingRunner(
+        lambda request, tools: TurnOutcome(
+            messages_json="[]", error="too long", context_exceeded=True
+        )
+    )
+    scheduler = Scheduler(world, runner)
+    world.store.append_message(room, HUMAN, "@Main continue")
+    assert scheduler.run_turn(MAIN).status == "failed"
+    assert world.history.window(MAIN).reason == "overflow"
+    for item in world.store.pending(MAIN):
+        world.store.ack(item.discussion_id, [item.message_id], MAIN)
+    assert scheduler.pending_keys(MAIN) == frozenset()
+    assert scheduler.tick() == ()
+    assert len(runner.requests) == 1
+    assert [run.status for run in world.history.runs(MAIN)] == ["failed", "completed"]
+
+
+def test_repeated_overflow_in_new_window_keeps_error_without_another_reset(
+    world,
+) -> None:
+    previous = world.history.start_run(MAIN)
+    world.history.finish_run(
+        MAIN, previous.sequence, status="completed", messages_json="[]"
+    )
+    mention(world)
+    runner = RecordingRunner(
+        lambda request, tools: TurnOutcome(
+            messages_json="[]", error="too long", context_exceeded=True
+        )
+    )
+    scheduler = Scheduler(world, runner)
+    assert scheduler.run_turn(MAIN).status == "failed"
+    reset = world.history.window(MAIN)
+    assert reset.reason == "overflow"
+    assert scheduler.tick() == (MAIN,)
+    scheduler._threads[MAIN].join(timeout=5)
+    assert not scheduler._threads[MAIN].is_alive()
+    assert scheduler.agent_status(MAIN)["state"] == "error"
+    assert world.history.lifecycle(MAIN).error == "too long"
+    assert world.history.window(MAIN) == reset
+    assert [run.status for run in world.history.runs(MAIN)[:2]] == ["failed", "failed"]
+    assert [run.error for run in world.history.runs(MAIN)[:2]] == [
+        "too long",
+        "too long",
+    ]
+    assert len(runner.requests) == 2
+    assert scheduler.tick() == ()
+
+
+def test_overflow_reset_failure_keeps_error_and_does_not_continue(world) -> None:
+    previous = world.history.start_run(MAIN)
+    world.history.finish_run(
+        MAIN, previous.sequence, status="completed", messages_json="[]"
+    )
+    room = mention(world)
+    world.store._db.execute(
+        "CREATE TEMP TRIGGER reject_overflow_window BEFORE INSERT ON agent_windows "
+        "WHEN NEW.reason = 'overflow' "
+        "BEGIN SELECT RAISE(ABORT, 'overflow reset failed'); END"
+    )
+    runner = RecordingRunner(
+        lambda request, tools: TurnOutcome(
+            messages_json="[]", error="too long", context_exceeded=True
+        )
+    )
+    scheduler = Scheduler(world, runner)
+    record = scheduler.run_turn(MAIN)
+    assert record is not None and record.status == "failed"
+    assert "overflow reset failed" in (record.error or "")
+    assert world.history.window(MAIN).number == 1
+    assert world.history.lifecycle(MAIN).error == record.error
+    assert scheduler.agent_status(MAIN)["state"] == "error"
+    assert scheduler.tick() == ()
+    assert len(runner.requests) == 1
+    assert world.history.runs(MAIN)[0].error == record.error
+    assert world.store.pending(MAIN)
+    assert room
+
+
+@pytest.mark.parametrize("gate", ["paused", "blocked", "concurrent"])
+def test_overflow_continuation_respects_scheduler_gates(world, gate) -> None:
+    room = mention(world)
+    previous = world.history.start_run(MAIN)
+    world.history.finish_run(
+        MAIN, previous.sequence, status="completed", messages_json="[]"
+    )
+    calls = 0
+
+    def respond(request, tools):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            return TurnOutcome(
+                messages_json="[]", error="too long", context_exceeded=True
+            )
+        assert request.reminder is not None
+        for item in request.reminder.items:
+            world.store.ack(item.discussion_id, [item.message_id], MAIN)
+        return TurnOutcome(messages_json="[]")
+
+    world.settings.set_settings("agent", {"max_concurrent_turns": 1})
+    runner = RecordingRunner(respond)
+    scheduler = Scheduler(world, runner)
+    world.store.append_message(room, HUMAN, "@Main continue")
+    assert scheduler.run_turn(MAIN).status == "failed"
+
+    if gate == "paused":
+        scheduler.pause(MAIN)
+        assert scheduler.agent_status(MAIN)["state"] == "paused"
+    elif gate == "blocked":
+        world.history.pause_for_safety(MAIN, "repeated_mentions")
+        assert scheduler.agent_status(MAIN)["state"] == "blocked"
+    else:
+        with scheduler._lock:
+            scheduler._reserved.add(HELPER)
+        assert scheduler.tick() == ()
+        with scheduler._lock:
+            scheduler._reserved.remove(HELPER)
+
+    if gate != "concurrent":
+        assert scheduler.tick() == ()
+        assert calls == 1
+        scheduler.resume(MAIN)
+    assert scheduler.tick() == (MAIN,)
+    scheduler._threads[MAIN].join(timeout=5)
+    assert not scheduler._threads[MAIN].is_alive()
+    assert calls == 2
+    assert world.history.runs(MAIN)[1].status == "failed"
+    assert scheduler.tick() == ()
 
 
 @pytest.mark.parametrize("fresh", [False, True])
