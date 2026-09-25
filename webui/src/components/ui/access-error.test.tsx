@@ -37,7 +37,7 @@ beforeAll(async () => {
   react = await import("react");
   testing = await import("@testing-library/react");
   ({ AccessError } = await import("@/components/ui/access-error"));
-});
+}, 30000);
 
 afterEach(() => testing?.cleanup());
 

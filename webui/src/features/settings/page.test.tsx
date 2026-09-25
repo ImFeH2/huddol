@@ -1,20 +1,76 @@
-// @vitest-environment jsdom
 import {
-  act,
-  cleanup,
-  fireEvent,
-  render,
-  screen,
-  waitFor,
-  within,
-} from "@testing-library/react";
-import { renderToStaticMarkup } from "react-dom/server";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import App from "@/App";
-import { RouterProvider } from "@/app/router";
-import { SettingsPage } from "@/features/settings/page";
-import { isSettingsSaving } from "@/features/settings/saver";
+  afterAll,
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from "vitest";
 import { backend, type ModelCatalog } from "@/lib/backend";
+
+let dom: {
+  window: Window & {
+    close: () => void;
+    HTMLElement: typeof HTMLElement;
+    Node: typeof Node;
+    MutationObserver: typeof MutationObserver;
+    Event: typeof Event;
+    EventTarget: typeof EventTarget;
+    CustomEvent: typeof CustomEvent;
+    MouseEvent: typeof MouseEvent;
+    KeyboardEvent: typeof KeyboardEvent;
+  };
+};
+let act: typeof import("@testing-library/react").act;
+let cleanup: typeof import("@testing-library/react").cleanup;
+let fireEvent: typeof import("@testing-library/react").fireEvent;
+let render: typeof import("@testing-library/react").render;
+let screen: typeof import("@testing-library/react").screen;
+let waitFor: typeof import("@testing-library/react").waitFor;
+let within: typeof import("@testing-library/react").within;
+let App: typeof import("@/App").default;
+let RouterProvider: typeof import("@/app/router").RouterProvider;
+let SettingsPage: typeof import("@/features/settings/page").SettingsPage;
+let renderToStaticMarkup: typeof import("react-dom/server").renderToStaticMarkup;
+let isSettingsSaving: typeof import("@/features/settings/saver").isSettingsSaving;
+
+beforeAll(async () => {
+  const packageName = "jsdom";
+  const { JSDOM } = await import(packageName);
+  dom = new JSDOM("<!doctype html><html><body></body></html>", {
+    url: "http://localhost",
+  });
+  vi.stubGlobal("window", dom.window);
+  vi.stubGlobal("document", dom.window.document);
+  vi.stubGlobal("navigator", dom.window.navigator);
+  vi.stubGlobal("HTMLElement", dom.window.HTMLElement);
+  vi.stubGlobal("Node", dom.window.Node);
+  vi.stubGlobal("MutationObserver", dom.window.MutationObserver);
+  vi.stubGlobal("Event", dom.window.Event);
+  vi.stubGlobal("EventTarget", dom.window.EventTarget);
+  vi.stubGlobal("CustomEvent", dom.window.CustomEvent);
+  vi.stubGlobal("MouseEvent", dom.window.MouseEvent);
+  vi.stubGlobal("KeyboardEvent", dom.window.KeyboardEvent);
+  vi.stubGlobal("getComputedStyle", dom.window.getComputedStyle);
+  dom.window.requestAnimationFrame = vi.fn();
+  dom.window.cancelAnimationFrame = vi.fn();
+  await import("react");
+  ({ isSettingsSaving } = await import("@/features/settings/saver"));
+  const testing = await import("@testing-library/react");
+  act = testing.act;
+  cleanup = testing.cleanup;
+  fireEvent = testing.fireEvent;
+  render = testing.render;
+  screen = testing.screen;
+  waitFor = testing.waitFor;
+  within = testing.within;
+  ({ default: App } = await import("@/App"));
+  ({ RouterProvider } = await import("@/app/router"));
+  ({ SettingsPage } = await import("@/features/settings/page"));
+  ({ renderToStaticMarkup } = await import("react-dom/server"));
+}, 30000);
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -127,6 +183,10 @@ async function openSettings(section: "model" | "agent") {
 afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
+});
+
+afterAll(() => {
+  dom.window.close();
   vi.unstubAllGlobals();
 });
 
