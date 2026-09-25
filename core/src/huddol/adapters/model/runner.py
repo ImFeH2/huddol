@@ -88,23 +88,41 @@ pydantic_ai.BANNER_ENABLED = False
 
 
 def is_context_exceeded(error: BaseException) -> bool:
-    return (
-        isinstance(error, ModelHTTPError)
-        and error.status_code in (400, 413)
-        and any(
-            phrase in str(error.body).lower()
-            for phrase in (
-                "context_length_exceeded",
-                "maximum context length",
-                "context window",
-                "prompt is too long",
-                "too many tokens",
-                "input token count",
-                "exceeds the maximum number of tokens",
-                "request too large",
-            )
+    if not isinstance(error, ModelHTTPError):
+        return False
+    body = error.body
+    message: object | None
+    codes: tuple[object, ...] = ()
+    if isinstance(body, str):
+        message = body
+    elif isinstance(body, dict):
+        details = body.get("error", body)
+        if not isinstance(details, dict):
+            return False
+        codes = (details.get("code"), details.get("type"))
+        message = details.get("message")
+    else:
+        return False
+    if "context_length_exceeded" in codes:
+        return True
+    if not isinstance(message, str):
+        return False
+    normalized = message.lower()
+    if "prompt is too long" in normalized:
+        return True
+    if "input token count exceeds the maximum number of tokens allowed" in normalized:
+        return True
+    if "context window" in normalized:
+        return any(
+            term in normalized
+            for term in ("exceed", "too long", "over the limit", "larger than")
         )
-    )
+    if "maximum context length" in normalized:
+        return any(
+            term in normalized
+            for term in ("exceed", "reached", "too long", "over the limit")
+        )
+    return False
 
 
 def _last_input_tokens(messages: Sequence[ModelMessage]) -> int | None:

@@ -978,7 +978,9 @@ def test_overflow_before_any_response_keeps_partial_history_without_old_usage(
     settings, prior
 ) -> None:
     def respond(messages, info):
-        raise ModelHTTPError(413, "fake", "Request too large")
+        raise ModelHTTPError(
+            502, "fake", "Your input exceeds the context window of this model"
+        )
 
     original = request()
     if prior:
@@ -1013,8 +1015,8 @@ def test_overflow_before_any_response_keeps_partial_history_without_old_usage(
     "body",
     [
         {"error": {"code": "context_length_exceeded", "message": "rejected"}},
+        {"code": "invalid_request_error", "type": "context_length_exceeded"},
         {
-            "type": "error",
             "error": {
                 "type": "invalid_request_error",
                 "message": "prompt is too long: 210000 tokens",
@@ -1026,14 +1028,14 @@ def test_overflow_before_any_response_keeps_partial_history_without_old_usage(
                 "status": "INVALID_ARGUMENT",
             }
         },
+        "Your input exceeds the context window of this model",
         "Maximum context length reached",
-        "Context window exceeded",
-        "Too many tokens",
-        "Exceeds the maximum number of tokens",
-        "REQUEST TOO LARGE",
+        "The context window was exceeded",
+        "prompt is too long",
+        "Maximum context length exceeded",
     ],
 )
-@pytest.mark.parametrize("status", [400, 413])
+@pytest.mark.parametrize("status", [400, 413, 502])
 def test_context_exceeded_recognizes_provider_errors(body, status) -> None:
     assert is_context_exceeded(ModelHTTPError(status, "fake", body))
 
@@ -1041,11 +1043,17 @@ def test_context_exceeded_recognizes_provider_errors(body, status) -> None:
 @pytest.mark.parametrize(
     "error",
     [
-        ModelHTTPError(401, "fake", "context_length_exceeded"),
-        ModelHTTPError(429, "fake", "too many tokens"),
-        ModelHTTPError(500, "fake", "context window"),
-        ModelHTTPError(400, "fake", "invalid API key"),
-        ModelHTTPError(413, "fake", None),
+        ModelHTTPError(502, "fake", "upstream failure"),
+        ModelHTTPError(413, "fake", "Request too large"),
+        ModelHTTPError(413, "fake", "REQUEST TOO LARGE"),
+        ModelHTTPError(400, "fake", "too many tokens"),
+        ModelHTTPError(400, "fake", "exceeds the maximum number of tokens"),
+        ModelHTTPError(400, "fake", "output token budget exceeded"),
+        ModelHTTPError(401, "fake", "invalid API key"),
+        ModelHTTPError(429, "fake", "rate limit exceeded"),
+        ModelHTTPError(400, "fake", {"metadata": "context_length_exceeded"}),
+        ModelHTTPError(400, "fake", {"error": {"message": "context window"}}),
+        ModelHTTPError(400, "fake", None),
         RuntimeError("context_length_exceeded"),
     ],
 )
