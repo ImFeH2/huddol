@@ -113,20 +113,12 @@ def is_context_exceeded(error: BaseException) -> bool:
         return True
     if "input token count exceeds the maximum number of tokens allowed" in normalized:
         return True
-    clauses = re.split(r"[.!?;:\n]+", normalized)
     return any(
-        ("context window" in clause or "maximum context length" in clause)
-        and any(
-            term in clause
-            for term in (
-                "exceed",
-                "too long",
-                "over the limit",
-                "larger than",
-                "reached",
-            )
+        re.search(pattern, normalized)
+        for pattern in (
+            r"\b(?:your )?(?:input|prompt) exceeds (?:the )?(?:model )?(?:context window|maximum context length)\b",
+            r"\b(?:the )?(?:context window|maximum context length) (?:was )?(?:exceeded|reached)\b",
         )
-        for clause in clauses
     )
 
 
