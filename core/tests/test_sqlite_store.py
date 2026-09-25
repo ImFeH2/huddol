@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import random
 import sqlite3
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import closing
 from pathlib import Path
 
@@ -328,36 +329,26 @@ def test_unread_counts_ignore_own_messages(store: SqliteStore) -> None:
 
 
 def test_the_connection_survives_concurrent_threads(store: SqliteStore) -> None:
-    import threading
-
     human = store.create_member("human", "You")
     agent = store.create_member("agent", "Main")
     room = store.create_discussion("concurrent", [human.id, agent.id])
-    failures: list[Exception] = []
 
     def writer() -> None:
-        try:
-            for index in range(40):
-                store.append_message(room.id, human.id, f"@Main item {index}")
-        except Exception as error:  # noqa: BLE001
-            failures.append(error)
+        for index in range(40):
+            store.append_message(room.id, human.id, f"@Main item {index}")
 
     def reader() -> None:
-        try:
-            for _ in range(40):
-                store.pending(agent.id)
-                store.messages(room.id)
-                store.unread_counts(agent.id)
-        except Exception as error:  # noqa: BLE001
-            failures.append(error)
+        for _ in range(40):
+            store.pending(agent.id)
+            store.messages(room.id)
+            store.unread_counts(agent.id)
 
-    threads = [threading.Thread(target=writer), threading.Thread(target=reader)]
-    for thread in threads:
-        thread.start()
-    for thread in threads:
-        thread.join(timeout=30)
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        writer_future = executor.submit(writer)
+        reader_future = executor.submit(reader)
+        writer_future.result(timeout=30)
+        reader_future.result(timeout=30)
 
-    assert failures == []
     assert store.message_count(room.id) == 40
 
 

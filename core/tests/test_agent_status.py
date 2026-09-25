@@ -15,7 +15,8 @@ from pydantic_ai.messages import (
 )
 from pydantic_ai.models.function import FunctionModel
 from test_runtime import HELPER, HUMAN, MAIN, RecordingRunner, mention
-from test_runtime import world as world  # noqa: PLC0414
+
+pytest_plugins = ("test_runtime",)
 
 from huddol.adapters.model.runner import PydanticModelRunner
 from huddol.core.errors import DomainError

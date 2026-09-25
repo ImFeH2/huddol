@@ -4,6 +4,7 @@ import pytest
 
 from huddol.adapters.model.config import (
     AgentModelConfig,
+    ApiType,
     ModelCatalog,
     ModelConfig,
     ProviderConfig,
@@ -179,9 +180,9 @@ def test_build_model_returns_a_google_model_for_google() -> None:
 
     from huddol.adapters.model.runner import build_model
 
-    def built(api_type: str):
+    def built(api_type: ApiType):
         return build_model(
-            ModelConfig(api_type, "https://example.invalid/", "unused", "name")  # type: ignore[arg-type]
+            ModelConfig(api_type, "https://example.invalid/", "unused", "name")
         )
 
     google = built("google")

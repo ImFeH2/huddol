@@ -59,7 +59,6 @@ def test_turn_clients_are_isolated_and_closed_on_failure(
         )
 
     try:
-        # 使用框架的网络禁用开关验证失败清理，客户端仍由真实 Provider 创建。
         with override_allow_model_requests(False):
             if concurrent:
                 with ThreadPoolExecutor(max_workers=4) as executor:

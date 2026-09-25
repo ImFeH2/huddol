@@ -87,7 +87,7 @@ def server(tmp_path: Path):
         list_models=probe.list_models,
         test_model=probe.test_model,
     )
-    deps.probe = probe  # type: ignore[attr-defined]
+    deps.__dict__["probe"] = probe
     yield dispatcher, output, deps
     store.close()
 
@@ -645,7 +645,7 @@ def test_model_listing_and_testing_reach_the_injected_probe(server) -> None:
         model="candidate",
     )
     assert tested["result"] == {"ok": True, "latency_ms": 12, "reply": "OK"}
-    assert deps.probe.calls == [
+    assert deps.__dict__["probe"].calls == [
         ("list", {"api_type": "anthropic", "base_url": "https://a.invalid"}, stored),
         (
             "test",

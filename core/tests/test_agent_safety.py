@@ -2,7 +2,8 @@ import json
 
 import pytest
 from test_runtime import HUMAN, MAIN, RecordingRunner, mention
-from test_runtime import world as world  # noqa: PLC0414
+
+pytest_plugins = ("test_runtime",)
 
 from huddol.adapters.sqlite.agent import SqliteAgentStore
 from huddol.core.errors import DomainError

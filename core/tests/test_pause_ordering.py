@@ -2,7 +2,8 @@ import threading
 
 import pytest
 from test_runtime import HELPER, HUMAN, MAIN, RecordingRunner, mention
-from test_runtime import world as world  # noqa: PLC0414
+
+pytest_plugins = ("test_runtime",)
 
 from huddol.runtime.reminder import TurnOutcome
 from huddol.runtime.scheduler import Scheduler

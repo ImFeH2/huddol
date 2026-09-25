@@ -9,7 +9,8 @@ from pathlib import Path
 
 import pytest
 from test_sidecar_process import Client, Kernel, wait_for_persisted_turn
-from test_sidecar_process import local_model as local_model  # noqa: PLC0414
+
+pytest_plugins = ("test_sidecar_process",)
 
 from huddol.adapters.sqlite.agent import SqliteAgentStore
 from huddol.adapters.sqlite.store import SqliteStore

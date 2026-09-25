@@ -6,7 +6,8 @@ from contextlib import closing
 
 import pytest
 from test_runtime import HELPER, HUMAN, MAIN, RecordingRunner, mention
-from test_runtime import world as world  # noqa: PLC0414
+
+pytest_plugins = ("test_runtime",)
 
 from huddol.adapters.sqlite.agent import SqliteAgentStore
 from huddol.adapters.sqlite.store import (

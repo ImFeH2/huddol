@@ -2,8 +2,10 @@ from __future__ import annotations
 
 from base64 import b64decode
 from dataclasses import replace
+from typing import cast
 
 import pytest
+from opentelemetry.sdk.trace import Span
 from test_runner import request
 
 from huddol.adapters.model.observability import (
@@ -144,8 +146,8 @@ def test_span_processor_only_decorates_model_spans() -> None:
     with active_trace(TurnTrace.of(turn())):
         model_span = FakeSpan("pydantic-ai")
         other_span = FakeSpan("something-else")
-        processor.on_start(model_span)  # type: ignore[arg-type]
-        processor.on_start(other_span)  # type: ignore[arg-type]
+        processor.on_start(cast(Span, model_span))
+        processor.on_start(cast(Span, other_span))
 
     assert model_span.attributes["langfuse.trace.name"] == "Agent turn"
     assert other_span.attributes == {}
@@ -164,5 +166,5 @@ def test_spans_are_not_decorated_outside_a_turn() -> None:
             self.attributes[key] = value
 
     span = FakeSpan()
-    TurnAttributeProcessor().on_start(span)  # type: ignore[arg-type]
+    TurnAttributeProcessor().on_start(cast(Span, span))
     assert span.attributes == {}

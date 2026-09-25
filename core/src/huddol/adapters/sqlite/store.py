@@ -7,7 +7,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from threading import RLock
 from types import TracebackType
-from typing import Any, Self
+from typing import Any, Self, cast
 
 from huddol.core.discussion import Discussion, Message, MessageMention
 from huddol.core.errors import DomainError
@@ -356,10 +356,10 @@ class SqliteStore:
     def _member(self, row: sqlite3.Row) -> Member:
         return Member(
             id=int(row["id"]),
-            type=str(row["type"]),  # type: ignore[arg-type]
+            type=cast(MemberType, str(row["type"])),
             name=str(row["name"]),
             deleted=bool(row["deleted"]),
-            state=str(row["state"]),  # type: ignore[arg-type]
+            state=cast(AgentState, str(row["state"])),
         )
 
     def list_members(self, *, include_deleted: bool = False) -> tuple[Member, ...]:
