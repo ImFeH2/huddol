@@ -1049,6 +1049,11 @@ def test_context_exceeded_recognizes_provider_errors(body, status) -> None:
         ModelHTTPError(400, "fake", "too many tokens"),
         ModelHTTPError(400, "fake", "exceeds the maximum number of tokens"),
         ModelHTTPError(400, "fake", "output token budget exceeded"),
+        ModelHTTPError(
+            502,
+            "fake",
+            "The context window limit is 128k; output token budget exceeded",
+        ),
         ModelHTTPError(401, "fake", "invalid API key"),
         ModelHTTPError(429, "fake", "rate limit exceeded"),
         ModelHTTPError(400, "fake", {"metadata": "context_length_exceeded"}),

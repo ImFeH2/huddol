@@ -4,6 +4,7 @@ import asyncio
 import inspect
 import json
 import logging
+import re
 import threading
 import uuid
 from collections.abc import AsyncIterator, Awaitable, Callable, Iterator, Sequence
@@ -112,17 +113,21 @@ def is_context_exceeded(error: BaseException) -> bool:
         return True
     if "input token count exceeds the maximum number of tokens allowed" in normalized:
         return True
-    if "context window" in normalized:
-        return any(
-            term in normalized
-            for term in ("exceed", "too long", "over the limit", "larger than")
+    clauses = re.split(r"[.!?;:\n]+", normalized)
+    return any(
+        ("context window" in clause or "maximum context length" in clause)
+        and any(
+            term in clause
+            for term in (
+                "exceed",
+                "too long",
+                "over the limit",
+                "larger than",
+                "reached",
+            )
         )
-    if "maximum context length" in normalized:
-        return any(
-            term in normalized
-            for term in ("exceed", "reached", "too long", "over the limit")
-        )
-    return False
+        for clause in clauses
+    )
 
 
 def _last_input_tokens(messages: Sequence[ModelMessage]) -> int | None:
