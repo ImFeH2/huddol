@@ -135,7 +135,13 @@ def _last_input_tokens(messages: Sequence[ModelMessage]) -> int | None:
 
 def build_model(config: ModelConfig) -> Model:
     settings = cast(
-        ModelSettings, thinking_settings(config.api_type, config.model, config.thinking)
+        ModelSettings,
+        thinking_settings(
+            config.api_type,
+            config.model,
+            config.thinking,
+            config.thinking_budget_tokens,
+        ),
     )
     if config.api_type == "anthropic":
         return AnthropicModel(

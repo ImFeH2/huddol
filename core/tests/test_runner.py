@@ -37,7 +37,7 @@ from pydantic_ai.providers.anthropic import AnthropicProvider
 from pydantic_ai.providers.openai import OpenAIProvider
 from pydantic_ai.usage import RequestUsage
 
-from huddol.adapters.model.config import ModelConfig
+from huddol.adapters.model.config import ModelConfig, thinking_settings
 from huddol.adapters.model.observability import ObservabilityConfig
 from huddol.adapters.model.prompt import SYSTEM_PROMPT
 from huddol.adapters.model.runner import (
@@ -615,6 +615,76 @@ def test_model_settings_are_fixed_for_the_turn(settings, remove) -> None:
         assert built == ["first", "second"]
 
 
+def test_turn_budget_is_snapshotted_until_the_next_turn(settings) -> None:
+    catalog = {
+        "version": 2,
+        "providers": [
+            {
+                "id": "p",
+                "name": "Anthropic",
+                "api_type": "anthropic",
+                "base_url": "https://example.invalid",
+                "api_key": "test-only-key",
+                "enabled": True,
+            }
+        ],
+        "models": [
+            {
+                "id": "m",
+                "provider_id": "p",
+                "name": "Model",
+                "model": "custom-alias",
+                "enabled": True,
+                "thinking_budget_tokens": 6000,
+            }
+        ],
+        "default_model_id": "m",
+        "default_thinking": "budget",
+        "agent_configs": {},
+    }
+    settings.set_settings("model", catalog)
+    configs: list[ModelConfig] = []
+
+    def build(config: ModelConfig):
+        configs.append(config)
+        calls = 0
+
+        def respond(messages, info):
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                return ModelResponse(
+                    parts=[ToolCallPart("organization", {"action": "list_members"})]
+                )
+            return ModelResponse(parts=[TextPart("Done")])
+
+        return FunctionModel(respond)
+
+    class Tools:
+        def list_members(self):
+            current = settings.get_settings("model")
+            settings.set_settings(
+                "model",
+                {
+                    **current,
+                    "models": [
+                        {**current["models"][0], "thinking_budget_tokens": 8000}
+                    ],
+                },
+            )
+            return []
+
+    runner = PydanticModelRunner(settings, build_model=build)
+    first = runner.run(request(), Tools())
+    assert first.error is None
+    assert len(configs) == 1
+    assert configs[0].thinking == "budget"
+    assert configs[0].thinking_budget_tokens == 6000
+    second = runner.run(request(), Tools())
+    assert second.error is None
+    assert [config.thinking_budget_tokens for config in configs] == [6000, 8000]
+
+
 @pytest.mark.parametrize("fail", [False, True])
 def test_ephemeral_is_loaded_each_call_and_never_persisted(settings, fail) -> None:
     received = []
@@ -971,6 +1041,78 @@ def test_last_input_tokens_excludes_old_history_and_is_not_a_turn_total(
     assert (outcome.error is not None) == fail
     assert "tool-return" in outcome.messages_json
     assert "Old response" in outcome.messages_json
+
+
+def test_turn_http_error_evidence_through_agent_run(
+    settings, monkeypatch, tmp_path
+) -> None:
+    import httpx
+    from openai import AsyncOpenAI
+
+    monkeypatch.setattr(models, "ALLOW_MODEL_REQUESTS", True)
+    marker = "turn evidence refusal marker"
+    requests: list[dict[str, object]] = []
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content)
+        requests.append(body)
+        return httpx.Response(
+            400, json={"error": {"message": marker, "type": "invalid_request_error"}}
+        )
+
+    def build(config: ModelConfig):
+        client = AsyncOpenAI(
+            api_key=config.api_key,
+            max_retries=0,
+            http_client=httpx.AsyncClient(transport=httpx.MockTransport(respond)),
+        )
+        return OpenAIChatModel(
+            config.model,
+            settings=thinking_settings(config.api_type, config.model, config.thinking),
+            provider=OpenAIProvider(openai_client=client),
+        )
+
+    settings.set_settings(
+        "model",
+        {
+            "version": 2,
+            "providers": [
+                {
+                    "id": "p",
+                    "name": "mock provider",
+                    "api_type": "openai-chat",
+                    "base_url": "https://mock.invalid/v1",
+                    "api_key": "test-only-key",
+                    "enabled": True,
+                }
+            ],
+            "models": [
+                {
+                    "id": "m",
+                    "provider_id": "p",
+                    "name": "model",
+                    "model": "gpt-5.2",
+                    "enabled": True,
+                }
+            ],
+            "default_model_id": "m",
+            "default_thinking": "high",
+            "agent_configs": {},
+        },
+    )
+    outcome = PydanticModelRunner(settings, build_model=build).run(request(), None)
+    assert marker in (outcome.error or "")
+    assert "test-only-key" not in (outcome.error or "")
+    assert len(requests) == 1
+    assert requests[0]["model"] == "gpt-5.2"
+    assert requests[0]["reasoning_effort"] == "high"
+    evidence = {
+        "request": requests[0],
+        "error": outcome.error,
+        "marker_preserved": marker in (outcome.error or ""),
+    }
+    output = tmp_path / "turn-error.json"
+    output.write_text(json.dumps(evidence, indent=2, sort_keys=True), encoding="utf-8")
 
 
 @pytest.mark.parametrize("prior", [False, True])

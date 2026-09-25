@@ -250,6 +250,7 @@ def test_model_catalog_migration_preserves_identity_across_restarts(tmp_path) ->
     store = SqliteAgentStore(base._db)
     converted = store.get_settings("model")
     catalog = ModelCatalog.restore(converted)
+    assert catalog.version == 2
     assert catalog.resolve(2).model == "gemini-2.5-pro"
     assert catalog.resolve(3).api_key == "test-only-key"
     assert catalog.default_model_id == catalog.models[0].id

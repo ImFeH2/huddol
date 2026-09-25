@@ -16,8 +16,9 @@ from huddol.adapters.model.config import (
     ApiType,
     ModelCatalog,
     ModelConfig,
-    Thinking,
     thinking_settings,
+    validate_thinking,
+    validate_thinking_budget,
 )
 from huddol.adapters.model.runner import build_model
 from huddol.core.errors import DomainError
@@ -55,18 +56,34 @@ def resolve(
 ) -> ModelConfig:
     if "provider_id" in values or "model_id" in values:
         catalog = ModelCatalog.restore(stored)
-        registered = (
-            catalog.registered_model(values["model_id"])
-            if "model_id" in values
-            else None
-        )
-        provider = catalog.provider(
-            registered.provider_id if registered else values["provider_id"]
-        )
+        if "model_id" in values:
+            registered = catalog.registered_model(values["model_id"])
+            provider = catalog.provider(registered.provider_id)
+            if not registered.enabled or not provider.enabled:
+                raise DomainError(
+                    "model_unavailable", "The selected model or provider is disabled"
+                )
+            model_name = registered.model
+            budget_tokens = registered.thinking_budget_tokens
+            selection = {key: values[key] for key in ("thinking",) if key in values}
+        else:
+            provider = catalog.provider(values["provider_id"])
+            if not provider.enabled:
+                raise DomainError(
+                    "model_unavailable", "The selected provider is disabled"
+                )
+            model_name = str(values.get("model") or "")
+            budget_tokens = values.get("thinking_budget_tokens")
+            selection = {
+                key: values[key]
+                for key in ("thinking", "thinking_budget_tokens")
+                if key in values
+            }
         values = {
             **provider.model_dump(),
-            **values,
-            "model": registered.model if registered else "",
+            **selection,
+            "model": model_name,
+            "thinking_budget_tokens": budget_tokens,
         }
         stored = provider.model_dump()
     api_type = api_type_of(values.get("api_type"))
@@ -83,15 +100,19 @@ def resolve(
     model = str(values.get("model") or "").strip()
     if model_required and not model:
         raise ValueError("model is required")
-    thinking = cast(Thinking, values.get("thinking", "default"))
+    thinking = validate_thinking(values.get("thinking", "default"), model)
+    budget_tokens = values.get("thinking_budget_tokens")
+    if budget_tokens is not None:
+        budget_tokens = validate_thinking_budget(budget_tokens)
     if model_required:
-        thinking_settings(api_type, model, thinking)
+        thinking_settings(api_type, model, thinking, budget_tokens)
     return ModelConfig(
         api_type=api_type,
         base_url=base_url,
         api_key=api_key,
         model=model,
         thinking=thinking,
+        thinking_budget_tokens=budget_tokens,
     )
 
 
@@ -142,7 +163,12 @@ def try_model(
 
     async def probe() -> str:
         agent: Agent[None, str] = Agent(build(config), name="huddol_model_test")
-        configured = thinking_settings(config.api_type, config.model, config.thinking)
+        configured = thinking_settings(
+            config.api_type,
+            config.model,
+            config.thinking,
+            config.thinking_budget_tokens,
+        )
         result = await agent.run(
             TEST_PROMPT,
             model_settings={

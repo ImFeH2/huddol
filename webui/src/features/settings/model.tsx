@@ -31,6 +31,25 @@ const PROVIDERS = [
   { value: "google", label: "Google" },
 ];
 
+const THINKING_OPTIONS: Thinking[] = [
+  "default",
+  "none",
+  "minimal",
+  "low",
+  "medium",
+  "high",
+  "xhigh",
+  "max",
+];
+
+function supportsTokenBudget(apiType: string): boolean {
+  return apiType === "anthropic" || apiType === "google";
+}
+
+function thinkingLabel(option: Thinking, budget?: number | null): string {
+  return option === "budget" ? `budget · ${budget} tokens` : option;
+}
+
 export function modelTestDescription(latency: number, reply: string): string {
   return `${latency.toLocaleString("en-US")} ms · ${reply.trim().replace(/\s+/g, " ").slice(0, 80)}`;
 }
@@ -55,7 +74,7 @@ export function ModelSelection({
       model.id ===
       (value.model_id ?? (inherit ? catalog.default_model_id : null)),
   );
-  const options = selected?.thinking_options ?? ["default"];
+  const options = selected?.thinking_options ?? THINKING_OPTIONS;
   return (
     <div className="flex flex-col gap-4">
       <Field label="Model" htmlFor={`${id}-model`}>
@@ -115,7 +134,7 @@ export function ModelSelection({
           ) : null}
           {options.map((option) => (
             <option key={option} value={option}>
-              {option === "default" ? "Model default" : option}
+              {thinkingLabel(option, selected?.thinking_budget_tokens)}
             </option>
           ))}
         </select>
@@ -698,10 +717,27 @@ function ModelForm({
   const [name, setName] = useState(model?.name ?? "");
   const [remote, setRemote] = useState(model?.model ?? "");
   const [enabled, setEnabled] = useState(model?.enabled ?? true);
+  const [budgetTokens, setBudgetTokens] = useState(
+    model?.thinking_budget_tokens?.toString() ?? "",
+  );
   const [options, setOptions] = useState<string[]>([]);
   const [listing, setListing] = useState(false);
   const [testing, setTesting] = useState(false);
   const [thinking, setThinking] = useState<Thinking>("default");
+  const budgetSupported = supportsTokenBudget(provider.api_type);
+  const parsedBudget = budgetTokens.trim() ? Number(budgetTokens) : null;
+  const validBudget =
+    parsedBudget === null ||
+    (Number.isSafeInteger(parsedBudget) && parsedBudget > 0);
+  const budgetChanged =
+    model !== undefined && parsedBudget !== model.thinking_budget_tokens;
+  const validTestSelection =
+    validBudget &&
+    (thinking !== "budget" || (budgetSupported && parsedBudget !== null));
+  const testThinkingOptions: Thinking[] =
+    budgetSupported && parsedBudget !== null && validBudget
+      ? [...THINKING_OPTIONS, "budget"]
+      : THINKING_OPTIONS;
   const dirty = useRef(false);
   const listRequest = useRef(0);
   useEffect(() => {
@@ -709,6 +745,7 @@ function ModelForm({
       setName(model?.name ?? "");
       setRemote(model?.model ?? "");
       setEnabled(model?.enabled ?? true);
+      setBudgetTokens(model?.thinking_budget_tokens?.toString() ?? "");
     }
   }, [model]);
   useEffect(() => {
@@ -741,12 +778,19 @@ function ModelForm({
     }
   };
   const testModel = async () => {
-    if (!model) return;
+    if (!validTestSelection || !remote.trim()) return;
     setTesting(true);
     try {
       const result = await backend.call<{ latency_ms: number; reply: string }>(
         "settings.test_model",
-        { model_id: model.id, thinking },
+        model
+          ? { model_id: model.id, thinking }
+          : {
+              provider_id: provider.id,
+              model: remote.trim(),
+              thinking,
+              thinking_budget_tokens: budgetSupported ? parsedBudget : null,
+            },
       );
       toast({
         tone: "success",
@@ -771,18 +815,29 @@ function ModelForm({
       }}
       onSubmit={async (event) => {
         event.preventDefault();
+        if (!validBudget) {
+          toast({
+            tone: "danger",
+            title: "Invalid thinking budget",
+            description: "Enter a positive whole number.",
+          });
+          return;
+        }
         if (
           await save("save_model", model?.id ?? null, {
             name: name.trim() || remote.trim(),
             model: remote.trim(),
             provider_id: provider.id,
             enabled,
+            thinking_budget_tokens: budgetSupported ? parsedBudget : null,
           })
         ) {
           dirty.current = false;
           if (!model) {
             setName("");
             setRemote("");
+            setBudgetTokens("");
+            setThinking("default");
           }
         }
       }}
@@ -810,6 +865,22 @@ function ModelForm({
           loading={listing}
         />
       </Field>
+      {budgetSupported ? (
+        <Field
+          label="Thinking token budget"
+          htmlFor={`${id}-budget`}
+          hint="Used only when budget is selected."
+        >
+          <Input
+            id={`${id}-budget`}
+            type="number"
+            min="1"
+            step="1"
+            value={budgetTokens}
+            onChange={(event) => setBudgetTokens(event.target.value)}
+          />
+        </Field>
+      ) : null}
       <label className="flex items-center gap-2 text-sm">
         <input
           type="checkbox"
@@ -818,40 +889,41 @@ function ModelForm({
         />
         Enabled
       </label>
-      {model ? (
-        <Field label="Test thinking effort" htmlFor={`${id}-thinking`}>
-          <select
-            id={`${id}-thinking`}
-            className={selectClass}
-            value={thinking}
-            onChange={(event) => setThinking(event.target.value as Thinking)}
-          >
-            {model.thinking_options.map((option) => (
-              <option key={option} value={option}>
-                {option === "default" ? "Model default" : option}
-              </option>
-            ))}
-          </select>
-        </Field>
-      ) : null}
+      <Field label="Test thinking effort" htmlFor={`${id}-thinking`}>
+        <select
+          id={`${id}-thinking`}
+          className={selectClass}
+          value={thinking}
+          onChange={(event) => setThinking(event.target.value as Thinking)}
+        >
+          {testThinkingOptions.map((option) => (
+            <option key={option} value={option}>
+              {thinkingLabel(option, parsedBudget)}
+            </option>
+          ))}
+        </select>
+      </Field>
       <div className="flex flex-wrap gap-2">
         <Button type="submit" variant="primary">
           {model ? "Save model" : "Add model"}
         </Button>
+        <Button
+          disabled={
+            testing ||
+            !provider.api_key_set ||
+            !remote.trim() ||
+            !validTestSelection ||
+            budgetChanged ||
+            Boolean(model && remote !== model.model)
+          }
+          onClick={() => void testModel()}
+        >
+          {testing ? <Spinner label="Testing" /> : null}Test
+        </Button>
         {model ? (
-          <>
-            <Button
-              disabled={
-                testing || !provider.api_key_set || remote !== model.model
-              }
-              onClick={() => void testModel()}
-            >
-              {testing ? <Spinner label="Testing" /> : null}Test
-            </Button>
-            <Button onClick={() => void save("delete_model", model.id)}>
-              Delete model
-            </Button>
-          </>
+          <Button onClick={() => void save("delete_model", model.id)}>
+            Delete model
+          </Button>
         ) : null}
       </div>
     </form>

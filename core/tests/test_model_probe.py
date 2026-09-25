@@ -6,7 +6,7 @@ from typing import Any
 import pytest
 
 from huddol.adapters.model import probe
-from huddol.adapters.model.config import ModelConfig
+from huddol.adapters.model.config import ModelConfig, thinking_settings
 from huddol.core.errors import DomainError
 
 STORED = {
@@ -190,6 +190,99 @@ def test_a_model_test_uses_the_stored_key_when_none_is_typed(monkeypatch) -> Non
     assert built[0].api_key == "STORED-KEY"
 
 
+def budget_catalog(
+    *,
+    models: list[dict[str, object]],
+    default_model_id: str | None = None,
+    api_type: str = "anthropic",
+):
+    return {
+        "version": 2,
+        "providers": [
+            {
+                "id": "p",
+                "name": api_type,
+                "api_type": api_type,
+                "base_url": "https://mock.invalid",
+                "api_key": "test-only-key",
+                "enabled": True,
+            }
+        ],
+        "models": models,
+        "default_model_id": default_model_id,
+        "default_thinking": "default",
+        "agent_configs": {},
+    }
+
+
+def test_probe_resolves_saved_model_budget_and_unsaved_model_budget() -> None:
+    saved = budget_catalog(
+        models=[
+            {
+                "id": "m",
+                "provider_id": "p",
+                "name": "Model",
+                "model": "custom-alias",
+                "enabled": True,
+                "thinking_budget_tokens": 12000,
+            }
+        ],
+        default_model_id="m",
+    )
+    configured = probe.resolve(
+        {"model_id": "m", "thinking": "budget"}, saved, model_required=True
+    )
+    assert configured.model == "custom-alias"
+    assert configured.thinking_budget_tokens == 12000
+
+    unsaved = budget_catalog(models=[])
+    configured = probe.resolve(
+        {
+            "provider_id": "p",
+            "model": "new-alias",
+            "thinking": "budget",
+            "thinking_budget_tokens": 9000,
+        },
+        unsaved,
+        model_required=True,
+    )
+    assert configured.model == "new-alias"
+    assert configured.thinking_budget_tokens == 9000
+
+
+@pytest.mark.parametrize("thinking", [None, [], {}, 1, "unknown"])
+def test_probe_rejects_invalid_thinking_values_and_types(thinking) -> None:
+    with pytest.raises(DomainError):
+        probe.resolve(
+            {
+                "api_type": "openai-chat",
+                "base_url": "https://mock.invalid",
+                "api_key": "test-only-key",
+                "model": "custom-alias",
+                "thinking": thinking,
+            },
+            None,
+            model_required=True,
+        )
+
+
+def test_probe_requires_budget_and_rejects_invalid_budget_numbers() -> None:
+    base = {
+        "api_type": "anthropic",
+        "base_url": "https://mock.invalid",
+        "api_key": "test-only-key",
+        "model": "custom-alias",
+        "thinking": "budget",
+    }
+    with pytest.raises(DomainError, match="positive integer"):
+        probe.resolve(base, None, model_required=True)
+    for value in (True, 0, -1, 1.5, "1024"):
+        with pytest.raises(DomainError):
+            probe.resolve(
+                {**base, "thinking_budget_tokens": value}, None, model_required=True
+            )
+
+
 def test_a_model_test_requires_a_model_name() -> None:
     with pytest.raises(ValueError):
         probe.try_model(
@@ -223,6 +316,206 @@ def test_a_failing_model_test_never_echoes_the_key(monkeypatch) -> None:
     assert failed.value.code == "model_test_failed"
     assert "TOP" not in str(failed.value)
     assert "rejected key *** for m" in str(failed.value)
+
+
+def test_test_http_error_evidence_through_probe_entry(tmp_path) -> None:
+    import json
+
+    import httpx
+    from openai import AsyncOpenAI
+    from pydantic_ai.models.openai import OpenAIChatModel
+    from pydantic_ai.providers.openai import OpenAIProvider
+
+    marker = "test evidence refusal marker"
+    requests: list[dict[str, object]] = []
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content)
+        requests.append(body)
+        return httpx.Response(
+            400, json={"error": {"message": marker, "type": "invalid_request_error"}}
+        )
+
+    def build(config: ModelConfig):
+        client = AsyncOpenAI(
+            api_key=config.api_key,
+            max_retries=0,
+            http_client=httpx.AsyncClient(transport=httpx.MockTransport(respond)),
+        )
+        return OpenAIChatModel(
+            config.model,
+            settings=thinking_settings(
+                config.api_type,
+                config.model,
+                config.thinking,
+                config.thinking_budget_tokens,
+            ),
+            provider=OpenAIProvider(openai_client=client),
+        )
+
+    with pytest.raises(DomainError) as failed:
+        probe.try_model(
+            {
+                "api_type": "openai-chat",
+                "base_url": "https://mock.invalid/v1",
+                "api_key": "test-only-key",
+                "model": "gpt-5.2",
+                "thinking": "high",
+            },
+            None,
+            build=build,
+        )
+    assert failed.value.code == "model_test_failed"
+    assert marker in str(failed.value)
+    assert "test-only-key" not in str(failed.value)
+    assert len(requests) == 1
+    assert requests[0]["reasoning_effort"] == "high"
+    token_limit = requests[0].get(
+        "max_tokens", requests[0].get("max_completion_tokens")
+    )
+    assert token_limit == probe.TEST_MAX_TOKENS
+    evidence = {
+        "request": requests[0],
+        "error": str(failed.value),
+        "marker_preserved": marker in str(failed.value),
+        "api_key_exposed": "test-only-key" in str(failed.value),
+    }
+    output = tmp_path / "test-error.json"
+    output.write_text(json.dumps(evidence, indent=2, sort_keys=True), encoding="utf-8")
+
+
+def test_anthropic_budget_test_wire_evidence(tmp_path, monkeypatch) -> None:
+    import json
+
+    import httpx2
+    from anthropic import AsyncAnthropic
+    from pydantic_ai import models
+    from pydantic_ai.models.anthropic import AnthropicModel
+    from pydantic_ai.providers.anthropic import AnthropicProvider
+
+    monkeypatch.setattr(models, "ALLOW_MODEL_REQUESTS", True)
+    marker = "anthropic budget test refusal marker"
+    requests: list[dict[str, object]] = []
+
+    def respond(request: httpx2.Request) -> httpx2.Response:
+        body = json.loads(request.content)
+        requests.append(body)
+        return httpx2.Response(
+            400, json={"error": {"message": marker, "type": "invalid_request_error"}}
+        )
+
+    def build(config: ModelConfig):
+        client = AsyncAnthropic(
+            api_key=config.api_key,
+            max_retries=0,
+            http_client=httpx2.AsyncClient(transport=httpx2.MockTransport(respond)),
+        )
+        return AnthropicModel(
+            config.model,
+            settings=thinking_settings(
+                config.api_type,
+                config.model,
+                config.thinking,
+                config.thinking_budget_tokens,
+            ),
+            provider=AnthropicProvider(anthropic_client=client),
+        )
+
+    with pytest.raises(DomainError) as failed:
+        probe.try_model(
+            {"model_id": "m", "thinking": "budget"},
+            budget_catalog(
+                models=[
+                    {
+                        "id": "m",
+                        "provider_id": "p",
+                        "name": "Model",
+                        "model": "claude-sonnet-4-5",
+                        "thinking_budget_tokens": 1024,
+                    }
+                ],
+                default_model_id="m",
+            ),
+            build=build,
+        )
+    assert failed.value.code == "model_test_failed"
+    assert marker in str(failed.value)
+    assert "test-only-key" not in str(failed.value)
+    assert len(requests) == 1
+    assert requests[0]["thinking"] == {"type": "enabled", "budget_tokens": 1024}
+    assert requests[0]["max_tokens"] == 9216
+    evidence = {
+        "request": requests[0],
+        "error": str(failed.value),
+        "marker_preserved": marker in str(failed.value),
+        "api_key_exposed": "test-only-key" in str(failed.value),
+    }
+    output = tmp_path / "anthropic-budget-test.json"
+    output.write_text(json.dumps(evidence, indent=2, sort_keys=True), encoding="utf-8")
+
+
+def test_google_budget_test_uses_explicit_number_for_unsaved_model(
+    tmp_path, monkeypatch
+) -> None:
+    import json
+
+    import httpx2
+    from pydantic_ai import models
+    from pydantic_ai.models.google import GoogleModel
+    from pydantic_ai.providers.google import GoogleProvider
+
+    monkeypatch.setattr(models, "ALLOW_MODEL_REQUESTS", True)
+    marker = "google budget test refusal marker"
+    requests: list[dict[str, object]] = []
+
+    def respond(request: httpx2.Request) -> httpx2.Response:
+        requests.append(json.loads(request.content))
+        return httpx2.Response(
+            400,
+            json={"error": {"message": marker, "status": "INVALID_ARGUMENT"}},
+        )
+
+    def build(config: ModelConfig):
+        http = httpx2.AsyncClient(transport=httpx2.MockTransport(respond))
+        return GoogleModel(
+            config.model,
+            settings=thinking_settings(
+                config.api_type,
+                config.model,
+                config.thinking,
+                config.thinking_budget_tokens,
+            ),
+            provider=GoogleProvider(
+                api_key=config.api_key, base_url=config.base_url, http_client=http
+            ),
+        )
+
+    with pytest.raises(DomainError) as failed:
+        probe.try_model(
+            {
+                "provider_id": "p",
+                "model": "gemini-3-alias",
+                "thinking": "budget",
+                "thinking_budget_tokens": 12000,
+            },
+            budget_catalog(models=[], api_type="google"),
+            build=build,
+        )
+    assert failed.value.code == "model_test_failed"
+    assert marker in str(failed.value)
+    assert "test-only-key" not in str(failed.value)
+    assert len(requests) == 1
+    generation = requests[0]["generationConfig"]
+    assert generation["thinkingConfig"] == {"thinking_budget": 12000}
+    assert generation["maxOutputTokens"] == 20192
+    evidence = {
+        "request": requests[0],
+        "error": str(failed.value),
+        "marker_preserved": marker in str(failed.value),
+        "api_key_exposed": "test-only-key" in str(failed.value),
+    }
+    output = tmp_path / "google-budget-test.json"
+    output.write_text(json.dumps(evidence, indent=2, sort_keys=True), encoding="utf-8")
 
 
 def test_a_broken_provider_is_reported_as_a_failed_test() -> None:

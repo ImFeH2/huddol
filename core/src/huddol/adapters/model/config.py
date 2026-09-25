@@ -5,10 +5,6 @@ from typing import Any, Literal, cast, get_args
 from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
-from pydantic_ai.profiles import ModelProfile
-from pydantic_ai.profiles.anthropic import anthropic_model_profile
-from pydantic_ai.profiles.google import google_model_profile
-from pydantic_ai.profiles.openai import openai_model_profile
 
 from huddol.core.errors import DomainError
 
@@ -16,127 +12,86 @@ ApiType = Literal["openai-chat", "openai-responses", "anthropic", "google"]
 
 API_TYPES: tuple[ApiType, ...] = get_args(ApiType)
 Thinking = Literal[
-    "default", "none", "minimal", "low", "medium", "high", "xhigh", "max"
+    "default", "none", "minimal", "low", "medium", "high", "xhigh", "max", "budget"
 ]
+THINKING_OPTIONS: tuple[Thinking, ...] = (
+    "default",
+    "none",
+    "minimal",
+    "low",
+    "medium",
+    "high",
+    "xhigh",
+    "max",
+)
+BUDGET_API_TYPES = ("anthropic", "google")
 
 
-def thinking_options(api_type: ApiType, model: str) -> list[Thinking]:
-    options: list[Thinking] = ["default"]
-    profile: ModelProfile | None
-    if api_type in ("openai-chat", "openai-responses"):
-        profile = openai_model_profile(model)
-        if not profile or not profile.get("supports_thinking"):
-            return options
-        if model.startswith("gpt-5-pro"):
-            return ["default", "high"]
-        if model.startswith(("gpt-5.1-chat", "gpt-5.2-chat", "gpt-5.3-chat")):
-            return ["default", "medium"]
-        if not model.startswith(("gpt-5", "gpt-6-astra", "o1", "o3", "o4")):
-            return options
-        if profile.get("openai_supports_reasoning_effort_none"):
-            options.append("none")
-        if model.startswith(("gpt-5-mini", "gpt-5-nano")) or model == "gpt-5":
-            options.append("minimal")
-        options.extend(["low", "medium", "high"])
-        if model.startswith(
-            ("gpt-5.2", "gpt-5.3", "gpt-5.4", "gpt-5.5", "gpt-5.6", "gpt-6-astra")
-        ):
-            options.append("xhigh")
-        if "-pro" in model:
-            options = [
-                value for value in options if value not in ("none", "minimal", "low")
-            ]
-        return options
-    if api_type == "anthropic":
-        profile = anthropic_model_profile(model)
-        if profile and profile.get("anthropic_supports_adaptive_thinking"):
-            options.extend(["none", "low", "medium", "high"])
-            if profile.get("anthropic_supports_xhigh_effort"):
-                options.append("xhigh")
-            if model.startswith(("claude-opus-", "claude-fable-", "claude-mythos-")):
-                options.append("max")
-        elif model.startswith(
-            (
-                "claude-3-7-sonnet",
-                "claude-sonnet-4",
-                "claude-opus-4",
-                "claude-haiku-4-5",
-            )
-        ):
-            options.extend(["none", "low", "medium", "high"])
-        return options
-    profile = google_model_profile(model)
-    if not profile or not profile.get("supports_thinking"):
-        return options
-    if profile.get("google_supports_thinking_level"):
-        levels = cast(
-            frozenset[str],
-            profile.get(
-                "google_thinking_levels",
-                frozenset(("MINIMAL", "LOW", "MEDIUM", "HIGH")),
-            ),
-        )
-        options.extend(
-            value
-            for value in ("minimal", "low", "medium", "high")
-            if value.upper() in levels
-            and not (value == "minimal" and profile.get("thinking_always_enabled"))
-        )
-    elif model.startswith(("gemini-2.5-pro", "gemini-2.5-flash")):
-        if not profile.get("thinking_always_enabled"):
-            options.append("none")
-        options.extend(["low", "medium", "high"])
+def thinking_options(
+    api_type: ApiType, model: str, thinking_budget_tokens: int | None = None
+) -> list[Thinking]:
+    options = list(THINKING_OPTIONS)
+    if api_type in BUDGET_API_TYPES and thinking_budget_tokens is not None:
+        options.append("budget")
     return options
 
 
-def thinking_settings(
-    api_type: ApiType, model: str, thinking: Thinking
-) -> dict[str, Any]:
-    if thinking not in thinking_options(api_type, model):
+def validate_thinking(value: Any, model: str) -> Thinking:
+    if type(value) is not str or value not in (*THINKING_OPTIONS, "budget"):
         raise DomainError(
-            "unsupported_thinking",
-            f"Model {model} does not support thinking option {thinking}",
+            "unsupported_thinking", f"Invalid thinking option for model {model}"
         )
+    return cast(Thinking, value)
+
+
+def validate_thinking_budget(value: Any) -> int:
+    if type(value) is not int or value <= 0:
+        raise DomainError(
+            "invalid_thinking_budget",
+            "Thinking token budget must be a positive integer",
+        )
+    return value
+
+
+def thinking_settings(
+    api_type: ApiType,
+    model: str,
+    thinking: Thinking,
+    thinking_budget_tokens: int | None = None,
+) -> dict[str, Any]:
+    thinking = validate_thinking(thinking, model)
     if thinking == "default":
         return {}
+    if thinking == "budget":
+        if api_type not in BUDGET_API_TYPES:
+            raise DomainError(
+                "unsupported_thinking", f"Model {model} does not support token budgets"
+            )
+        tokens = validate_thinking_budget(thinking_budget_tokens)
+        if api_type == "anthropic":
+            return {
+                "anthropic_thinking": {"type": "enabled", "budget_tokens": tokens},
+                "max_tokens": tokens + 8192,
+            }
+        return {
+            "google_thinking_config": {"thinking_budget": tokens},
+            "max_tokens": tokens + 8192,
+        }
     if api_type in ("openai-chat", "openai-responses"):
         return {"openai_reasoning_effort": thinking}
-    budget = {"low": 1024, "medium": 4096, "high": 16384}
     if api_type == "anthropic":
         if thinking == "none":
             return {"anthropic_thinking": {"type": "disabled"}}
-        profile = anthropic_model_profile(model)
-        if profile and profile.get("anthropic_supports_adaptive_thinking"):
-            return {
-                "anthropic_thinking": {"type": "adaptive"},
-                "anthropic_effort": thinking,
-            }
-        tokens = budget[thinking]
         return {
-            "anthropic_thinking": {"type": "enabled", "budget_tokens": tokens},
-            "max_tokens": tokens + 8192,
+            "anthropic_thinking": {"type": "adaptive"},
+            "anthropic_effort": thinking,
         }
-    profile = google_model_profile(model)
-    if profile and profile.get("google_supports_thinking_level"):
-        return {"google_thinking_config": {"thinking_level": thinking.upper()}}
-    tokens = 0 if thinking == "none" else budget[thinking]
-    minimum = (
-        128
-        if model.startswith("gemini-2.5-pro")
-        else 512
-        if model.startswith("gemini-2.5-flash-lite")
-        else 0
-    )
-    maximum = 32768 if model.startswith("gemini-2.5-pro") else 24576
-    if tokens != 0 and not minimum <= tokens <= maximum:
-        raise DomainError(
-            "unsupported_thinking",
-            f"Thinking budget must be between {minimum} and {maximum}",
-        )
-    return {
-        "google_thinking_config": {"thinking_budget": tokens},
-        "max_tokens": tokens + 8192,
-    }
+    if thinking == "none":
+        return {
+            "google_thinking_config": {"thinking_budget": 0},
+            "max_tokens": 8192,
+        }
+    return {"google_thinking_config": {"thinking_level": thinking.upper()}}
 
 
 class ConfigurationRecord(BaseModel):
@@ -158,6 +113,34 @@ class RegisteredModel(ConfigurationRecord):
     name: str = Field(min_length=1)
     model: str = Field(min_length=1)
     enabled: bool = True
+    thinking_budget_tokens: int | None = Field(default=None, gt=0, strict=True)
+
+
+LegacyThinking = Literal[
+    "default", "none", "minimal", "low", "medium", "high", "xhigh", "max"
+]
+
+
+class LegacyRegisteredModel(ConfigurationRecord):
+    id: str = Field(default_factory=lambda: str(uuid4()), min_length=1)
+    provider_id: str = Field(min_length=1)
+    name: str = Field(min_length=1)
+    model: str = Field(min_length=1)
+    enabled: bool = True
+
+
+class LegacyAgentModelConfig(ConfigurationRecord):
+    model_id: str | None = None
+    thinking: LegacyThinking | None = None
+
+
+class LegacyModelCatalog(ConfigurationRecord):
+    version: Literal[1] = 1
+    providers: list[ProviderConfig] = Field(default_factory=list)
+    models: list[LegacyRegisteredModel] = Field(default_factory=list)
+    default_model_id: str | None = None
+    default_thinking: LegacyThinking = "default"
+    agent_configs: dict[str, LegacyAgentModelConfig] = Field(default_factory=dict)
 
 
 class AgentModelConfig(ConfigurationRecord):
@@ -166,7 +149,7 @@ class AgentModelConfig(ConfigurationRecord):
 
 
 class ModelCatalog(ConfigurationRecord):
-    version: Literal[1] = 1
+    version: Literal[2] = 2
     providers: list[ProviderConfig] = Field(default_factory=list)
     models: list[RegisteredModel] = Field(default_factory=list)
     default_model_id: str | None = None
@@ -179,7 +162,25 @@ class ModelCatalog(ConfigurationRecord):
             return cls()
         if "version" in values:
             try:
-                catalog = cls.model_validate(values)
+                if values.get("version") == 1:
+                    legacy = LegacyModelCatalog.model_validate(values)
+                    catalog = cls(
+                        providers=legacy.providers,
+                        models=[
+                            RegisteredModel.model_validate(model.model_dump())
+                            for model in legacy.models
+                        ],
+                        default_model_id=legacy.default_model_id,
+                        default_thinking=legacy.default_thinking,
+                        agent_configs={
+                            agent_id: AgentModelConfig.model_validate(
+                                config.model_dump()
+                            )
+                            for agent_id, config in legacy.agent_configs.items()
+                        },
+                    )
+                else:
+                    catalog = cls.model_validate(values)
             except ValidationError:
                 raise DomainError(
                     "invalid_model_config", "Invalid model configuration"
@@ -235,6 +236,11 @@ class ModelCatalog(ConfigurationRecord):
             else self.default_thinking
         )
         if model_id is None:
+            if thinking == "budget":
+                raise DomainError(
+                    "unsupported_thinking",
+                    f"{owner}: select a model with a token budget",
+                )
             return
         model = self.registered_model(model_id)
         provider = self.provider(model.provider_id)
@@ -242,10 +248,13 @@ class ModelCatalog(ConfigurationRecord):
             raise DomainError(
                 "model_in_use", f"{owner} references a disabled model or provider"
             )
-        if thinking not in thinking_options(provider.api_type, model.model):
+        options = thinking_options(
+            provider.api_type, model.model, model.thinking_budget_tokens
+        )
+        if thinking not in options:
             raise DomainError(
                 "unsupported_thinking",
-                f"{owner}: model {model.name} does not support thinking option {thinking}",
+                f"{owner}: model {model.name} needs a configured token budget for budget selection",
             )
 
     def validate_references(self) -> None:
@@ -254,7 +263,15 @@ class ModelCatalog(ConfigurationRecord):
         if len({item.id for item in self.models}) != len(self.models):
             raise DomainError("invalid_model_config", "Model IDs must be unique")
         for model in self.models:
-            self.provider(model.provider_id)
+            provider = self.provider(model.provider_id)
+            if (
+                model.thinking_budget_tokens is not None
+                and provider.api_type not in BUDGET_API_TYPES
+            ):
+                raise DomainError(
+                    "invalid_model_config",
+                    f"Model {model.name} budgets require Anthropic or Google",
+                )
         self.validate_selection(AgentModelConfig(), "Global default")
         for agent_id, selection in self.agent_configs.items():
             if not agent_id.isdecimal() or int(agent_id) <= 0:
@@ -359,7 +376,9 @@ class ModelCatalog(ConfigurationRecord):
         values = self.model_dump(exclude={"providers": {"__all__": {"api_key"}}})
         for model, public in zip(self.models, values["models"], strict=True):
             public["thinking_options"] = thinking_options(
-                self.provider(model.provider_id).api_type, model.model
+                self.provider(model.provider_id).api_type,
+                model.model,
+                model.thinking_budget_tokens,
             )
         for provider, public in zip(self.providers, values["providers"], strict=True):
             public["api_key_set"] = bool(provider.api_key)
@@ -392,6 +411,7 @@ class ModelCatalog(ConfigurationRecord):
             api_key=provider.api_key,
             model=model.model,
             thinking=thinking,
+            thinking_budget_tokens=model.thinking_budget_tokens,
         )
 
 
@@ -402,3 +422,4 @@ class ModelConfig:
     api_key: str = field(repr=False)
     model: str
     thinking: Thinking = "default"
+    thinking_budget_tokens: int | None = None

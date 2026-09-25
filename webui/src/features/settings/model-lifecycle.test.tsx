@@ -34,7 +34,7 @@ vi.mock("react", async (original) => ({
 }));
 
 const catalog: ModelCatalog = {
-  version: 1,
+  version: 2,
   providers: [
     {
       id: "provider-a",

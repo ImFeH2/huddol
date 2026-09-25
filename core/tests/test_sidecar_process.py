@@ -593,7 +593,7 @@ def test_incomplete_model_configuration_is_migrated_over_the_pipe(
     store = SqliteStore(data / "huddol.sqlite3")
     try:
         migrated = SqliteAgentStore(store._db).get_settings("model")
-        assert migrated["version"] == 1
+        assert migrated["version"] == 2
         assert migrated["models"] == []
         assert migrated["providers"][0]["api_key"] == original["api_key"]
         assert migrated["providers"][0]["base_url"] == original["base_url"]

@@ -6,7 +6,8 @@ export type Thinking =
   | "medium"
   | "high"
   | "xhigh"
-  | "max";
+  | "max"
+  | "budget";
 
 export type AgentModelConfig = {
   model_id: string | null;
@@ -28,11 +29,12 @@ export type RegisteredModel = {
   name: string;
   model: string;
   enabled: boolean;
+  thinking_budget_tokens: number | null;
   thinking_options: Thinking[];
 };
 
 export type ModelCatalog = {
-  version: 1;
+  version: 2;
   providers: ProviderConfig[];
   models: RegisteredModel[];
   default_model_id: string | null;

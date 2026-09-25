@@ -10,7 +10,7 @@ import {
 import type { ModelCatalog } from "@/lib/backend";
 
 const catalog: ModelCatalog = {
-  version: 1,
+  version: 2,
   providers: [
     {
       id: "p",
@@ -28,7 +28,17 @@ const catalog: ModelCatalog = {
       name: "Model",
       model: "gemini-3-pro-preview",
       enabled: true,
-      thinking_options: ["default", "low", "high"],
+      thinking_budget_tokens: null,
+      thinking_options: [
+        "default",
+        "none",
+        "minimal",
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max",
+      ],
     },
   ],
   default_model_id: "m",
@@ -47,11 +57,35 @@ describe("Model settings", () => {
     );
     expect(html).toContain("Use global default (high)");
     expect(html).toContain("Provider / Model");
-    expect(html).toContain("Model default");
-    expect(html).not.toContain('value="medium"');
+    expect(html).toContain('<option value="default">default</option>');
+    expect(html).toContain('<option value="xhigh">xhigh</option>');
+    expect(html).toContain('<option value="max">max</option>');
   });
 
-  it("keeps an incompatible explicit choice visible for correction", () => {
+  it("shows the configured token count for a budget choice", () => {
+    const budgetCatalog: ModelCatalog = {
+      ...catalog,
+      models: [
+        {
+          ...catalog.models[0],
+          thinking_budget_tokens: 12000,
+          thinking_options: [...catalog.models[0].thinking_options, "budget"],
+        },
+      ],
+    };
+    const html = renderToStaticMarkup(
+      <ModelSelection
+        catalog={budgetCatalog}
+        value={{ model_id: "m", thinking: "budget" }}
+        onChange={() => {}}
+      />,
+    );
+    expect(html).toContain(
+      '<option value="budget" selected="">budget · 12000 tokens</option>',
+    );
+  });
+
+  it("keeps any explicit effort visible for correction", () => {
     const html = renderToStaticMarkup(
       <ModelSelection
         catalog={catalog}
@@ -59,7 +93,9 @@ describe("Model settings", () => {
         onChange={() => {}}
       />,
     );
-    expect(html).toContain("medium · unavailable for this model");
+    expect(html).toContain(
+      '<option value="medium" selected="">medium</option>',
+    );
   });
 
   it("explains missing configuration", () => {
