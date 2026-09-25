@@ -916,6 +916,10 @@ def test_wrong_or_missing_tokens_get_401_without_an_upgrade(tmp_path: Path) -> N
             assert content_type == "text/html; charset=utf-8"
             assert b"Access to Huddol requires authentication" in body
             assert b"access link provided when Huddol starts" in body
+            assert b'class="access-notice"' in body
+            assert b"MIT License" not in body
+            assert b"cnippet-dev" not in body
+            assert b"github.com/cnippet-dev" not in body
             assert kernel.token.encode() not in body
             with pytest.raises(InvalidStatus) as rejected, kernel.connect(token):
                 pass

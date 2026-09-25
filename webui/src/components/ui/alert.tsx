@@ -1,32 +1,26 @@
-import { cva, type VariantProps } from "class-variance-authority";
 import { clsx } from "clsx";
 import type { ComponentProps } from "react";
 import { twMerge } from "tailwind-merge";
 
-const alertVariants = cva(
-  "relative grid w-full items-start gap-x-2 gap-y-0.5 rounded-lg border px-3.5 py-3 text-fg text-sm has-[>svg]:grid-cols-[16px_minmax(0,1fr)] [&>svg]:h-lh [&>svg]:w-4",
-  {
-    defaultVariants: { variant: "error" },
-    variants: {
-      variant: {
-        error: "border-danger/32 bg-danger/4 [&>svg]:text-danger",
-      },
-    },
-  },
-);
-
 export function Alert({
+  children,
   className,
-  variant,
   ...props
-}: ComponentProps<"div"> & VariantProps<typeof alertVariants>) {
+}: ComponentProps<"div">) {
   return (
     <div
-      className={twMerge(clsx(alertVariants({ variant }), className))}
+      className={twMerge(
+        clsx(
+          "grid min-w-0 grid-cols-[16px_minmax(0,1fr)] items-start gap-x-2 gap-y-0.5 rounded-lg border border-danger/32 bg-danger/4 px-3.5 py-3 text-sm text-fg",
+          className,
+        ),
+      )}
       data-slot="alert"
       role="alert"
       {...props}
-    />
+    >
+      {children}
+    </div>
   );
 }
 
@@ -34,7 +28,7 @@ export function AlertTitle({ className, ...props }: ComponentProps<"h1">) {
   return (
     <h1
       className={twMerge(
-        "text-sm leading-body font-medium [svg~&]:col-start-2",
+        "col-start-2 min-w-0 text-sm font-medium leading-body",
         className,
       )}
       data-slot="alert-title"
@@ -50,7 +44,7 @@ export function AlertDescription({
   return (
     <div
       className={twMerge(
-        "flex flex-col gap-2.5 text-fg-muted [svg~&]:col-start-2",
+        "col-start-2 flex min-w-0 flex-col gap-2.5 text-fg-muted",
         className,
       )}
       data-slot="alert-description"

@@ -240,6 +240,7 @@
 }
 
 .agent-group {
+  container: agent-card / inline-size;
   padding: 20px;
   border: 1px solid var(--color-line);
   border-radius: 6px;
@@ -249,12 +250,12 @@
 @container settings (min-width: 900px) {
   .agent-groups {
     display: grid;
-    grid-template-columns: repeat(3, minmax(0, 1fr));
+    grid-template-columns: repeat(2, minmax(0, 1fr));
     align-items: start;
   }
 }
 
-@container settings (min-width: 760px) {
+@container agent-card (min-width: 600px) {
   .agent-fields {
     display: grid;
     grid-template-columns: repeat(2, minmax(0, 1fr));

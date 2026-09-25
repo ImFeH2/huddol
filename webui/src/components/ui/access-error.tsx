@@ -48,7 +48,10 @@ export function AccessError({
           aria-describedby={descriptionId}
           className="[overflow-wrap:anywhere]"
         >
-          <CircleAlertIcon aria-hidden="true" />
+          <CircleAlertIcon
+            className="row-span-2 h-5 w-4 text-danger"
+            aria-hidden="true"
+          />
           <AlertTitle id={titleId}>{title}</AlertTitle>
           <AlertDescription id={descriptionId}>
             <p className="whitespace-pre-wrap">{error.message}</p>
