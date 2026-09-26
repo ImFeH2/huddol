@@ -83,7 +83,7 @@ function deferred<T>() {
 }
 
 const modelCatalog: ModelCatalog = {
-  version: 1,
+  version: 2,
   providers: [
     {
       id: "provider-a",
